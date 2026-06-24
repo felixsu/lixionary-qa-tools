@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:6.0
+    container_name: lixionary-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - lixionary-network
+
+  redis:
+    image: redis:7.0-alpine
+    container_name: lixionary-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - lixionary-network
+
+  vnc-browser:
+    build:
+      context: ./browser
+      dockerfile: Dockerfile
+    container_name: lixionary-vnc-browser
+    ports:
+      - "8080:8080" # noVNC web interface
+      - "9222:9222" # CDP Remote Debugging
+    shm_size: '2gb' # Prevent browser crashes
+    networks:
+      - lixionary-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: lixionary-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/lixionary
+      - REDIS_URL=redis://redis:6379/0
+      - BROWSER_CDP_URL=http://vnc-browser:9222
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - JWT_SECRET=${JWT_SECRET:-supersecretjwttokenkey12345}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - DEV_MODE=${DEV_MODE:-true}
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - mongodb
+      - redis
+      - vnc-browser
+    networks:
+      - lixionary-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: lixionary-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - BACKEND_URL=http://backend:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - lixionary-network
+
+volumes:
+  mongodb_data:
+  redis_data:
+
+networks:
+  lixionary-network:
+    driver: bridge

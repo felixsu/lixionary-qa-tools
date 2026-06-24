@@ -1,0 +1,185 @@
+from datetime import datetime, timezone
+from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, Field
+from bson import ObjectId
+
+from db.mongo import MongoDB
+from routes.auth import get_current_user
+
+router = APIRouter(prefix="/api/collections", tags=["collections"])
+
+class KeyValueSchema(BaseModel):
+    key: str
+    value: str
+
+class AuthConfigSchema(BaseModel):
+    token: Optional[str] = ""
+    key: Optional[str] = ""
+    value: Optional[str] = ""
+    authFunctionId: Optional[str] = None
+
+class ExtractedVariableSchema(BaseModel):
+    variableName: str
+    jsonPath: str
+
+class RequestDefinitionSchema(BaseModel):
+    id: str  # Client-side unique UUID
+    name: str
+    method: str
+    url: str
+    headers: List[KeyValueSchema] = []
+    queryParams: List[KeyValueSchema] = []
+    bodyType: str = "NONE"
+    body: Optional[str] = ""
+    authType: str = "NONE"
+    authConfig: Optional[AuthConfigSchema] = None
+    responseParserScript: Optional[str] = ""
+    extractedVariables: List[ExtractedVariableSchema] = []
+
+class CollectionCreate(BaseModel):
+    name: str
+    description: Optional[str] = ""
+
+class CollectionUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    requests: Optional[List[RequestDefinitionSchema]] = None
+
+class AddCollaboratorPayload(BaseModel):
+    email: Optional[str] = None
+    userId: Optional[str] = None
+
+def serialize_doc(doc) -> dict:
+    if not doc:
+        return doc
+    doc["id"] = str(doc["_id"])
+    del doc["_id"]
+    if "ownerId" in doc:
+        doc["ownerId"] = str(doc["ownerId"])
+    if "collaboratorIds" in doc:
+        doc["collaboratorIds"] = [str(uid) for uid in doc["collaboratorIds"]]
+        
+    # Serialize authConfig ObjectIds
+    for req in doc.get("requests", []):
+        if req.get("authConfig") and req["authConfig"].get("authFunctionId"):
+            req["authConfig"]["authFunctionId"] = str(req["authConfig"]["authFunctionId"])
+            
+    return doc
+
+@router.get("")
+async def get_collections(current_user: dict = Depends(get_current_user)):
+    col = MongoDB.get_collection("collections")
+    uid = ObjectId(current_user["id"])
+    # Return collections owned by OR shared with the user
+    cursor = col.find({
+        "$or": [
+            {"ownerId": uid},
+            {"collaboratorIds": uid}
+        ]
+    })
+    docs = await cursor.to_list(length=100)
+    return [serialize_doc(d) for d in docs]
+
+@router.post("")
+async def create_collection(payload: CollectionCreate, current_user: dict = Depends(get_current_user)):
+    col = MongoDB.get_collection("collections")
+    doc = {
+        "name": payload.name,
+        "description": payload.description,
+        "ownerId": ObjectId(current_user["id"]),
+        "collaboratorIds": [],
+        "requests": [],
+        "createdAt": datetime.now(timezone.utc),
+        "updatedAt": datetime.now(timezone.utc)
+    }
+    res = await col.insert_one(doc)
+    doc["_id"] = res.inserted_id
+    return serialize_doc(doc)
+
+@router.get("/{id}")
+async def get_collection_by_id(id: str, current_user: dict = Depends(get_current_user)):
+    col = MongoDB.get_collection("collections")
+    doc = await col.find_one({"_id": ObjectId(id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Collection not found")
+        
+    uid = ObjectId(current_user["id"])
+    if doc["ownerId"] != uid and uid not in doc.get("collaboratorIds", []):
+        raise HTTPException(status_code=403, detail="Access denied to this collection")
+        
+    return serialize_doc(doc)
+
+@router.put("/{id}")
+async def update_collection(id: str, payload: CollectionUpdate, current_user: dict = Depends(get_current_user)):
+    col = MongoDB.get_collection("collections")
+    doc = await col.find_one({"_id": ObjectId(id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    uid = ObjectId(current_user["id"])
+    if doc["ownerId"] != uid and uid not in doc.get("collaboratorIds", []):
+        raise HTTPException(status_code=403, detail="Access denied to modify this collection")
+
+    update_fields = {}
+    if payload.name is not None:
+        update_fields["name"] = payload.name
+    if payload.description is not None:
+        update_fields["description"] = payload.description
+    if payload.requests is not None:
+        serialized_requests = []
+        for req in payload.requests:
+            req_dict = req.model_dump()
+            # Convert authConfig authFunctionId back to ObjectId
+            if req_dict.get("authConfig") and req_dict["authConfig"].get("authFunctionId"):
+                req_dict["authConfig"]["authFunctionId"] = ObjectId(req_dict["authConfig"]["authFunctionId"])
+            serialized_requests.append(req_dict)
+            
+        update_fields["requests"] = serialized_requests
+
+    update_fields["updatedAt"] = datetime.now(timezone.utc)
+    await col.update_one({"_id": ObjectId(id)}, {"$set": update_fields})
+    
+    updated_doc = await col.find_one({"_id": ObjectId(id)})
+    
+    # In a full production app, you would broadcast this update over WebSockets
+    # to all active collaborator client sessions.
+    
+    return serialize_doc(updated_doc)
+
+@router.post("/{id}/collaborators")
+async def add_collaborator(id: str, payload: AddCollaboratorPayload, current_user: dict = Depends(get_current_user)):
+    col = MongoDB.get_collection("collections")
+    doc = await col.find_one({"_id": ObjectId(id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    uid = ObjectId(current_user["id"])
+    if doc["ownerId"] != uid:
+        raise HTTPException(status_code=403, detail="Only the owner can manage sharing")
+
+    users_col = MongoDB.get_collection("users")
+    collab_user = None
+    
+    if payload.email:
+        collab_user = await users_col.find_one({"email": payload.email})
+    elif payload.userId:
+        collab_user = await users_col.find_one({"_id": ObjectId(payload.userId)})
+
+    if not collab_user:
+        raise HTTPException(status_code=404, detail="Target collaborator user not found")
+
+    collab_uid = collab_user["_id"]
+    if collab_uid == doc["ownerId"]:
+        raise HTTPException(status_code=400, detail="Cannot share collection with yourself (the owner)")
+
+    if collab_uid in doc.get("collaboratorIds", []):
+         return {"message": "User is already a collaborator", "collection": serialize_doc(doc)}
+
+    await col.update_one(
+        {"_id": ObjectId(id)},
+        {"$addToSet": {"collaboratorIds": collab_uid}}
+    )
+    
+    updated_doc = await col.find_one({"_id": ObjectId(id)})
+    return {"message": "Collaborator added successfully", "collection": serialize_doc(updated_doc)}
