@@ -124,7 +124,7 @@ class BrowserSessionManager:
                 el_info = json.loads(element_info_str)
                 
                 # Resolve parent frame locators chain
-                frame_chain = await cls._get_frame_locators_chain(source.frame, session["page"])
+                frame_chain = await cls._get_frame_locators_chain(source["frame"], session["page"])
                 el_info["frameLocators"] = frame_chain
                 
                 ranked_locators = rank_locators(el_info)
