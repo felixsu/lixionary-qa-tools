@@ -1,4 +1,5 @@
 import re
+import json
 from typing import Dict, Any, List
 from jinja2 import Template
 
@@ -120,14 +121,21 @@ def json_to_pydantic_code(schema_name: str, json_data: Any, generated_models: Di
 
     elif isinstance(json_data, list):
         if json_data:
-            return f"List[{type(json_data[0]).__name__}]", generated_models
+            first_item = json_data[0]
+            if isinstance(first_item, dict):
+                item_model_name = schema_name + "Item" if not schema_name.endswith("Item") else schema_name
+                sub_type, _ = json_to_pydantic_code(item_model_name, first_item, generated_models)
+                return f"List[{sub_type}]", generated_models
+            else:
+                py_type = type(first_item).__name__
+                return f"List[{py_type}]", generated_models
         return "List[Any]", generated_models
 
     return type(json_data).__name__, generated_models
 
 def generate_http_client(base_url: str, requests_logs: List[Dict[str, Any]]) -> str:
     """
-    Groups recorded HTTP requests, generates Pydantic schemas,
+    Groups recorded HTTP requests, generates Pydantic schemas for requests & responses,
     and returns a clean httpx-based Python API client script.
     """
     models_code_map = {}
@@ -155,12 +163,23 @@ def generate_http_client(base_url: str, requests_logs: List[Dict[str, Any]]) -> 
 
         # Parse request body for Pydantic request payload
         req_payload_class = None
-        req_body = log.get("body", None)
+        req_body = log.get("postData", None)
         if req_body and method in ["POST", "PUT", "PATCH"]:
             try:
                 body_json = json.loads(req_body) if isinstance(req_body, str) else req_body
                 model_name = "".join(x.capitalize() for x in method_name.split("_")) + "Request"
                 req_payload_class, _ = json_to_pydantic_code(model_name, body_json, models_code_map)
+            except Exception:
+                pass
+
+        # Parse response body for Pydantic response payload
+        resp_payload_class = None
+        resp_body = log.get("responseBody", None)
+        if resp_body:
+            try:
+                body_json = json.loads(resp_body) if isinstance(resp_body, str) else resp_body
+                model_name = "".join(x.capitalize() for x in method_name.split("_")) + "Response"
+                resp_payload_class, _ = json_to_pydantic_code(model_name, body_json, models_code_map)
             except Exception:
                 pass
 
@@ -170,9 +189,10 @@ def generate_http_client(base_url: str, requests_logs: List[Dict[str, Any]]) -> 
             params.append(f"payload: {req_payload_class}")
         
         params_str = ", ".join(params)
+        return_type = resp_payload_class if resp_payload_class else "Any"
         
         method_body = [
-            f"    def {method_name}({params_str}) -> dict:",
+            f"    def {method_name}({params_str}) -> {return_type}:",
             f'        """{method} {url_path}"""'
         ]
 
@@ -184,7 +204,15 @@ def generate_http_client(base_url: str, requests_logs: List[Dict[str, Any]]) -> 
         caller_args_str = ", ".join(caller_args)
         method_body.append(f'        response = self.client.{method.lower()}({caller_args_str})')
         method_body.append("        response.raise_for_status()")
-        method_body.append("        return response.json()")
+        
+        if resp_payload_class:
+            if resp_payload_class.startswith("List["):
+                item_model = resp_payload_class[5:-1]
+                method_body.append(f'        return [{item_model}.model_validate(item) for item in response.json()]')
+            else:
+                method_body.append(f'        return {resp_payload_class}.model_validate(response.json())')
+        else:
+            method_body.append("        return response.json()")
         
         client_methods.append("\n".join(method_body))
 

@@ -116,7 +116,7 @@ async def generate_client(payload: GenerateClientPayload, current_user: dict = D
                 resp_json = await RedisClient.get_json(resp_key)
                 if resp_json:
                     resp_data = json.loads(resp_json)
-                    req_data["body"] = resp_data.get("body")
+                    req_data["responseBody"] = resp_data.get("body")
                     
                 logs.append(req_data)
                 

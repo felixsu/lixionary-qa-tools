@@ -114,13 +114,6 @@ class BrowserSessionManager:
             except Exception as e:
                 print(f"Failed to inject localStorage script: {e}")
 
-        # Get active page or create one
-        pages = context.pages
-        if pages:
-            page = pages[0]
-        else:
-            page = await context.new_page()
-
         # Register python callback for selected elements on context level
         async def on_element_selected(element_info_str: str):
             session = cls._sessions.get(session_id)
@@ -153,6 +146,13 @@ class BrowserSessionManager:
             await context.add_init_script(inspector_js)
         except Exception as e:
             print(f"Error adding inspector init script to context: {e}")
+
+        # Get active page or create one
+        pages = context.pages
+        if pages:
+            page = pages[0]
+        else:
+            page = await context.new_page()
 
         cls._sessions[session_id] = {
             "playwright_mgr": playwright_mgr,
@@ -200,7 +200,8 @@ class BrowserSessionManager:
                 "url": req.url,
                 "method": req.method,
                 "headers": req.headers,
-                "resourceType": req.resource_type
+                "resourceType": req.resource_type,
+                "postData": req.post_data
             }
 
             # Save in Redis ephemeral storage for filtering/details inspect
