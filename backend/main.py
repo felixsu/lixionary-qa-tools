@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db.mongo import MongoDB
 from db.redis_client import RedisClient
-from routes import auth, collections, environments, auth_functions, executor, ai, browser
+from routes import auth, collections, environments, auth_functions, executor, ai, browser, profiles
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -45,6 +45,7 @@ app.include_router(auth_functions.router)
 app.include_router(executor.router)
 app.include_router(ai.router)
 app.include_router(browser.router)
+app.include_router(profiles.router)
 
 @app.get("/")
 def read_root():

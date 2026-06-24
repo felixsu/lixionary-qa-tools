@@ -10,7 +10,7 @@ class BrowserSessionManager:
     _sessions = {}
 
     @classmethod
-    async def get_or_create_session(cls, session_id: str, ws_send_callback=None) -> Page:
+    async def get_or_create_session(cls, session_id: str, ws_send_callback=None, cookies=None, local_storage=None) -> Page:
         """
         Retrieves or creates a Playwright CDP session connecting to the VNC browser.
         Exposes page event listeners to record network traffic and DOM mutations.
@@ -40,6 +40,48 @@ class BrowserSessionManager:
             context = contexts[0]
         else:
             context = await browser.new_context(viewport={"width": 1280, "height": 720})
+
+        # Inject cookies/local storage if provided
+        try:
+            # Clear previous session cookies to enforce clean state or new login profile
+            await context.clear_cookies()
+            print(f"Cleared cookies for browser session {session_id}")
+        except Exception as e:
+            print(f"Failed to clear cookies: {e}")
+
+        if cookies:
+            try:
+                if isinstance(cookies, list):
+                    await context.add_cookies(cookies)
+                    print(f"Successfully injected {len(cookies)} cookies into browser session {session_id}")
+            except Exception as e:
+                print(f"Failed to inject cookies into context: {e}")
+
+        if local_storage:
+            try:
+                if isinstance(local_storage, dict):
+                    # We inject localStorage keys using an init script that runs on every page/frame navigation.
+                    # We use sessionStorage to check and set the value only once per origin per session.
+                    ls_script = """
+                    (function() {
+                        try {
+                            const items = %s;
+                            for (const [key, val] of Object.entries(items)) {
+                                const sessKey = '__lixionary_injected_' + key;
+                                if (!sessionStorage.getItem(sessKey)) {
+                                    localStorage.setItem(key, val);
+                                    sessionStorage.setItem(sessKey, 'true');
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Lixionary profile injection error:', e);
+                        }
+                    })();
+                    """ % json.dumps(local_storage)
+                    await context.add_init_script(ls_script)
+                    print(f"Successfully added localStorage injection init script into browser session {session_id}")
+            except Exception as e:
+                print(f"Failed to inject localStorage script: {e}")
 
         # Get active page or create one
         pages = context.pages

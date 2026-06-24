@@ -133,6 +133,39 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
     await websocket.accept()
     print(f"WebSocket connection established for browser session: {session_id}")
 
+    # Parse profile settings if supplied
+    query_params = dict(websocket.query_params)
+    token = query_params.get("token")
+    profile_id = query_params.get("profileId")
+
+    cookies = None
+    local_storage = None
+
+    if token:
+        try:
+            import jwt
+            from config import settings
+            from db.mongo import MongoDB
+            
+            payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+            user_id = payload.get("sub")
+            if user_id and profile_id and profile_id != "undefined":
+                profiles_col = MongoDB.get_collection("browser_profiles")
+                profile = await profiles_col.find_one({"_id": ObjectId(profile_id), "ownerId": ObjectId(user_id)})
+                if profile:
+                    if profile.get("cookies"):
+                        try:
+                            cookies = json.loads(profile["cookies"])
+                        except Exception as e:
+                            print(f"Failed to parse profile cookies: {e}")
+                    if profile.get("localStorage"):
+                        try:
+                            local_storage = json.loads(profile["localStorage"])
+                        except Exception as e:
+                            print(f"Failed to parse profile localStorage: {e}")
+        except Exception as e:
+            print(f"WebSocket authentication/profile resolving failed: {e}")
+
     # Define sender helper to send back to client
     async def send_to_client(message: dict):
         try:
@@ -141,8 +174,13 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
             print(f"Error sending message on WebSocket: {e}")
 
     try:
-        # Initialize browser session
-        page = await BrowserSessionManager.get_or_create_session(session_id, send_to_client)
+        # Initialize browser session with credentials
+        page = await BrowserSessionManager.get_or_create_session(
+            session_id, 
+            send_to_client, 
+            cookies=cookies, 
+            local_storage=local_storage
+        )
         
         # Send initial status
         await send_to_client({
