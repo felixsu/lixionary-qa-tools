@@ -114,14 +114,19 @@ class BrowserSessionManager:
             except Exception as e:
                 print(f"Failed to inject localStorage script: {e}")
 
-        # Register python callback for selected elements on context level
-        async def on_element_selected(element_info_str: str):
+        # Register python callback for selected elements on context level using expose_binding
+        async def on_element_selected(source, element_info_str: str):
             session = cls._sessions.get(session_id)
             if not session:
                 return
             
             try:
                 el_info = json.loads(element_info_str)
+                
+                # Resolve parent frame locators chain
+                frame_chain = await cls._get_frame_locators_chain(source.frame, session["page"])
+                el_info["frameLocators"] = frame_chain
+                
                 ranked_locators = rank_locators(el_info)
                 
                 if session.get("callback"):
@@ -136,7 +141,7 @@ class BrowserSessionManager:
                 print(f"Error processing selected element: {e}")
 
         try:
-            await context.expose_function("pythonOnElementSelected", on_element_selected)
+            await context.expose_binding("pythonOnElementSelected", on_element_selected)
         except Exception:
             pass
 
@@ -255,19 +260,68 @@ class BrowserSessionManager:
 
         # Re-inject inspector overlay script on frame navigation
         async def handle_nav(frame):
-            if frame == page.main_frame:
-                await cls.inject_inspector_script(page, session_id)
+            try:
+                # Inject inspector JS on the navigated frame
+                inspector_js = cls.get_inspector_js()
+                await frame.evaluate(inspector_js)
+                
+                # Check if inspect mode is active
                 session = cls._sessions.get(session_id)
-                if session:
-                    if session.get("inspect_enabled"):
-                        await cls.set_inspect_mode(session_id, True)
-                    if session.get("callback"):
-                        await session["callback"]({
-                            "type": "navigation",
-                            "url": page.url
-                        })
+                if session and session.get("inspect_enabled"):
+                    # Activate inspect mode on the navigated frame
+                    eval_script = (
+                        "(function() {\n"
+                        "    if (typeof window.__setLixionaryInspectMode === 'function') {\n"
+                        "        window.__setLixionaryInspectMode(true);\n"
+                        "    }\n"
+                        "})()"
+                    )
+                    await frame.evaluate(eval_script)
+            except Exception:
+                pass
+
+            if frame == page.main_frame:
+                session = cls._sessions.get(session_id)
+                if session and session.get("callback"):
+                    await session["callback"]({
+                        "type": "navigation",
+                        "url": page.url
+                    })
 
         page.on("framenavigated", handle_nav)
+
+    @classmethod
+    async def _get_frame_locators_chain(cls, frame, page: Page) -> List[str]:
+        chain = []
+        curr = frame
+        while curr and curr != page.main_frame:
+            try:
+                iframe_el = await curr.frame_element()
+                if iframe_el:
+                    parent = curr.parent_frame
+                    if parent:
+                        selector = await parent.evaluate("""
+                            (el) => {
+                                if (el.id) return '#' + el.id;
+                                if (el.name) return 'iframe[name="' + el.name + '"]';
+                                if (el.src) {
+                                    const cleanSrc = el.src.split(/[?#]/)[0];
+                                    return `iframe[src*="${cleanSrc}"]`;
+                                }
+                                const iframes = Array.from(document.querySelectorAll('iframe'));
+                                const idx = iframes.indexOf(el);
+                                if (idx !== -1) {
+                                    return `iframe:nth-of-type(${idx + 1})`;
+                                }
+                                return 'iframe';
+                            }
+                        """, iframe_el)
+                        if selector:
+                            chain.insert(0, selector)
+                curr = curr.parent_frame
+            except Exception:
+                break
+        return chain
 
     @classmethod
     async def inject_inspector_script(cls, page: Page, session_id: str):
@@ -434,7 +488,12 @@ class BrowserSessionManager:
                     "    return false;\n"
                     "})()"
                 )
-                await session["page"].evaluate(eval_script)
+                # Apply to all active frames in the page
+                for frame in session["page"].frames:
+                    try:
+                        await frame.evaluate(eval_script)
+                    except Exception:
+                        pass
             except Exception as e:
                 print(f"Error setting inspect mode: {e}")
 

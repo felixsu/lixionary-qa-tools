@@ -16,7 +16,7 @@ class {{ class_name }}:
     def {{ method.name }}(self, {% if method.action == 'fill' %}value: str{% endif %}) -> None:
         \"\"\"{{ method.docstring if method.docstring else 'Perform action on element.' }}\"\"\"
         {% set target = "self._frame" if parent_locator else "self.page" %}
-        {{ target }}.{{ method.strategy }}({% if method.strategy_args %}{{ method.strategy_args }}{% else %}"{{ method.selector }}"{% endif %}).{{ method.action }}({% if method.action == 'fill' %}value{% endif %})
+        {{ target }}{{ method.frame_chain }}.{{ method.strategy }}({% if method.strategy_args %}{{ method.strategy_args }}{% else %}"{{ method.selector }}"{% endif %}).{{ method.action }}({% if method.action == 'fill' %}value{% endif %})
 
     {% endfor %}
 """
@@ -55,7 +55,16 @@ def generate_pom_class(class_name: str, url: str, parent_locator: str, elements:
         else:
             strategy_args = f'"{selector}"'
 
+        # Resolve iframe locators chain
+        frame_locators = el.get("frame_locators", el.get("frameLocators", []))
+        frame_chain = ""
+        if frame_locators:
+            for fl in frame_locators:
+                frame_chain += f".frame_locator('{fl}')"
+
         docstring = f"Perform {action} on {strategy}: {selector}"
+        if frame_locators:
+            docstring += f" (inside iframe: {' -> '.join(frame_locators)})"
 
         methods.append({
             "name": method_name,
@@ -63,6 +72,7 @@ def generate_pom_class(class_name: str, url: str, parent_locator: str, elements:
             "strategy": strategy,
             "selector": selector,
             "strategy_args": strategy_args,
+            "frame_chain": frame_chain,
             "docstring": docstring
         })
 

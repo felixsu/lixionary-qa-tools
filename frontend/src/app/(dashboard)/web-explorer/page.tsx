@@ -131,7 +131,8 @@ export default function WebExplorerPage() {
       method_name: selectedElementMethodName || `click_${selectedElement.tagName}`,
       strategy,
       selector,
-      action: selectedElementAction
+      action: selectedElementAction,
+      frameLocators: selectedElement.frameLocators || []
     };
 
     setPomElements(prev => {
@@ -331,6 +332,11 @@ export default function WebExplorerPage() {
                     <div>
                       <h4 className="text-xs font-bold text-indigo-400 uppercase tracking-wider">Inspect Selected Node</h4>
                       <p className="text-[10px] text-slate-400 font-mono mt-0.5">&lt;{selectedElement.tagName}&gt; - "{selectedElement.text}"</p>
+                      {selectedElement.frameLocators && selectedElement.frameLocators.length > 0 && (
+                        <p className="text-[9px] text-amber-500 font-semibold mt-1">
+                          📍 Frame: {selectedElement.frameLocators.join(" ➔ ")}
+                        </p>
+                      )}
                     </div>
                     <button 
                       onClick={() => { setSelectedElement(null); setSelectedElementLocators([]); }}
