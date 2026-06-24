@@ -59,27 +59,58 @@ class BrowserSessionManager:
 
         if local_storage:
             try:
-                if isinstance(local_storage, dict):
-                    # We inject localStorage keys using an init script that runs on every page/frame navigation.
-                    # We use sessionStorage to check and set the value only once per origin per session.
-                    ls_script = """
-                    (function() {
-                        try {
-                            const items = %s;
-                            for (const [key, val] of Object.entries(items)) {
+                # We inject localStorage keys using an init script that runs on every page/frame navigation.
+                # Supports both key-value dict (old format) and origin-scoped array list (new formats)
+                ls_script = """
+                (function() {
+                    try {
+                        const data = %s;
+                        let items = [];
+                        if (Array.isArray(data)) {
+                            items = data;
+                        } else if (typeof data === 'object' && data !== null) {
+                            if (Array.isArray(data.origins)) {
+                                items = data.origins;
+                            } else if (data.origin && Array.isArray(data.localStorage)) {
+                                items = [data];
+                            }
+                        }
+
+                        if (items.length > 0) {
+                            const currentOrigin = window.location.origin.toLowerCase().replace(/\/$/, "");
+                            for (const item of items) {
+                                if (item && item.origin) {
+                                    const targetOrigin = item.origin.toLowerCase().replace(/\/$/, "");
+                                    if (currentOrigin === targetOrigin && Array.isArray(item.localStorage)) {
+                                        for (const kv of item.localStorage) {
+                                            if (kv && kv.name) {
+                                                const sessKey = '__lixionary_injected_' + kv.name;
+                                                if (!sessionStorage.getItem(sessKey)) {
+                                                    localStorage.setItem(kv.name, String(kv.value));
+                                                    sessionStorage.setItem(sessKey, 'true');
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else if (typeof data === 'object' && data !== null) {
+                            // Old format fallback: simple key-value object
+                            for (const [key, val] of Object.entries(data)) {
                                 const sessKey = '__lixionary_injected_' + key;
                                 if (!sessionStorage.getItem(sessKey)) {
-                                    localStorage.setItem(key, val);
+                                    localStorage.setItem(key, String(val));
                                     sessionStorage.setItem(sessKey, 'true');
                                 }
                             }
-                        } catch (e) {
-                            console.error('Lixionary profile injection error:', e);
                         }
-                    })();
-                    """ % json.dumps(local_storage)
-                    await context.add_init_script(ls_script)
-                    print(f"Successfully added localStorage injection init script into browser session {session_id}")
+                    } catch (e) {
+                        console.error('Lixionary profile localStorage injection error:', e);
+                    }
+                })();
+                """ % json.dumps(local_storage)
+                await context.add_init_script(ls_script)
+                print(f"Successfully added localStorage injection init script into browser session {session_id}")
             except Exception as e:
                 print(f"Failed to inject localStorage script: {e}")
 
@@ -89,6 +120,39 @@ class BrowserSessionManager:
             page = pages[0]
         else:
             page = await context.new_page()
+
+        # Register python callback for selected elements on context level
+        async def on_element_selected(element_info_str: str):
+            session = cls._sessions.get(session_id)
+            if not session:
+                return
+            
+            try:
+                el_info = json.loads(element_info_str)
+                ranked_locators = rank_locators(el_info)
+                
+                if session.get("callback"):
+                    await session["callback"]({
+                        "type": "element_selected",
+                        "data": {
+                            "element": el_info,
+                            "locators": ranked_locators
+                        }
+                    })
+            except Exception as e:
+                print(f"Error processing selected element: {e}")
+
+        try:
+            await context.expose_function("pythonOnElementSelected", on_element_selected)
+        except Exception:
+            pass
+
+        # Register inspector JS as an init script on context to ensure it persists across navigations
+        try:
+            inspector_js = cls.get_inspector_js()
+            await context.add_init_script(inspector_js)
+        except Exception as e:
+            print(f"Error adding inspector init script to context: {e}")
 
         cls._sessions[session_id] = {
             "playwright_mgr": playwright_mgr,
@@ -102,7 +166,7 @@ class BrowserSessionManager:
         # Setup event listeners
         await cls._setup_listeners(session_id, page)
         
-        # Inject element inspection javascript overlay script
+        # Inject element inspection javascript overlay script for currently loaded page
         await cls.inject_inspector_script(page, session_id)
 
         return page
@@ -193,11 +257,14 @@ class BrowserSessionManager:
             if frame == page.main_frame:
                 await cls.inject_inspector_script(page, session_id)
                 session = cls._sessions.get(session_id)
-                if session and session.get("callback"):
-                    await session["callback"]({
-                        "type": "navigation",
-                        "url": page.url
-                    })
+                if session:
+                    if session.get("inspect_enabled"):
+                        await cls.set_inspect_mode(session_id, True)
+                    if session.get("callback"):
+                        await session["callback"]({
+                            "type": "navigation",
+                            "url": page.url
+                        })
 
         page.on("framenavigated", handle_nav)
 
@@ -207,31 +274,15 @@ class BrowserSessionManager:
         Injects the inspector JS runtime into the target page.
         Allows hover outlines and interception of clicked elements.
         """
-        # Register python callback for selected elements
-        async def on_element_selected(element_info_str: str):
-            session = cls._sessions.get(session_id)
-            if not session:
-                return
-            
-            try:
-                el_info = json.loads(element_info_str)
-                ranked_locators = rank_locators(el_info)
-                
-                if session.get("callback"):
-                    await session["callback"]({
-                        "type": "element_selected",
-                        "data": {
-                            "element": el_info,
-                            "locators": ranked_locators
-                        }
-                    })
-            except Exception as e:
-                print(f"Error processing selected element: {e}")
+        try:
+            inspector_js = cls.get_inspector_js()
+            await page.evaluate(inspector_js)
+        except Exception as e:
+            print(f"Error evaluating inspector script: {e}")
 
-        await page.expose_function("pythonOnElementSelected", on_element_selected)
-
-        # Script to inject into browser
-        inspector_js = """
+    @classmethod
+    def get_inspector_js(cls) -> str:
+        return """
         (function() {
             if (window.__lixionary_inspector_injected) return;
             window.__lixionary_inspector_injected = true;
@@ -355,11 +406,12 @@ class BrowserSessionManager:
 
                 // Build metadata and send to python backend
                 const metadata = getElementMetadata(el);
-                window.pythonOnElementSelected(JSON.stringify(metadata));
+                if (window.pythonOnElementSelected) {
+                    window.pythonOnElementSelected(JSON.stringify(metadata));
+                }
             }, true);
         })();
         """
-        await page.evaluate(inspector_js)
 
     @classmethod
     async def set_inspect_mode(cls, session_id: str, enabled: bool):
@@ -367,7 +419,23 @@ class BrowserSessionManager:
         if session:
             session["inspect_enabled"] = enabled
             # Evaluate control command on page
-            await session["page"].evaluate(f"window.__setLixionaryInspectMode({json.dumps(enabled)})")
+            try:
+                # Dynamically verify and inject if inspector JS runtime is missing
+                eval_script = (
+                    "(function() {\n"
+                    "    if (typeof window.__setLixionaryInspectMode !== 'function') {\n"
+                    f"        {cls.get_inspector_js()}\n"
+                    "    }\n"
+                    "    if (typeof window.__setLixionaryInspectMode === 'function') {\n"
+                    f"        window.__setLixionaryInspectMode({json.dumps(enabled)});\n"
+                    "        return true;\n"
+                    "    }\n"
+                    "    return false;\n"
+                    "})()"
+                )
+                await session["page"].evaluate(eval_script)
+            except Exception as e:
+                print(f"Error setting inspect mode: {e}")
 
 def rank_locators(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
     """

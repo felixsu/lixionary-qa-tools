@@ -795,16 +795,23 @@ export default function WebExplorerPage() {
 
                   <div>
                     <label className="text-[10px] uppercase font-bold text-slate-400">
-                      Inject LocalStorage (JSON Object Format)
+                      Inject LocalStorage (JSON Object/Array Format)
                     </label>
                     <textarea
-                      rows={3}
+                      rows={5}
                       value={profileLocalStorage}
                       onChange={(e) => setProfileLocalStorage(e.target.value)}
                       className="w-full mt-1.5 bg-slate-950 border border-slate-850 rounded-xl p-3 text-xs outline-none focus:border-indigo-500 text-emerald-400 font-mono"
-                      placeholder='{"auth_token": "bearer-token-abc", "theme": "dark"}'
+                      placeholder='{
+  "origins": [
+    {
+      "origin": "https://operatorv2-qa.ninjavan.co",
+      "localStorage": [{"name": "acceptedTnC", "value": "true"}]
+    }
+  ]
+}'
                     />
-                    <p className="text-[9px] text-slate-500 mt-1 font-semibold">Tip: Paste a key-value object containing storage keys.</p>
+                    <p className="text-[9px] text-slate-500 mt-1 font-semibold">Tip: Paste a key-value object or use the origins array schema above for domain-scoped storage.</p>
                   </div>
                 </div>
 
