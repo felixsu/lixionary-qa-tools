@@ -209,7 +209,7 @@ export default function WebExplorerPage() {
     }
   }, [selectedWorkspaceFile]);
 
-  const WorkspacePanel = () => {
+  const renderWorkspacePanel = () => {
     return (
       <div className="h-full w-full flex overflow-hidden bg-slate-950">
         {/* Workspace sidebar list */}
@@ -666,7 +666,7 @@ export default function WebExplorerPage() {
                 <div className="w-full h-full flex divide-x divide-slate-900">
                   {/* Left Column: Workspace Panel */}
                   <div className="w-1/2 h-full flex flex-col overflow-hidden">
-                    <WorkspacePanel />
+                    {renderWorkspacePanel()}
                   </div>
                   {/* Right Column: VNC Browser Frame */}
                   <div className="w-1/2 h-full bg-slate-950 flex flex-col overflow-hidden">
