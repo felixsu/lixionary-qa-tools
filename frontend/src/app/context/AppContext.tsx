@@ -568,12 +568,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const handleToggleInspect = () => {
     const nextMode = !inspectMode;
+    console.log(`[Lixionary] Toggling Inspect Mode: ${inspectMode} -> ${nextMode}`);
     setInspectMode(nextMode);
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      console.log(`[Lixionary] Sending toggle-inspect: ${nextMode} to WebSocket`);
       wsRef.current.send(JSON.stringify({
         action: "toggle-inspect",
         enabled: nextMode
       }));
+    } else {
+      console.warn("[Lixionary] WebSocket not open, cannot toggle inspect mode on backend");
     }
   };
 

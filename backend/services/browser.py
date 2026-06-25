@@ -357,7 +357,11 @@ class BrowserSessionManager:
                 hoverOverlay.style.zIndex = '999999';
                 hoverOverlay.style.transition = 'all 0.1s ease';
                 hoverOverlay.style.display = 'none';
-                document.body.appendChild(hoverOverlay);
+                if (document.body) {
+                    document.body.appendChild(hoverOverlay);
+                } else {
+                    document.documentElement.appendChild(hoverOverlay);
+                }
             }
 
             // Expose control API
@@ -429,7 +433,11 @@ class BrowserSessionManager:
                     }
                 }, true);
 
-                document.body.appendChild(overlay);
+                if (document.body) {
+                    document.body.appendChild(overlay);
+                } else {
+                    document.documentElement.appendChild(overlay);
+                }
             }
 
             // Helper to find preceding sibling with text label
