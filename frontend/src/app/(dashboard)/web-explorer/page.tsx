@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { 
   Globe, RefreshCw, Terminal, Eye, EyeOff, 
   AlertCircle, Copy, Download, Trash, Plus, ChevronRight, FileCode, Play,
-  Save, File, Folder, PlayCircle, XCircle, Columns
+  Save, File, Folder, PlayCircle, XCircle, Rows
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
@@ -78,14 +78,14 @@ export default function WebExplorerPage() {
 
   const handleSplitDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
-    const startX = e.clientX;
+    const startY = e.clientY;
     const startPercent = workspaceSplitPercent;
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
       if (!containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
-      const deltaX = moveEvent.clientX - startX;
-      const deltaPercent = (deltaX / rect.width) * 100;
+      const deltaY = moveEvent.clientY - startY;
+      const deltaPercent = (deltaY / rect.height) * 100;
       const newPercent = Math.min(Math.max(startPercent + deltaPercent, 20), 80);
       setWorkspaceSplitPercent(newPercent);
     };
@@ -709,7 +709,7 @@ export default function WebExplorerPage() {
                         : "text-slate-400 hover:text-slate-200"
                     }`}
                   >
-                    <Columns className="h-3 w-3" />
+                    <Rows className="h-3 w-3" />
                     Split View
                   </button>
                   <button
@@ -752,20 +752,20 @@ export default function WebExplorerPage() {
               )}
 
               {viewMode === "split" && (
-                <div className="w-full h-full flex overflow-hidden">
-                  {/* Left Column: Workspace Panel */}
-                  <div style={{ width: `${workspaceSplitPercent}%` }} className="h-full flex flex-col overflow-hidden flex-shrink-0">
+                <div className="w-full h-full flex flex-col overflow-hidden">
+                  {/* Top Column: Workspace Panel */}
+                  <div style={{ height: `${workspaceSplitPercent}%` }} className="w-full flex flex-col overflow-hidden flex-shrink-0">
                     {renderWorkspacePanel()}
                   </div>
                   
                   {/* Main Draggable Divider Splitter */}
                   <div
                     onMouseDown={handleSplitDragStart}
-                    className="w-1.5 hover:w-2 bg-slate-900/60 hover:bg-indigo-500/50 cursor-col-resize transition-all flex-shrink-0 self-stretch z-10 select-none flex items-center justify-center border-l border-r border-slate-850"
+                    className="h-1.5 hover:h-2 bg-slate-900/60 hover:bg-indigo-500/50 cursor-row-resize transition-all flex-shrink-0 w-full z-10 select-none flex items-center justify-center border-t border-b border-slate-850"
                   />
 
-                  {/* Right Column: VNC Browser Frame */}
-                  <div style={{ width: `${100 - workspaceSplitPercent}%` }} className="h-full bg-slate-950 flex flex-col overflow-hidden flex-shrink-0">
+                  {/* Bottom Column: VNC Browser Frame */}
+                  <div style={{ height: `${100 - workspaceSplitPercent}%` }} className="w-full bg-slate-950 flex flex-col overflow-hidden flex-shrink-0">
                     {vncUrl ? (
                       <iframe
                         src={vncUrl}
