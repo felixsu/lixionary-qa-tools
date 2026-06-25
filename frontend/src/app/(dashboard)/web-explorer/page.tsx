@@ -51,6 +51,7 @@ export default function WebExplorerPage() {
     profiles,
     selectedProfileId,
     setSelectedProfileId,
+    authFunctions,
     apiCall,
     handleBrowserNavigate,
     handleToggleInspect,
@@ -68,6 +69,10 @@ export default function WebExplorerPage() {
   const [profileName, setProfileName] = useState("");
   const [profileCookies, setProfileCookies] = useState("");
   const [profileLocalStorage, setProfileLocalStorage] = useState("");
+  const [profileAuthFunctionId, setProfileAuthFunctionId] = useState<string>("");
+  const [profileAuthInjectionType, setProfileAuthInjectionType] = useState<"cookie" | "localStorage">("cookie");
+  const [profileAuthInjectionKey, setProfileAuthInjectionKey] = useState("");
+  const [profileAuthInjectionDomainOrOrigin, setProfileAuthInjectionDomainOrOrigin] = useState("");
   const [showNewClassModal, setShowNewClassModal] = useState(false);
   const [newClassName, setNewClassName] = useState("");
 
@@ -192,11 +197,28 @@ export default function WebExplorerPage() {
     }
 
     try {
-      await handleSaveProfile(profileName, profileCookies, profileLocalStorage, editingProfileId);
+      const authInjectionVal = profileAuthFunctionId ? {
+        type: profileAuthInjectionType,
+        key: profileAuthInjectionKey,
+        domainOrOrigin: profileAuthInjectionDomainOrOrigin
+      } : null;
+
+      await handleSaveProfile(
+        profileName,
+        profileCookies,
+        profileLocalStorage,
+        profileAuthFunctionId || null,
+        authInjectionVal,
+        editingProfileId
+      );
       // Reset form
       setProfileName("");
       setProfileCookies("");
       setProfileLocalStorage("");
+      setProfileAuthFunctionId("");
+      setProfileAuthInjectionType("cookie");
+      setProfileAuthInjectionKey("");
+      setProfileAuthInjectionDomainOrOrigin("");
       setEditingProfileId(null);
       alert("Browser Profile saved successfully!");
     } catch (err: any) {
@@ -209,6 +231,16 @@ export default function WebExplorerPage() {
     setProfileName(profile.name);
     setProfileCookies(profile.cookies || "");
     setProfileLocalStorage(profile.localStorage || "");
+    setProfileAuthFunctionId(profile.authFunctionId || "");
+    if (profile.authInjection) {
+      setProfileAuthInjectionType(profile.authInjection.type || "cookie");
+      setProfileAuthInjectionKey(profile.authInjection.key || "");
+      setProfileAuthInjectionDomainOrOrigin(profile.authInjection.domainOrOrigin || "");
+    } else {
+      setProfileAuthInjectionType("cookie");
+      setProfileAuthInjectionKey("");
+      setProfileAuthInjectionDomainOrOrigin("");
+    }
   };
 
   const handleClearProfileForm = () => {
@@ -216,6 +248,10 @@ export default function WebExplorerPage() {
     setProfileName("");
     setProfileCookies("");
     setProfileLocalStorage("");
+    setProfileAuthFunctionId("");
+    setProfileAuthInjectionType("cookie");
+    setProfileAuthInjectionKey("");
+    setProfileAuthInjectionDomainOrOrigin("");
   };
 
   const downloadFile = (content: string, filename: string) => {
@@ -863,6 +899,74 @@ export default function WebExplorerPage() {
 }'
                     />
                     <p className="text-[9px] text-slate-500 mt-1 font-semibold">Tip: Paste a key-value object or use the origins array schema above for domain-scoped storage.</p>
+                  </div>
+
+                  <div className="border-t border-slate-800 pt-3 space-y-4">
+                    <h4 className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider">Auth Hook Integration</h4>
+                    
+                    <div>
+                      <label className="text-[10px] uppercase font-bold text-slate-400">Link Auth Hook</label>
+                      <select
+                        value={profileAuthFunctionId}
+                        onChange={(e) => setProfileAuthFunctionId(e.target.value)}
+                        className="w-full mt-1.5 bg-slate-950 border border-slate-850 rounded-xl px-3 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500"
+                      >
+                        <option value="">-- No Auth Hook Linked --</option>
+                        {authFunctions.map((f) => (
+                          <option key={f.id} value={f.id}>
+                            {f.name} {f.expires_in ? `(${f.expires_in}s TTL)` : "(JWT/Default TTL)"}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {profileAuthFunctionId && (
+                      <div className="bg-slate-950/60 p-3.5 rounded-xl border border-slate-850 space-y-3">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-[10px] uppercase font-bold text-slate-400">Injection Type</label>
+                            <select
+                              value={profileAuthInjectionType}
+                              onChange={(e) => setProfileAuthInjectionType(e.target.value as "cookie" | "localStorage")}
+                              className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200 outline-none focus:border-indigo-500"
+                            >
+                              <option value="cookie">Cookie</option>
+                              <option value="localStorage">Local Storage</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-[10px] uppercase font-bold text-slate-400">Target Key / Name</label>
+                            <input
+                              type="text"
+                              placeholder="e.g. auth_token"
+                              value={profileAuthInjectionKey}
+                              onChange={(e) => setProfileAuthInjectionKey(e.target.value)}
+                              className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-indigo-500"
+                              required={!!profileAuthFunctionId}
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] uppercase font-bold text-slate-400">
+                            {profileAuthInjectionType === "cookie" ? "Domain (Cookie)" : "Origin (Local Storage)"}
+                          </label>
+                          <input
+                            type="text"
+                            placeholder={profileAuthInjectionType === "cookie" ? "e.g. .ninjavan.co" : "e.g. https://operatorv2-qa.ninjavan.co"}
+                            value={profileAuthInjectionDomainOrOrigin}
+                            onChange={(e) => setProfileAuthInjectionDomainOrOrigin(e.target.value)}
+                            className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 outline-none focus:border-indigo-500"
+                            required={!!profileAuthFunctionId}
+                          />
+                          <p className="text-[9px] text-slate-500 mt-1">
+                            {profileAuthInjectionType === "cookie" 
+                              ? "Must be the exact domain or subdomain for the cookie." 
+                              : "Must include protocol and hostname, e.g., https://example.com"}
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 

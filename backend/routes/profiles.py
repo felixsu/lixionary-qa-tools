@@ -9,15 +9,24 @@ from routes.auth import get_current_user
 
 router = APIRouter(prefix="/api/profiles", tags=["profiles"])
 
+class AuthInjection(BaseModel):
+    type: str
+    key: str
+    domainOrOrigin: str
+
 class ProfileCreate(BaseModel):
     name: str
     cookies: Optional[str] = ""
     localStorage: Optional[str] = ""
+    authFunctionId: Optional[str] = None
+    authInjection: Optional[AuthInjection] = None
 
 class ProfileUpdate(BaseModel):
     name: Optional[str] = None
     cookies: Optional[str] = None
     localStorage: Optional[str] = None
+    authFunctionId: Optional[str] = None
+    authInjection: Optional[AuthInjection] = None
 
 def serialize_doc(doc) -> dict:
     if not doc:
@@ -26,6 +35,8 @@ def serialize_doc(doc) -> dict:
     del doc["_id"]
     if "ownerId" in doc:
         doc["ownerId"] = str(doc["ownerId"])
+    if "authFunctionId" in doc and doc["authFunctionId"]:
+        doc["authFunctionId"] = str(doc["authFunctionId"])
     return doc
 
 @router.get("")
@@ -49,6 +60,8 @@ async def create_profile(payload: ProfileCreate, current_user: dict = Depends(ge
         "name": payload.name,
         "cookies": payload.cookies,
         "localStorage": payload.localStorage,
+        "authFunctionId": ObjectId(payload.authFunctionId) if payload.authFunctionId else None,
+        "authInjection": payload.authInjection.dict() if payload.authInjection else None,
         "createdAt": datetime.now(timezone.utc)
     }
     
@@ -70,6 +83,10 @@ async def update_profile(id: str, payload: ProfileUpdate, current_user: dict = D
         update_fields["cookies"] = payload.cookies
     if payload.localStorage is not None:
         update_fields["localStorage"] = payload.localStorage
+    if payload.authFunctionId is not None:
+        update_fields["authFunctionId"] = ObjectId(payload.authFunctionId) if payload.authFunctionId else None
+    if payload.authInjection is not None:
+        update_fields["authInjection"] = payload.authInjection.dict() if payload.authInjection else None
 
     if update_fields:
         await col.update_one({"_id": ObjectId(id)}, {"$set": update_fields})

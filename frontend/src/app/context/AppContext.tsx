@@ -15,6 +15,7 @@ export interface AuthFunction {
   name: string;
   description: string;
   script: string;
+  expires_in?: number;
   cachedToken?: string;
   expiresAt?: string;
 }
@@ -86,6 +87,8 @@ export interface BrowserProfile {
   name: string;
   cookies: string;
   localStorage: string;
+  authFunctionId?: string;
+  authInjection?: { type: string; key: string; domainOrOrigin: string };
   createdAt: string;
 }
 
@@ -216,11 +219,18 @@ interface AppContextType {
   handleAddCollaborator: (email: string) => Promise<void>;
   handleSaveEnv: (name: string, variables: { key: string; value: string; isSecret: boolean }[], id: string | null) => Promise<void>;
   handleDeleteEnv: (id: string) => Promise<void>;
-  handleSaveAuthFunc: (name: string, description: string, script: string, id: string | null) => Promise<void>;
+  handleSaveAuthFunc: (name: string, description: string, script: string, expires_in: number | null, id: string | null) => Promise<void>;
   handleDeleteAuthFunc: (id: string) => Promise<void>;
 
   // Profile operations
-  handleSaveProfile: (name: string, cookies: string, localStorage: string, id: string | null) => Promise<void>;
+  handleSaveProfile: (
+    name: string,
+    cookies: string,
+    localStorage: string,
+    authFunctionId: string | null,
+    authInjection: { type: string; key: string; domainOrOrigin: string } | null,
+    id: string | null
+  ) => Promise<void>;
   handleDeleteProfile: (id: string) => Promise<void>;
 }
 
@@ -475,6 +485,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let wsUrl = `ws://localhost:8000/api/browser/ws/browser-session/${sessId}?token=${token}`;
     if (profileId) {
       wsUrl += `&profileId=${profileId}`;
+    }
+    if (selectedEnvId) {
+      wsUrl += `&envId=${selectedEnvId}`;
     }
 
     console.log(`Connecting WebSocket browser stream: ${wsUrl}`);
@@ -816,17 +829,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const handleSaveAuthFunc = async (name: string, description: string, script: string, id: string | null) => {
+  const handleSaveAuthFunc = async (name: string, description: string, script: string, expires_in: number | null, id: string | null) => {
     try {
       if (id) {
         await apiCall(`/api/auth-functions/${id}`, {
           method: "PUT",
-          body: JSON.stringify({ name, description, script })
+          body: JSON.stringify({ name, description, script, expires_in })
         });
       } else {
         await apiCall("/api/auth-functions", {
           method: "POST",
-          body: JSON.stringify({ name, description, script })
+          body: JSON.stringify({ name, description, script, expires_in })
         });
       }
       fetchAuthFunctions();
@@ -844,17 +857,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const handleSaveProfile = async (name: string, cookies: string, localStorage: string, id: string | null) => {
+  const handleSaveProfile = async (
+    name: string,
+    cookies: string,
+    localStorage: string,
+    authFunctionId: string | null,
+    authInjection: { type: string; key: string; domainOrOrigin: string } | null,
+    id: string | null
+  ) => {
     try {
       if (id) {
         await apiCall(`/api/profiles/${id}`, {
           method: "PUT",
-          body: JSON.stringify({ name, cookies, localStorage })
+          body: JSON.stringify({ name, cookies, localStorage, authFunctionId, authInjection })
         });
       } else {
         await apiCall("/api/profiles", {
           method: "POST",
-          body: JSON.stringify({ name, cookies, localStorage })
+          body: JSON.stringify({ name, cookies, localStorage, authFunctionId, authInjection })
         });
       }
       await fetchProfiles();

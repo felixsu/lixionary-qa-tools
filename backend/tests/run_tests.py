@@ -9,9 +9,10 @@ sys.modules["pytest"] = pytest_mock
 # Set python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import asyncio
 from tests.test_ranking import test_rank_locators_anchored_xpath
 from tests.test_profiles import test_serialize_doc
-from tests.test_executor import test_interpolate_variables, test_extract_jwt_expiry_fallback
+from tests.test_executor import test_interpolate_variables, test_extract_jwt_expiry_fallback, test_get_valid_auth_token_caching
 from tests.test_generator import test_generate_pom_class_strategies
 
 def run():
@@ -29,6 +30,9 @@ def run():
         
         test_extract_jwt_expiry_fallback()
         print("✓ test_extract_jwt_expiry_fallback passed")
+        
+        asyncio.run(test_get_valid_auth_token_caching())
+        print("✓ test_get_valid_auth_token_caching passed")
         
         test_generate_pom_class_strategies()
         print("✓ test_generate_pom_class_strategies passed")

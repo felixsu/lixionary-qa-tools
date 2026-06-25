@@ -3,7 +3,7 @@ import time
 import json
 import jwt
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import httpx
 from bson import ObjectId
 
@@ -39,6 +39,68 @@ def extract_jwt_expiry(token: str) -> datetime:
     
     # Default fallback: 1 hour
     return datetime.now(timezone.utc) + timedelta(hours=1)
+
+async def get_valid_auth_token(auth_func_id: str, environment_id: Optional[str] = None) -> str:
+    """
+    Resolves the valid auth token for the given auth function ID.
+    If cached token is missing, expired, or almost expired (within 30 seconds),
+    reruns the sandbox script, caches the result, and returns it.
+    """
+    auth_col = MongoDB.get_collection("auth_functions")
+    auth_func = await auth_col.find_one({"_id": ObjectId(auth_func_id)})
+    if not auth_func:
+        raise ValueError(f"Auth function not found: {auth_func_id}")
+
+    now = datetime.now(timezone.utc)
+    cached_token = auth_func.get("cachedToken")
+    expires_at = auth_func.get("expiresAt")
+    expires_in = auth_func.get("expires_in")
+
+    # Make sure expires_at is timezone-aware
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    # Re-run if missing, expired, or almost expired (within 30 seconds)
+    if not cached_token or not expires_at or expires_at <= now + timedelta(seconds=30):
+        print(f"Auth function cache miss/expiry/almost expired for: {auth_func['name']}. Running sandbox...")
+        script = auth_func.get("script", "")
+        
+        # Load environment variables
+        variables = {}
+        if environment_id:
+            env_col = MongoDB.get_collection("environments")
+            env = await env_col.find_one({"_id": ObjectId(environment_id)})
+            if env:
+                for var in env.get("variables", []):
+                    variables[var["key"]] = var["value"]
+
+        # Execute in QuickJS sandbox
+        new_token = await run_unsafe_auth_script(script, variables)
+        
+        if new_token.startswith("ERROR:"):
+            raise ValueError(f"Auth Hook Execution Failed: {new_token}")
+        
+        # Compute expiry
+        if expires_in is not None and expires_in > 0:
+            token_expiry = now + timedelta(seconds=expires_in)
+        else:
+            token_expiry = extract_jwt_expiry(new_token)
+        
+        # Update DB cache
+        await auth_col.update_one(
+            {"_id": ObjectId(auth_func_id)},
+            {
+                "$set": {
+                    "cachedToken": new_token,
+                    "expiresAt": token_expiry,
+                    "updatedAt": datetime.now(timezone.utc)
+                }
+            }
+        )
+        cached_token = new_token
+        print(f"Token cached. Expiration set to: {token_expiry}")
+
+    return cached_token
 
 async def execute_request(request_data: Dict[str, Any], environment_id: str = None) -> Dict[str, Any]:
     """
@@ -86,48 +148,8 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
 
     if auth_type == "HOOK" and auth_config.get("authFunctionId"):
         auth_func_id = auth_config["authFunctionId"]
-        auth_col = MongoDB.get_collection("auth_functions")
-        auth_func = await auth_col.find_one({"_id": ObjectId(auth_func_id)})
-
-        if auth_func:
-            now = datetime.now(timezone.utc)
-            cached_token = auth_func.get("cachedToken")
-            expires_at = auth_func.get("expiresAt")
-            
-            # Make sure expires_at is timezone-aware
-            if expires_at and expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-
-            # If cached token is missing or expired, run sandbox script to get new token
-            if not cached_token or not expires_at or expires_at <= now:
-                print(f"Auth function cache miss/expiry for: {auth_func['name']}. Running sandbox...")
-                script = auth_func.get("script", "")
-                
-                # Execute in QuickJS sandbox
-                new_token = await run_unsafe_auth_script(script, variables)
-                
-                if new_token.startswith("ERROR:"):
-                    raise ValueError(f"Auth Hook Execution Failed: {new_token}")
-                
-                # Extract expiry (check JWT exp claim or default 1 hour)
-                token_expiry = extract_jwt_expiry(new_token)
-                
-                # Update DB cache
-                await auth_col.update_one(
-                    {"_id": ObjectId(auth_func_id)},
-                    {
-                        "$set": {
-                            "cachedToken": new_token,
-                            "expiresAt": token_expiry,
-                            "updatedAt": datetime.now(timezone.utc)
-                        }
-                    }
-                )
-                cached_token = new_token
-                print(f"Token cached. Expiration set to: {token_expiry}")
-            
-            # Apply token as Bearer token header
-            headers["Authorization"] = f"Bearer {cached_token}"
+        cached_token = await get_valid_auth_token(auth_func_id, environment_id)
+        headers["Authorization"] = f"Bearer {cached_token}"
 
     elif auth_type == "BEARER" and auth_config.get("token"):
         token_val = interpolate_variables(auth_config["token"], variables)

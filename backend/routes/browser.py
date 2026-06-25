@@ -137,6 +137,7 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
     query_params = dict(websocket.query_params)
     token = query_params.get("token")
     profile_id = query_params.get("profileId")
+    env_id = query_params.get("envId")
 
     cookies = None
     local_storage = None
@@ -163,6 +164,66 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
                             local_storage = json.loads(profile["localStorage"])
                         except Exception as e:
                             print(f"Failed to parse profile localStorage: {e}")
+                    
+                    # Resolve and inject Auth Hook token
+                    auth_func_id = profile.get("authFunctionId")
+                    auth_injection = profile.get("authInjection")
+                    if auth_func_id and auth_injection:
+                        try:
+                            from services.executor import get_valid_auth_token
+                            auth_token = await get_valid_auth_token(str(auth_func_id), env_id)
+                            
+                            inj_type = auth_injection.get("type")
+                            inj_key = auth_injection.get("key")
+                            domain_or_origin = auth_injection.get("domainOrOrigin")
+                            
+                            if inj_type == "cookie":
+                                if cookies is None:
+                                    cookies = []
+                                if not isinstance(cookies, list):
+                                    cookies = []
+                                
+                                # Remove existing cookie with same name to avoid duplicates
+                                cookies = [c for c in cookies if c.get("name") != inj_key]
+                                cookies.append({
+                                    "name": inj_key,
+                                    "value": auth_token,
+                                    "domain": domain_or_origin,
+                                    "path": "/"
+                                })
+                                print(f"Injected Auth Hook token into profile cookies as {inj_key} for domain {domain_or_origin}")
+                                
+                            elif inj_type == "localStorage":
+                                if local_storage is None:
+                                    local_storage = {"origins": []}
+                                
+                                if not isinstance(local_storage, dict):
+                                    local_storage = {"origins": []}
+                                if "origins" not in local_storage:
+                                    local_storage["origins"] = []
+                                
+                                target_origin = domain_or_origin.lower().rstrip("/")
+                                origin_entry = None
+                                for entry in local_storage["origins"]:
+                                    if entry.get("origin", "").lower().rstrip("/") == target_origin:
+                                        origin_entry = entry
+                                        break
+                                
+                                if not origin_entry:
+                                    origin_entry = {"origin": domain_or_origin, "localStorage": []}
+                                    local_storage["origins"].append(origin_entry)
+                                
+                                if not isinstance(origin_entry.get("localStorage"), list):
+                                    origin_entry["localStorage"] = []
+                                    
+                                origin_entry["localStorage"] = [kv for kv in origin_entry["localStorage"] if kv.get("name") != inj_key]
+                                origin_entry["localStorage"].append({
+                                    "name": inj_key,
+                                    "value": auth_token
+                                })
+                                print(f"Injected Auth Hook token into profile localStorage as {inj_key} for origin {domain_or_origin}")
+                        except Exception as e:
+                            print(f"Failed to resolve or inject Auth Hook token: {e}")
         except Exception as e:
             print(f"WebSocket authentication/profile resolving failed: {e}")
 

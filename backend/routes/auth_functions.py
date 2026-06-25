@@ -13,11 +13,13 @@ class AuthFunctionCreate(BaseModel):
     name: str
     description: Optional[str] = ""
     script: str
+    expires_in: Optional[int] = None
 
 class AuthFunctionUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     script: Optional[str] = None
+    expires_in: Optional[int] = None
 
 def serialize_doc(doc) -> dict:
     if not doc:
@@ -45,6 +47,7 @@ async def create_auth_function(payload: AuthFunctionCreate, current_user: dict =
         "name": payload.name,
         "description": payload.description,
         "script": payload.script,
+        "expires_in": payload.expires_in,
         "cachedToken": None,
         "expiresAt": None,
         "createdAt": datetime.now(timezone.utc),
@@ -69,6 +72,11 @@ async def update_auth_function(id: str, payload: AuthFunctionUpdate, current_use
     if payload.script is not None:
         update_fields["script"] = payload.script
         # Invalidate cache if script is updated
+        update_fields["cachedToken"] = None
+        update_fields["expiresAt"] = None
+    if payload.expires_in is not None:
+        update_fields["expires_in"] = payload.expires_in
+        # Invalidate cache if expires_in config changes
         update_fields["cachedToken"] = None
         update_fields["expiresAt"] = None
 

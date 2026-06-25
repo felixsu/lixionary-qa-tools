@@ -17,12 +17,14 @@ export default function AuthFunctionsPage() {
   const [authFuncName, setAuthFuncName] = useState("");
   const [authFuncDesc, setAuthFuncDesc] = useState("");
   const [authFuncScript, setAuthFuncScript] = useState("");
+  const [authFuncExpiresIn, setAuthFuncExpiresIn] = useState<string>("");
   const [editingAuthFuncId, setEditingAuthFuncId] = useState<string | null>(null);
 
   const openAuthFuncCreate = () => {
     setEditingAuthFuncId(null);
     setAuthFuncName("");
     setAuthFuncDesc("");
+    setAuthFuncExpiresIn("");
     setAuthFuncScript(`// Write code to fetch token contextually\nconst response = fetchToken("https://api.example.com/oauth/token", {\n  method: "POST",\n  headers: { "Content-Type": "application/json" },\n  body: JSON.stringify({ client_id: env.CLIENT_ID, client_secret: env.CLIENT_SECRET })\n});\nconst data = JSON.parse(response);\nreturn data.access_token;`);
     setShowAuthFuncModal(true);
   };
@@ -32,14 +34,16 @@ export default function AuthFunctionsPage() {
     setAuthFuncName(func.name);
     setAuthFuncDesc(func.description);
     setAuthFuncScript(func.script);
+    setAuthFuncExpiresIn(func.expires_in ? String(func.expires_in) : "");
     setShowAuthFuncModal(true);
   };
 
   const onSaveSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!authFuncName || !authFuncScript) return;
+    const expiresSec = authFuncExpiresIn ? parseInt(authFuncExpiresIn, 10) : null;
     try {
-      await handleSaveAuthFunc(authFuncName, authFuncDesc, authFuncScript, editingAuthFuncId);
+      await handleSaveAuthFunc(authFuncName, authFuncDesc, authFuncScript, expiresSec, editingAuthFuncId);
       setShowAuthFuncModal(false);
     } catch (err: any) {
       alert(err.message);
@@ -97,7 +101,10 @@ export default function AuthFunctionsPage() {
             </div>
 
             <div className="text-[10px] text-slate-500 font-semibold border-t border-slate-850/80 pt-3 flex items-center justify-between">
-              <span>Token Status:</span>
+              <div className="flex flex-col gap-0.5">
+                <span>Token Status:</span>
+                {func.expires_in && <span className="text-[9px] text-slate-500">TTL: {func.expires_in}s</span>}
+              </div>
               <span className={func.cachedToken ? "text-emerald-400" : "text-amber-400"}>
                 {func.cachedToken ? "Cached Token Active" : "No Token Cached"}
               </span>
@@ -114,7 +121,7 @@ export default function AuthFunctionsPage() {
               {editingAuthFuncId ? "Edit Auth Function" : "Create Auth Function"}
             </h3>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-4">
               <div className="space-y-1">
                 <label className="text-[10px] uppercase font-bold text-slate-400">Hook Name</label>
                 <input
@@ -134,6 +141,17 @@ export default function AuthFunctionsPage() {
                   value={authFuncDesc}
                   onChange={(e) => setAuthFuncDesc(e.target.value)}
                   className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-slate-400">Expires In (secs)</label>
+                <input
+                  type="number"
+                  placeholder="e.g. 3600 (optional)"
+                  value={authFuncExpiresIn}
+                  onChange={(e) => setAuthFuncExpiresIn(e.target.value)}
+                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500"
+                  min="0"
                 />
               </div>
             </div>

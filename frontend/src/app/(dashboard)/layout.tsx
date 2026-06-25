@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Cpu, Send, Globe, Database, Key, User, LogOut } from "lucide-react";
+import { Cpu, Send, Globe, Database, Key, User, LogOut, ChevronLeft } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 
 export default function DashboardLayout({
@@ -21,6 +21,7 @@ export default function DashboardLayout({
     handleLogout
   } = useAppContext();
 
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
 
@@ -68,91 +69,161 @@ export default function DashboardLayout({
     <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
       
       {/* Sidebar Panel */}
-      <aside className="w-64 flex-shrink-0 border-r border-slate-800/80 bg-slate-900/60 flex flex-col justify-between">
+      <aside className={`flex-shrink-0 border-r border-slate-800/80 bg-slate-900/60 flex flex-col justify-between transition-all duration-300 ease-in-out ${
+        isCollapsed ? "w-16" : "w-64"
+      }`}>
         <div>
-          {/* Logo */}
-          <div className="h-16 flex items-center gap-3 px-6 border-b border-slate-800/80">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 shadow-md shadow-indigo-500/20">
-              <Cpu className="h-5 w-5 text-white" />
+          {/* Logo / Header */}
+          {isCollapsed ? (
+            <div className="h-16 flex items-center justify-center border-b border-slate-800/80">
+              <button
+                onClick={() => setIsCollapsed(false)}
+                className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 shadow-md shadow-indigo-500/20 hover:scale-105 transition-all text-white"
+                title="Expand Sidebar"
+              >
+                <Cpu className="h-5 w-5" />
+              </button>
             </div>
-            <span className="font-extrabold text-lg tracking-tight bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent">
-              Lixionary
-            </span>
-          </div>
+          ) : (
+            <div className="h-16 flex items-center justify-between px-5 border-b border-slate-800/80">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 shadow-md shadow-indigo-500/20">
+                  <Cpu className="h-5 w-5 text-white" />
+                </div>
+                <span className="font-extrabold text-lg tracking-tight bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent">
+                  Lixionary
+                </span>
+              </div>
+              <button
+                onClick={() => setIsCollapsed(true)}
+                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
+                title="Collapse Sidebar"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+            </div>
+          )}
 
           {/* Navigation Menu */}
-          <nav className="mt-6 px-4 space-y-1.5">
-            <Link
-              href="/api-explorer"
-              className={`flex items-center gap-3 px-4 py-3 text-sm font-semibold rounded-xl transition-all duration-200 ${
-                isActive("/api-explorer")
-                  ? "bg-indigo-600/10 border border-indigo-500/30 text-indigo-400"
-                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent"
-              }`}
-            >
-              <Send className="h-4 w-4" />
-              API Automation Explorer
-            </Link>
+          <nav className={`mt-6 space-y-4 ${isCollapsed ? "px-2" : "px-4"}`}>
+            {/* QA Tools Section */}
+            <div className="space-y-1">
+              {!isCollapsed && (
+                <p className="text-[9px] uppercase font-extrabold tracking-wider text-slate-500 px-3 mb-2">
+                  QA Tools
+                </p>
+              )}
+              <Link
+                href="/api-explorer"
+                title="API Automation Explorer"
+                className={`flex items-center rounded-xl transition-all duration-200 ${
+                  isCollapsed ? "justify-center p-3" : "gap-3 px-3 py-2.5 text-xs font-semibold"
+                } ${
+                  isActive("/api-explorer")
+                    ? "bg-indigo-600/10 border border-indigo-500/30 text-indigo-400"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent"
+                }`}
+              >
+                <Send className="h-4 w-4 flex-shrink-0" />
+                {!isCollapsed && <span>API Automation Explorer</span>}
+              </Link>
 
-            <Link
-              href="/web-explorer"
-              className={`flex items-center gap-3 px-4 py-3 text-sm font-semibold rounded-xl transition-all duration-200 ${
-                isActive("/web-explorer")
-                  ? "bg-indigo-600/10 border border-indigo-500/30 text-indigo-400"
-                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent"
-              }`}
-            >
-              <Globe className="h-4 w-4" />
-              Web Explorer & POM
-            </Link>
+              <Link
+                href="/web-explorer"
+                title="Web Explorer & POM"
+                className={`flex items-center rounded-xl transition-all duration-200 ${
+                  isCollapsed ? "justify-center p-3" : "gap-3 px-3 py-2.5 text-xs font-semibold"
+                } ${
+                  isActive("/web-explorer")
+                    ? "bg-indigo-600/10 border border-indigo-500/30 text-indigo-400"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent"
+                }`}
+              >
+                <Globe className="h-4 w-4 flex-shrink-0" />
+                {!isCollapsed && <span>Web Explorer & POM</span>}
+              </Link>
+            </div>
 
-            <Link
-              href="/environments"
-              className={`flex items-center gap-3 px-4 py-3 text-sm font-semibold rounded-xl transition-all duration-200 ${
-                isActive("/environments")
-                  ? "bg-indigo-600/10 border border-indigo-500/30 text-indigo-400"
-                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent"
-              }`}
-            >
-              <Database className="h-4 w-4" />
-              Environments ({environments.length})
-            </Link>
+            {/* Separator / Divider */}
+            {isCollapsed ? (
+              <div className="border-t border-slate-800/80 my-2 mx-1"></div>
+            ) : (
+              <div className="border-t border-slate-800/30 my-1 mx-3"></div>
+            )}
 
-            <Link
-              href="/auth-functions"
-              className={`flex items-center gap-3 px-4 py-3 text-sm font-semibold rounded-xl transition-all duration-200 ${
-                isActive("/auth-functions")
-                  ? "bg-indigo-600/10 border border-indigo-500/30 text-indigo-400"
-                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent"
-              }`}
-            >
-              <Key className="h-4 w-4" />
-              Auth Hook Functions
-            </Link>
+            {/* Configuration Section */}
+            <div className="space-y-1">
+              {!isCollapsed && (
+                <p className="text-[9px] uppercase font-extrabold tracking-wider text-slate-500 px-3 mb-2">
+                  Configuration
+                </p>
+              )}
+              <Link
+                href="/environments"
+                title={`Environments (${environments.length})`}
+                className={`flex items-center rounded-xl transition-all duration-200 ${
+                  isCollapsed ? "justify-center p-3" : "gap-3 px-3 py-2.5 text-xs font-semibold"
+                } ${
+                  isActive("/environments")
+                    ? "bg-indigo-600/10 border border-indigo-500/30 text-indigo-400"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent"
+                }`}
+              >
+                <Database className="h-4 w-4 flex-shrink-0" />
+                {!isCollapsed && <span>Environments ({environments.length})</span>}
+              </Link>
+
+              <Link
+                href="/auth-functions"
+                title="Auth Hook Functions"
+                className={`flex items-center rounded-xl transition-all duration-200 ${
+                  isCollapsed ? "justify-center p-3" : "gap-3 px-3 py-2.5 text-xs font-semibold"
+                } ${
+                  isActive("/auth-functions")
+                    ? "bg-indigo-600/10 border border-indigo-500/30 text-indigo-400"
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent"
+                }`}
+              >
+                <Key className="h-4 w-4 flex-shrink-0" />
+                {!isCollapsed && <span>Auth Hook Functions</span>}
+              </Link>
+            </div>
           </nav>
         </div>
 
         {/* User Info Block */}
-        <div className="p-4 border-t border-slate-800/80 bg-slate-900/30">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5 overflow-hidden">
-              <div className="h-9 w-9 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center flex-shrink-0">
-                <User className="h-4 w-4 text-slate-400" />
-              </div>
-              <div className="overflow-hidden">
-                <p className="text-xs font-semibold text-slate-200 truncate">{user?.name}</p>
-                <p className="text-[10px] text-slate-500 truncate">{user?.email}</p>
-              </div>
-            </div>
+        {isCollapsed ? (
+          <div className="p-3 border-t border-slate-800/80 bg-slate-900/30 flex justify-center">
             <button
               onClick={handleLogout}
-              className="p-2 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-              title="Logout"
+              className="p-2 rounded-xl text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+              title={`Logout (${user?.name || ""})`}
             >
-              <LogOut className="h-4.5 w-4.5" />
+              <LogOut className="h-5 w-5" />
             </button>
           </div>
-        </div>
+        ) : (
+          <div className="p-4 border-t border-slate-800/80 bg-slate-900/30">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5 overflow-hidden">
+                <div className="h-9 w-9 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center flex-shrink-0">
+                  <User className="h-4 w-4 text-slate-400" />
+                </div>
+                <div className="overflow-hidden">
+                  <p className="text-xs font-semibold text-slate-200 truncate">{user?.name}</p>
+                  <p className="text-[10px] text-slate-500 truncate">{user?.email}</p>
+                </div>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="p-2 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                title="Logout"
+              >
+                <LogOut className="h-4.5 w-4.5" />
+              </button>
+            </div>
+          </div>
+        )}
       </aside>
 
       {/* Main Workspace Frame */}
