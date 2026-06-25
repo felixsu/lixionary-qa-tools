@@ -368,6 +368,110 @@ class BrowserSessionManager:
                 }
             };
 
+            // Helper to find preceding sibling with text label
+            function findPrecedingTextSibling(element) {
+                let sibling = element.previousElementSibling;
+                while (sibling) {
+                    const text = sibling.innerText ? sibling.innerText.trim() : '';
+                    if (text && text.length > 0 && text.length < 50 && text.indexOf('\\n') === -1) {
+                        return { el: sibling, text: text };
+                    }
+                    sibling = sibling.previousElementSibling;
+                }
+                if (element.parentElement) {
+                    let parentSibling = element.parentElement.previousElementSibling;
+                    while (parentSibling) {
+                        const text = parentSibling.innerText ? parentSibling.innerText.trim() : '';
+                        if (text && text.length > 0 && text.length < 50 && text.indexOf('\\n') === -1) {
+                            return { el: parentSibling, text: text };
+                        }
+                        parentSibling = parentSibling.previousElementSibling;
+                    }
+                }
+                return null;
+            }
+
+            // Generate sibling-anchored XPath
+            function getSiblingAnchoredXPath(el) {
+                const anchor = findPrecedingTextSibling(el);
+                if (!anchor) return null;
+
+                const elTag = el.tagName.toLowerCase();
+                const anchorTag = anchor.el.tagName.toLowerCase();
+                const anchorText = anchor.text.replace(/"/g, '\\"');
+
+                if (el.parentElement === anchor.el.parentElement) {
+                    let index = 1;
+                    let sibling = anchor.el.nextElementSibling;
+                    while (sibling && sibling !== el) {
+                        if (sibling.tagName.toLowerCase() === elTag) {
+                            index++;
+                        }
+                        sibling = sibling.nextElementSibling;
+                    }
+                    return `//${anchorTag}[text()="${anchorText}"]/following-sibling::${elTag}[${index}]`;
+                } else {
+                    const commonAncestor = el.parentElement?.parentElement;
+                    if (commonAncestor && commonAncestor.contains(anchor.el)) {
+                        const descendants = Array.from(commonAncestor.getElementsByTagName(elTag));
+                        const index = descendants.indexOf(el) + 1;
+                        return `//${anchorTag}[contains(text(), "${anchorText}")]/parent::*//${elTag}[${index}]`;
+                    }
+                }
+                return null;
+            }
+
+            // Generate parent-container-anchored XPath
+            function getParentContainerAnchoredXPath(el) {
+                let ancestor = el.parentElement;
+                const elTag = el.tagName.toLowerCase();
+
+                while (ancestor && ancestor.tagName.toLowerCase() !== 'body') {
+                    const ancestorTag = ancestor.tagName.toLowerCase();
+                    
+                    if (ancestorTag === 'tr') {
+                        const tds = Array.from(ancestor.getElementsByTagName('td'));
+                        for (const td of tds) {
+                            const cellText = td.innerText ? td.innerText.trim() : '';
+                            if (cellText && cellText.length > 0 && cellText.length < 50 && cellText.indexOf('\\n') === -1) {
+                                const escapedCellText = cellText.replace(/"/g, '\\"');
+                                const descendants = Array.from(ancestor.getElementsByTagName(elTag));
+                                const index = descendants.indexOf(el) + 1;
+                                return `//tr[td[text()="${escapedCellText}"]]//${elTag}[${index}]`;
+                            }
+                        }
+                    }
+                    
+                    const headings = Array.from(ancestor.querySelectorAll('h1, h2, h3, h4, h5, h6, .card-title, .title'));
+                    if (headings.length === 1) {
+                        const heading = headings[0];
+                        const headingText = heading.innerText ? heading.innerText.trim() : '';
+                        if (headingText && headingText.length > 0 && headingText.length < 50) {
+                            const escapedHeadingText = headingText.replace(/"/g, '\\"');
+                            const headingTag = heading.tagName.toLowerCase();
+                            const descendants = Array.from(ancestor.getElementsByTagName(elTag));
+                            const index = descendants.indexOf(el) + 1;
+                            return `//${ancestorTag}[${headingTag}[contains(text(), "${escapedHeadingText}")]]//${elTag}[${index}]`;
+                        }
+                    }
+
+                    ancestor = ancestor.parentElement;
+                }
+                return null;
+            }
+
+            function getAnchoredXPath(el) {
+                try {
+                    let xpath = getSiblingAnchoredXPath(el);
+                    if (xpath) return xpath;
+                    xpath = getParentContainerAnchoredXPath(el);
+                    if (xpath) return xpath;
+                } catch (e) {
+                    console.error('Error generating anchored xpath:', e);
+                }
+                return '';
+            }
+
             // Gather element metadata
             function getElementMetadata(el) {
                 const rect = el.getBoundingClientRect();
@@ -425,6 +529,7 @@ class BrowserSessionManager:
                     role: el.getAttribute('role') || '',
                     cssSelector: getCssPath(el),
                     xpath: getXPath(el),
+                    anchoredXpath: getAnchoredXPath(el),
                     classes: el.className || '',
                     rect: {
                         top: rect.top + window.scrollY,
@@ -433,6 +538,15 @@ class BrowserSessionManager:
                         height: rect.height
                     }
                 };
+            }
+
+            // Universal event block handler
+            function blockEvent(e) {
+                if (!inspectMode) return;
+                const el = e.target;
+                if (el.id === 'lixionary-hover-overlay') return;
+                e.preventDefault();
+                e.stopPropagation();
             }
 
             document.addEventListener('mouseover', function(e) {
@@ -465,6 +579,12 @@ class BrowserSessionManager:
                     window.pythonOnElementSelected(JSON.stringify(metadata));
                 }
             }, true);
+
+            // Block other pointer/mouse events to prevent dropdowns from opening/reacting
+            document.addEventListener('mousedown', blockEvent, true);
+            document.addEventListener('mouseup', blockEvent, true);
+            document.addEventListener('pointerdown', blockEvent, true);
+            document.addEventListener('pointerup', blockEvent, true);
         })();
         """
 
@@ -566,6 +686,19 @@ def rank_locators(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Priority Weight = 10
         score = 10 - len(expr)
         locators.append({"strategy": "locator (XPath)", "selector": xpath, "statement": expr, "score": score})
+
+    # 7. Anchored XPath
+    anchored_xpath = metadata.get("anchoredXpath", "")
+    if anchored_xpath:
+        expr = f'page.locator("xpath={anchored_xpath}")'
+        # Priority Weight = 110 (stable sibling/parent container anchored selectors)
+        score = 110 - len(expr)
+        locators.append({
+            "strategy": "locator (Anchored XPath)",
+            "selector": anchored_xpath,
+            "statement": expr,
+            "score": score
+        })
 
     # Sort locators descending by score
     locators.sort(key=lambda x: x["score"], reverse=True)

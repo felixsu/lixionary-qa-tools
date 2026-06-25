@@ -38,6 +38,8 @@ def generate_pom_class(class_name: str, url: str, parent_locator: str, elements:
             method_name = f"action_{method_name}"
 
         strategy = el.get("strategy", "locator")
+        if strategy.startswith("locator"):
+            strategy = "locator"
         selector = el.get("selector", "")
         
         # Format the strategy arguments.
@@ -48,12 +50,14 @@ def generate_pom_class(class_name: str, url: str, parent_locator: str, elements:
             match = re.match(r'([^\[]+)\[name="([^"]+)"\]', selector)
             if match:
                 role_type = match.group(1)
-                role_name = match.group(2)
+                role_name = match.group(2).replace('"', '\\"')
                 strategy_args = f'"{role_type}", name="{role_name}"'
             else:
-                strategy_args = f'"{selector}"'
+                escaped_selector = selector.replace('"', '\\"')
+                strategy_args = f'"{escaped_selector}"'
         else:
-            strategy_args = f'"{selector}"'
+            escaped_selector = selector.replace('"', '\\"')
+            strategy_args = f'"{escaped_selector}"'
 
         # Resolve iframe locators chain
         frame_locators = el.get("frame_locators", el.get("frameLocators", []))
