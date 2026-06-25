@@ -66,6 +66,7 @@ export default function ApiExplorerPage() {
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareEmail, setShareEmail] = useState("");
   const [copiedRequestId, setCopiedRequestId] = useState<string | null>(null);
+  const [requestConfigTab, setRequestConfigTab] = useState<"headers" | "auth" | "chaining">("headers");
 
   // Custom Modal States (XSS & Prompt Prevention)
   const [showNewCollectionModal, setShowNewCollectionModal] = useState(false);
@@ -301,173 +302,163 @@ export default function ApiExplorerPage() {
               </button>
             </div>
 
-            {/* Request Settings Tabs */}
-            <div className="flex-grow flex overflow-hidden">
-              {/* Left Settings Panel */}
-              <div className="w-1/2 border-r border-slate-850 flex flex-col overflow-hidden">
-                {/* Headers Section */}
-                <div className="flex-grow flex flex-col overflow-hidden">
-                  <div className="px-4 py-3 border-b border-slate-850 bg-slate-900/5 flex items-center justify-between flex-shrink-0">
-                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Headers</span>
-                    <button
-                      onClick={() => setReqHeaders([...reqHeaders, { key: "", value: "" }])}
-                      className="p-1 rounded bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-slate-200"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                  <div className="flex-grow overflow-y-auto p-4 space-y-2">
-                    {reqHeaders.map((header, idx) => (
-                      <div key={idx} className="flex gap-2">
-                        <input
-                          type="text"
-                          placeholder="Header Key"
-                          value={header.key}
-                          onChange={(e) => {
-                            const newH = [...reqHeaders];
-                            newH[idx].key = e.target.value;
-                            setReqHeaders(newH);
-                          }}
-                          className="w-1/2 bg-slate-950 border border-slate-850 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none"
-                        />
-                        <input
-                          type="text"
-                          placeholder="Value"
-                          value={header.value}
-                          onChange={(e) => {
-                            const newH = [...reqHeaders];
-                            newH[idx].value = e.target.value;
-                            setReqHeaders(newH);
-                          }}
-                          className="w-1/2 bg-slate-950 border border-slate-850 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none"
-                        />
-                        <button
-                          onClick={() => setReqHeaders(reqHeaders.filter((_, i) => i !== idx))}
-                          className="p-2 text-slate-600 hover:text-red-400"
-                        >
-                          <Trash className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+            {/* Request Settings Tabs and Payload Body editor vertically stacked */}
+            <div className="flex-grow flex flex-col overflow-hidden">
+              
+              {/* Tab Bar below URL */}
+              <div className="px-4 py-2 border-b border-slate-850 bg-slate-900/10 flex items-center justify-between flex-shrink-0">
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setRequestConfigTab("headers")}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${requestConfigTab === "headers" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
+                  >
+                    Headers
+                  </button>
+                  <button
+                    onClick={() => setRequestConfigTab("auth")}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${requestConfigTab === "auth" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
+                  >
+                    Authentication
+                  </button>
+                  <button
+                    onClick={() => setRequestConfigTab("chaining")}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${requestConfigTab === "chaining" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
+                  >
+                    Variables Chaining
+                  </button>
                 </div>
 
-                {/* Request Auth Config */}
-                <div className="h-44 border-t border-slate-850 flex flex-col flex-shrink-0 bg-slate-950">
-                  <div className="px-4 py-2.5 border-b border-slate-850 bg-slate-900/10 flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Authentication</span>
-                    <select
-                      value={reqAuthType}
-                      onChange={(e) => setReqAuthType(e.target.value)}
-                      className="bg-slate-900 border border-slate-800 text-[11px] rounded-lg px-2 py-1 text-slate-300 outline-none"
-                    >
-                      <option value="NONE">No Auth</option>
-                      <option value="BEARER">Bearer Token</option>
-                      <option value="API_KEY">Header API Key</option>
-                      <option value="AUTH_HOOK">Dynamic Auth Hook</option>
-                    </select>
-                  </div>
-                  <div className="p-4 flex-grow flex items-center justify-center">
-                    {reqAuthType === "NONE" && <p className="text-[11px] text-slate-500">No authentication configured.</p>}
-                    {reqAuthType === "BEARER" && (
-                      <div className="w-full">
-                        <input
-                          type="text"
-                          placeholder="Token (or {{VARIABLE}})"
-                          value={reqAuthConfig.token || ""}
-                          onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, token: e.target.value })}
-                          className="w-full bg-slate-950 border border-slate-850 rounded-lg px-3 py-2 text-xs focus:outline-none"
-                        />
-                      </div>
-                    )}
-                    {reqAuthType === "API_KEY" && (
-                      <div className="w-full flex gap-3">
-                        <input
-                          type="text"
-                          placeholder="Header Key"
-                          value={reqAuthConfig.key || ""}
-                          onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, key: e.target.value })}
-                          className="w-1/2 bg-slate-950 border border-slate-850 rounded-lg px-3 py-2 text-xs focus:outline-none"
-                        />
-                        <input
-                          type="text"
-                          placeholder="Value"
-                          value={reqAuthConfig.value || ""}
-                          onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, value: e.target.value })}
-                          className="w-1/2 bg-slate-950 border border-slate-850 rounded-lg px-3 py-2 text-xs focus:outline-none"
-                        />
-                      </div>
-                    )}
-                    {reqAuthType === "AUTH_HOOK" && (
-                      <div className="w-full">
-                        <select
-                          value={reqAuthConfig.authFunctionId || ""}
-                          onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, authFunctionId: e.target.value })}
-                          className="w-full bg-slate-950 border border-slate-850 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none"
-                        >
-                          <option value="">Select Auth Hook script...</option>
-                          {authFunctions.map(f => (
-                            <option key={f.id} value={f.id}>{f.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                {/* Additional controls for active tab */}
+                {requestConfigTab === "headers" && (
+                  <button
+                    onClick={() => setReqHeaders([...reqHeaders, { key: "", value: "" }])}
+                    className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold bg-slate-900 border border-slate-800 hover:bg-slate-800 text-indigo-400 rounded-lg transition"
+                  >
+                    <Plus className="h-3 w-3" /> Add Header
+                  </button>
+                )}
+                {requestConfigTab === "chaining" && (
+                  <button
+                    onClick={() => setShowAiModal(true)}
+                    className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/20 rounded-lg transition disabled:opacity-50"
+                    disabled={!apiResponse}
+                  >
+                    AI Agent Parser
+                  </button>
+                )}
               </div>
 
-              {/* Right Body & Parser Script Panel */}
-              <div className="w-1/2 flex flex-col overflow-hidden">
-                {/* Body Tab */}
-                <div className="flex-grow flex flex-col overflow-hidden">
-                  <div className="px-4 py-2.5 border-b border-slate-850 bg-slate-900/5 flex items-center justify-between flex-shrink-0">
-                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Payload Body</span>
-                    <select
-                      value={reqBodyType}
-                      onChange={(e) => setReqBodyType(e.target.value)}
-                      className="bg-slate-900 border border-slate-800 text-[11px] rounded-lg px-2 py-1 text-slate-300 outline-none"
-                    >
-                      <option value="NONE">None</option>
-                      <option value="JSON">JSON</option>
-                      <option value="TEXT">Text</option>
-                    </select>
-                  </div>
-                  <div className="flex-grow relative bg-slate-950">
-                    {reqBodyType === "NONE" ? (
+              {/* Tab Content Window */}
+              <div className="h-[250px] flex-shrink-0 border-b border-slate-850 flex flex-col overflow-hidden bg-slate-950">
+                {requestConfigTab === "headers" && (
+                  <div className="flex-grow overflow-y-auto p-4 space-y-2">
+                    {reqHeaders.length === 0 ? (
                       <div className="flex h-full items-center justify-center text-slate-500 text-xs">
-                        No request body.
+                        No headers defined. Click "Add Header" above.
                       </div>
                     ) : (
-                      <Editor
-                        height="100%"
-                        language={reqBodyType.toLowerCase()}
-                        theme="vs-dark"
-                        value={reqBody}
-                        onChange={(val) => setReqBody(val || "")}
-                        options={{
-                          minimap: { enabled: false },
-                          fontSize: 12,
-                          lineNumbers: "on",
-                          scrollbar: { vertical: "hidden", horizontal: "hidden" }
-                        }}
-                      />
+                      reqHeaders.map((header, idx) => (
+                        <div key={idx} className="flex gap-2">
+                          <input
+                            type="text"
+                            placeholder="Header Key"
+                            value={header.key}
+                            onChange={(e) => {
+                              const newH = [...reqHeaders];
+                              newH[idx].key = e.target.value;
+                              setReqHeaders(newH);
+                            }}
+                            className="w-1/2 bg-slate-950 border border-slate-850 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none"
+                          />
+                          <input
+                            type="text"
+                            placeholder="Value"
+                            value={header.value}
+                            onChange={(e) => {
+                              const newH = [...reqHeaders];
+                              newH[idx].value = e.target.value;
+                              setReqHeaders(newH);
+                            }}
+                            className="w-1/2 bg-slate-950 border border-slate-850 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none"
+                          />
+                          <button
+                            onClick={() => setReqHeaders(reqHeaders.filter((_, i) => i !== idx))}
+                            className="p-2 text-slate-600 hover:text-red-400"
+                          >
+                            <Trash className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ))
                     )}
                   </div>
-                </div>
+                )}
 
-                {/* Response Parser Section */}
-                <div className="h-64 border-t border-slate-850 flex flex-col overflow-hidden bg-slate-950">
-                  <div className="px-4 py-2 border-b border-slate-850 bg-slate-900/10 flex items-center justify-between flex-shrink-0">
-                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Variables Chaining Parser</span>
-                    <button
-                      onClick={() => setShowAiModal(true)}
-                      className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/20 rounded-lg transition"
-                      disabled={!apiResponse}
-                    >
-                      AI Agent Parser
-                    </button>
+                {requestConfigTab === "auth" && (
+                  <div className="p-4 flex-grow flex flex-col bg-slate-950 justify-center">
+                    <div className="flex items-center gap-3 border-b border-slate-850 pb-3 mb-4 flex-shrink-0">
+                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Auth Type:</span>
+                      <select
+                        value={reqAuthType}
+                        onChange={(e) => setReqAuthType(e.target.value)}
+                        className="bg-slate-900 border border-slate-800 text-xs rounded-lg px-3 py-1.5 text-slate-300 outline-none"
+                      >
+                        <option value="NONE">No Auth</option>
+                        <option value="BEARER">Bearer Token</option>
+                        <option value="API_KEY">Header API Key</option>
+                        <option value="AUTH_HOOK">Dynamic Auth Hook</option>
+                      </select>
+                    </div>
+                    <div className="flex-grow flex items-center justify-center">
+                      {reqAuthType === "NONE" && <p className="text-[11px] text-slate-500">No authentication configured.</p>}
+                      {reqAuthType === "BEARER" && (
+                        <div className="w-full">
+                          <input
+                            type="text"
+                            placeholder="Token (or {{VARIABLE}})"
+                            value={reqAuthConfig.token || ""}
+                            onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, token: e.target.value })}
+                            className="w-full bg-slate-950 border border-slate-850 rounded-lg px-3 py-2 text-xs focus:outline-none"
+                          />
+                        </div>
+                      )}
+                      {reqAuthType === "API_KEY" && (
+                        <div className="w-full flex gap-3">
+                          <input
+                            type="text"
+                            placeholder="Header Key"
+                            value={reqAuthConfig.key || ""}
+                            onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, key: e.target.value })}
+                            className="w-1/2 bg-slate-950 border border-slate-850 rounded-lg px-3 py-2 text-xs focus:outline-none"
+                          />
+                          <input
+                            type="text"
+                            placeholder="Value"
+                            value={reqAuthConfig.value || ""}
+                            onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, value: e.target.value })}
+                            className="w-1/2 bg-slate-950 border border-slate-850 rounded-lg px-3 py-2 text-xs focus:outline-none"
+                          />
+                        </div>
+                      )}
+                      {reqAuthType === "AUTH_HOOK" && (
+                        <div className="w-full">
+                          <select
+                            value={reqAuthConfig.authFunctionId || ""}
+                            onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, authFunctionId: e.target.value })}
+                            className="w-full bg-slate-950 border border-slate-850 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none"
+                          >
+                            <option value="">Select Auth Hook script...</option>
+                            {authFunctions.map(f => (
+                              <option key={f.id} value={f.id}>{f.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex-grow relative">
+                )}
+
+                {requestConfigTab === "chaining" && (
+                  <div className="flex-grow relative bg-slate-950">
                     <Editor
                       height="100%"
                       language="javascript"
@@ -482,8 +473,46 @@ export default function ApiExplorerPage() {
                       }}
                     />
                   </div>
+                )}
+              </div>
+
+              {/* Request Payload Editor */}
+              <div className="flex-grow flex flex-col overflow-hidden bg-slate-950">
+                <div className="px-4 py-2 border-b border-slate-850 bg-slate-900/5 flex items-center justify-between flex-shrink-0">
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Payload Body</span>
+                  <select
+                    value={reqBodyType}
+                    onChange={(e) => setReqBodyType(e.target.value)}
+                    className="bg-slate-900 border border-slate-800 text-[11px] rounded-lg px-2 py-1 text-slate-300 outline-none"
+                  >
+                    <option value="NONE">None</option>
+                    <option value="JSON">JSON</option>
+                    <option value="TEXT">Text</option>
+                  </select>
+                </div>
+                <div className="flex-grow relative bg-slate-950">
+                  {reqBodyType === "NONE" ? (
+                    <div className="flex h-full items-center justify-center text-slate-500 text-xs">
+                      No request body. Change payload body type above to edit.
+                    </div>
+                  ) : (
+                    <Editor
+                      height="100%"
+                      language={reqBodyType.toLowerCase()}
+                      theme="vs-dark"
+                      value={reqBody}
+                      onChange={(val) => setReqBody(val || "")}
+                      options={{
+                        minimap: { enabled: false },
+                        fontSize: 12,
+                        lineNumbers: "on",
+                        scrollbar: { vertical: "auto", horizontal: "hidden" }
+                      }}
+                    />
+                  )}
                 </div>
               </div>
+
             </div>
 
             {/* Execution Response Pane */}
