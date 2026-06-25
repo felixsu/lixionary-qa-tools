@@ -3,7 +3,8 @@
 import React, { useState, useEffect } from "react";
 import { 
   Globe, RefreshCw, Terminal, Eye, EyeOff, 
-  AlertCircle, Copy, Download, Trash, Plus, ChevronRight, FileCode, Play
+  AlertCircle, Copy, Download, Trash, Plus, ChevronRight, FileCode, Play,
+  Save, File, Folder, PlayCircle, XCircle
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
@@ -52,6 +53,7 @@ export default function WebExplorerPage() {
     selectedProfileId,
     setSelectedProfileId,
     authFunctions,
+    token,
     apiCall,
     handleBrowserNavigate,
     handleToggleInspect,
@@ -62,6 +64,280 @@ export default function WebExplorerPage() {
     handleSaveProfile,
     handleDeleteProfile
   } = useAppContext();
+
+  // Workspace integration states
+  const [activeLeftTab, setActiveLeftTab] = useState<"browser" | "workspace">("browser");
+  const [workspaceFiles, setWorkspaceFiles] = useState<{name: string, size: number, updatedAt: string}[]>([]);
+  const [selectedWorkspaceFile, setSelectedWorkspaceFile] = useState<string>("");
+  const [workspaceFileContent, setWorkspaceFileContent] = useState<string>("");
+  const [isWorkspaceLoading, setIsWorkspaceLoading] = useState<boolean>(false);
+  const [workspaceLogs, setWorkspaceLogs] = useState<string>("");
+  const [isScriptRunning, setIsScriptRunning] = useState<boolean>(false);
+  const [newFileName, setNewFileName] = useState<string>("");
+  const [showNewFileModal, setShowNewFileModal] = useState<boolean>(false);
+
+  const fetchWorkspaceFiles = async () => {
+    try {
+      const data = await apiCall("/api/workspace/files");
+      setWorkspaceFiles(data);
+      if (data.length > 0 && !selectedWorkspaceFile) {
+        setSelectedWorkspaceFile(data[0].name);
+      }
+    } catch (e) {
+      console.error("Failed to fetch workspace files", e);
+    }
+  };
+
+  const fetchFileContent = async (filename: string) => {
+    if (!filename) return;
+    try {
+      setIsWorkspaceLoading(true);
+      const res = await apiCall(`/api/workspace/files/${filename}`);
+      setWorkspaceFileContent(res.content);
+    } catch (e) {
+      console.error("Failed to fetch file content", e);
+    } finally {
+      setIsWorkspaceLoading(false);
+    }
+  };
+
+  const handleSaveWorkspaceFile = async () => {
+    if (!selectedWorkspaceFile) return;
+    try {
+      await apiCall(`/api/workspace/files/${selectedWorkspaceFile}`, {
+        method: "POST",
+        body: JSON.stringify({ content: workspaceFileContent })
+      });
+      alert(`File ${selectedWorkspaceFile} saved successfully.`);
+      fetchWorkspaceFiles();
+    } catch (e: any) {
+      alert(`Failed to save file: ${e.message}`);
+    }
+  };
+
+  const handleCreateFile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newFileName) return;
+    let name = newFileName.trim();
+    if (!name.endsWith(".py")) {
+      name += ".py";
+    }
+    try {
+      await apiCall(`/api/workspace/files/${name}`, {
+        method: "POST",
+        body: JSON.stringify({ content: "# New workspace module\n" })
+      });
+      setShowNewFileModal(false);
+      setNewFileName("");
+      await fetchWorkspaceFiles();
+      setSelectedWorkspaceFile(name);
+    } catch (e: any) {
+      alert(`Failed to create file: ${e.message}`);
+    }
+  };
+
+  const handleDeleteFile = async (filename: string) => {
+    if (filename === "main.py") {
+      alert("main.py cannot be deleted.");
+      return;
+    }
+    if (!confirm(`Are you sure you want to delete ${filename}?`)) return;
+    try {
+      await apiCall(`/api/workspace/files/${filename}`, {
+        method: "DELETE"
+      });
+      if (selectedWorkspaceFile === filename) {
+        setSelectedWorkspaceFile("main.py");
+      }
+      await fetchWorkspaceFiles();
+    } catch (e: any) {
+      alert(`Failed to delete file: ${e.message}`);
+    }
+  };
+
+  const handleRunScript = async () => {
+    if (!selectedWorkspaceFile) return;
+    setIsScriptRunning(true);
+    setWorkspaceLogs("");
+    
+    try {
+      await apiCall(`/api/workspace/files/${selectedWorkspaceFile}`, {
+        method: "POST",
+        body: JSON.stringify({ content: workspaceFileContent })
+      });
+    } catch (e) {
+      console.warn("Failed to auto-save file before running", e);
+    }
+
+    try {
+      const response = await fetch(`http://localhost:8000/api/workspace/run`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ filename: selectedWorkspaceFile })
+      });
+
+      if (!response.body) {
+        throw new Error("No response body available");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        setWorkspaceLogs(prev => prev + chunk);
+      }
+    } catch (err: any) {
+      setWorkspaceLogs(prev => prev + `\nExecution Error: ${err.message}\n`);
+    } finally {
+      setIsScriptRunning(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchWorkspaceFiles();
+  }, []);
+
+  useEffect(() => {
+    if (selectedWorkspaceFile) {
+      fetchFileContent(selectedWorkspaceFile);
+    }
+  }, [selectedWorkspaceFile]);
+
+  const WorkspacePanel = () => {
+    return (
+      <div className="h-full w-full flex overflow-hidden bg-slate-950">
+        {/* Workspace sidebar list */}
+        <div className="w-56 flex-shrink-0 border-r border-slate-850 bg-slate-900/10 flex flex-col justify-between overflow-hidden">
+          <div className="flex-grow flex flex-col overflow-hidden">
+            <div className="p-3 border-b border-slate-850 flex items-center justify-between flex-shrink-0 bg-slate-900/30">
+              <span className="text-[10px] uppercase font-extrabold text-slate-400 tracking-wider flex items-center gap-1.5">
+                <Folder className="h-3.5 w-3.5 text-indigo-400" />
+                Files
+              </span>
+              <button
+                onClick={() => setShowNewFileModal(true)}
+                className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-indigo-400"
+                title="Create Python Module"
+              >
+                <Plus className="h-3 w-3" />
+              </button>
+            </div>
+            
+            <div className="flex-grow overflow-y-auto p-2 space-y-1">
+              {workspaceFiles.map(file => (
+                <div
+                  key={file.name}
+                  className={`group flex items-center justify-between px-2.5 py-2 rounded-xl text-xs transition border ${
+                    selectedWorkspaceFile === file.name
+                      ? "bg-indigo-600/10 border-indigo-500/30 text-indigo-400 font-bold"
+                      : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-900/40"
+                  }`}
+                >
+                  <button
+                    onClick={() => setSelectedWorkspaceFile(file.name)}
+                    className="flex items-center gap-2 text-left truncate flex-grow"
+                  >
+                    <File className={`h-3.5 w-3.5 ${selectedWorkspaceFile === file.name ? "text-indigo-400" : "text-slate-500"}`} />
+                    <span className="truncate">{file.name}</span>
+                  </button>
+                  {file.name !== "main.py" && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteFile(file.name);
+                      }}
+                      className="opacity-0 group-hover:opacity-100 hover:text-red-400 p-0.5 transition"
+                      title="Delete module"
+                    >
+                      <Trash className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Code Editor Pane */}
+        <div className="flex-grow flex flex-col overflow-hidden relative">
+          <div className="h-11 border-b border-slate-850 px-4 bg-slate-900/20 flex items-center justify-between flex-shrink-0">
+            <span className="text-xs font-semibold text-slate-300 font-mono flex items-center gap-1.5">
+              <FileCode className="h-4 w-4 text-slate-500" />
+              {selectedWorkspaceFile || "No active file"}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleSaveWorkspaceFile}
+                disabled={!selectedWorkspaceFile || isWorkspaceLoading}
+                className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 text-white disabled:opacity-50"
+              >
+                <Save className="h-3.5 w-3.5" />
+                Save
+              </button>
+              <button
+                onClick={handleRunScript}
+                disabled={!selectedWorkspaceFile || isScriptRunning}
+                className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 text-white ${
+                  isScriptRunning ? "bg-amber-600 hover:bg-amber-500" : "bg-indigo-600 hover:bg-indigo-500"
+                } disabled:opacity-50`}
+              >
+                <Play className="h-3.5 w-3.5" />
+                {isScriptRunning ? "Running..." : "Run Script"}
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-grow relative bg-slate-950 overflow-hidden">
+            {isWorkspaceLoading ? (
+              <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-500 bg-slate-950/80">
+                Loading module content...
+              </div>
+            ) : (
+              <Editor
+                key={selectedWorkspaceFile}
+                height="100%"
+                language="python"
+                theme="vs-dark"
+                value={workspaceFileContent}
+                onChange={(val) => setWorkspaceFileContent(val || "")}
+                options={{
+                  minimap: { enabled: false },
+                  fontSize: 11,
+                  lineNumbers: "on",
+                  scrollbar: { vertical: "auto", horizontal: "auto" }
+                }}
+              />
+            )}
+          </div>
+
+          {/* Console logs pane */}
+          <div className="h-48 border-t border-slate-850 flex flex-col flex-shrink-0 bg-slate-950">
+            <div className="h-9 px-4 border-b border-slate-850 flex items-center justify-between bg-slate-900/30 flex-shrink-0">
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1.5">
+                <Terminal className="h-3.5 w-3.5 text-slate-500" />
+                Execution Console logs
+              </span>
+              <button
+                onClick={() => setWorkspaceLogs("")}
+                className="text-[10px] text-slate-500 hover:text-slate-300"
+              >
+                Clear
+              </button>
+            </div>
+            <div className="flex-grow p-3 font-mono text-[10px] text-emerald-400 overflow-y-auto bg-slate-950 whitespace-pre-wrap select-text">
+              {workspaceLogs || "Console output is empty. Run main.py or other script to execute."}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   // Profile manager modal states
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -342,19 +618,73 @@ export default function WebExplorerPage() {
       {/* Main Workspace split panel */}
       {isBrowserConnected ? (
         <div className="flex-grow flex overflow-hidden">
-          {/* Left Panel: Embedded VNC Browser Frame */}
-          <div className="w-2/3 h-full bg-black flex flex-col relative">
-            {vncUrl ? (
-              <iframe
-                src={vncUrl}
-                className="w-full h-full border-none"
-                title="VNC Browser Frame"
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center text-slate-600 text-xs">
-                VNC Session initialized. Loading Canvas...
+          {/* Left Panel: Embedded VNC Browser Frame or Workspace Panel */}
+          <div className="w-2/3 h-full bg-slate-950 flex flex-col overflow-hidden border-r border-slate-900">
+            {/* Left Panel Tabs */}
+            <div className="h-10 bg-slate-900 border-b border-slate-800/80 px-4 flex items-center justify-between flex-shrink-0">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setActiveLeftTab("browser")}
+                  className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${
+                    activeLeftTab === "browser"
+                      ? "bg-indigo-600 text-white"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  Live Browser Screen
+                </button>
+                <button
+                  onClick={() => {
+                    setActiveLeftTab("workspace");
+                    fetchWorkspaceFiles();
+                  }}
+                  className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${
+                    activeLeftTab === "workspace"
+                      ? "bg-indigo-600 text-white"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  Project Workspace
+                </button>
               </div>
-            )}
+            </div>
+
+            <div className="flex-grow overflow-hidden relative bg-black flex">
+              {activeLeftTab === "browser" ? (
+                vncUrl ? (
+                  <iframe
+                    src={vncUrl}
+                    className="w-full h-full border-none"
+                    title="VNC Browser Frame"
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-slate-600 text-xs w-full">
+                    VNC Session initialized. Loading Canvas...
+                  </div>
+                )
+              ) : (
+                <div className="w-full h-full flex divide-x divide-slate-900">
+                  {/* Left Column: Workspace Panel */}
+                  <div className="w-1/2 h-full flex flex-col overflow-hidden">
+                    <WorkspacePanel />
+                  </div>
+                  {/* Right Column: VNC Browser Frame */}
+                  <div className="w-1/2 h-full bg-slate-950 flex flex-col overflow-hidden">
+                    {vncUrl ? (
+                      <iframe
+                        src={vncUrl}
+                        className="w-full h-full border-none"
+                        title="VNC Browser Frame"
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-slate-600 text-xs">
+                        VNC Session initialized. Loading Canvas...
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Right Panel: POM recorder, network logs and inspector */}
@@ -515,18 +845,45 @@ export default function WebExplorerPage() {
                       </button>
                     </div>
                     
-                    <button
-                      onClick={() => {
-                        const code = activeGenCodeTab === "pom" ? generatedPomCode : generatedClientCode;
-                        const filename = activeGenCodeTab === "pom" ? `${activePomClass}.py` : "http_client.py";
-                        if (code) downloadFile(code, filename);
-                      }}
-                      disabled={activeGenCodeTab === "pom" ? !generatedPomCode : !generatedClientCode}
-                      className="p-1 rounded bg-slate-800 border border-slate-700 hover:bg-slate-750 text-indigo-400 disabled:opacity-50"
-                      title="Download synthesized file"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={async () => {
+                          const code = activeGenCodeTab === "pom" ? generatedPomCode : generatedClientCode;
+                          const defaultFilename = activeGenCodeTab === "pom" ? `${activePomClass.toLowerCase()}_pom.py` : "http_client.py";
+                          const filename = prompt("Enter filename to save to workspace:", defaultFilename);
+                          if (!filename || !code) return;
+                          try {
+                            await apiCall(`/api/workspace/files/${filename}`, {
+                              method: "POST",
+                              body: JSON.stringify({ content: code })
+                            });
+                            alert(`File ${filename} saved to workspace successfully!`);
+                            fetchWorkspaceFiles();
+                          } catch (err: any) {
+                            alert(`Failed to save to workspace: ${err.message}`);
+                          }
+                        }}
+                        disabled={activeGenCodeTab === "pom" ? !generatedPomCode : !generatedClientCode}
+                        className="px-2 py-1 rounded bg-slate-800 border border-slate-700 hover:bg-slate-750 text-emerald-400 disabled:opacity-50 flex items-center gap-1 text-[9px] font-bold"
+                        title="Save to backend virtual workspace"
+                      >
+                        <Save className="h-3 w-3" />
+                        <span>Save to Workspace</span>
+                      </button>
+                      
+                      <button
+                        onClick={() => {
+                          const code = activeGenCodeTab === "pom" ? generatedPomCode : generatedClientCode;
+                          const filename = activeGenCodeTab === "pom" ? `${activePomClass}.py` : "http_client.py";
+                          if (code) downloadFile(code, filename);
+                        }}
+                        disabled={activeGenCodeTab === "pom" ? !generatedPomCode : !generatedClientCode}
+                        className="p-1 rounded bg-slate-800 border border-slate-700 hover:bg-slate-750 text-indigo-400 disabled:opacity-50"
+                        title="Download synthesized file"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </div>
 
                   <div className="flex-grow relative bg-slate-950 rounded-lg overflow-hidden border border-slate-900">
@@ -981,6 +1338,43 @@ export default function WebExplorerPage() {
               </form>
             </div>
           </div>
+        </div>
+      )}
+      {/* NEW FILE CREATION MODAL */}
+      {showNewFileModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <form onSubmit={handleCreateFile} className="w-full max-w-sm bg-slate-900 border border-slate-850 rounded-2xl p-6 space-y-4 shadow-2xl">
+            <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">
+              Create Python Module
+            </h3>
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-slate-400">Filename</label>
+              <input
+                type="text"
+                placeholder="e.g. login_pom.py"
+                value={newFileName}
+                onChange={(e) => setNewFileName(e.target.value)}
+                className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500"
+                required
+                autoFocus
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => { setShowNewFileModal(false); setNewFileName(""); }}
+                className="px-3.5 py-1.5 rounded-lg border border-slate-800 text-xs font-semibold text-slate-400 hover:bg-slate-800 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition font-bold"
+              >
+                Create
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

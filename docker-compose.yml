@@ -50,6 +50,7 @@ services:
       - DEV_MODE=${DEV_MODE:-true}
     volumes:
       - ./backend:/app
+      - ./workspaces:/workspaces
     depends_on:
       - mongodb
       - redis
