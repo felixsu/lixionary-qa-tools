@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   Globe, RefreshCw, Terminal, Eye, EyeOff, 
   AlertCircle, Copy, Download, Trash, Plus, ChevronRight, FileCode, Play,
-  Save, File, Folder, PlayCircle, XCircle
+  Save, File, Folder, PlayCircle, XCircle, Columns
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
@@ -68,6 +68,56 @@ export default function WebExplorerPage() {
   // Workspace integration states
   const [activeLeftTab, setActiveLeftTab] = useState<"browser" | "workspace">("browser");
   const [workspaceFiles, setWorkspaceFiles] = useState<{name: string, size: number, updatedAt: string}[]>([]);
+
+  // Layout and Resizable Pane states
+  const [viewMode, setViewMode] = useState<"browser" | "split" | "workspace">("split");
+  const [explorerWidth, setExplorerWidth] = useState<number>(220);
+  const [workspaceSplitPercent, setWorkspaceSplitPercent] = useState<number>(50);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleSplitDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startPercent = workspaceSplitPercent;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const deltaX = moveEvent.clientX - startX;
+      const deltaPercent = (deltaX / rect.width) * 100;
+      const newPercent = Math.min(Math.max(startPercent + deltaPercent, 20), 80);
+      setWorkspaceSplitPercent(newPercent);
+    };
+
+    const handleMouseUp = () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+  };
+
+  const handleSidebarDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = explorerWidth;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const deltaX = moveEvent.clientX - startX;
+      const newWidth = Math.min(Math.max(startWidth + deltaX, 140), 400);
+      setExplorerWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+  };
   const [selectedWorkspaceFile, setSelectedWorkspaceFile] = useState<string>("");
   const [workspaceFileContent, setWorkspaceFileContent] = useState<string>("");
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState<boolean>(false);
@@ -213,7 +263,10 @@ export default function WebExplorerPage() {
     return (
       <div className="h-full w-full flex overflow-hidden bg-slate-950">
         {/* Workspace sidebar list */}
-        <div className="w-56 flex-shrink-0 border-r border-slate-850 bg-slate-900/10 flex flex-col justify-between overflow-hidden">
+        <div 
+          style={{ width: `${explorerWidth}px` }} 
+          className="flex-shrink-0 bg-slate-900/10 flex flex-col justify-between overflow-hidden"
+        >
           <div className="flex-grow flex flex-col overflow-hidden">
             <div className="p-3 border-b border-slate-850 flex items-center justify-between flex-shrink-0 bg-slate-900/30">
               <span className="text-[10px] uppercase font-extrabold text-slate-400 tracking-wider flex items-center gap-1.5">
@@ -264,6 +317,12 @@ export default function WebExplorerPage() {
           </div>
         </div>
 
+        {/* Draggable Divider for Sidebar */}
+        <div
+          onMouseDown={handleSidebarDragStart}
+          className="w-1.5 hover:w-2 bg-slate-900/60 hover:bg-indigo-500/50 cursor-col-resize transition-all flex-shrink-0 self-stretch z-10 select-none flex items-center justify-center border-l border-r border-slate-850"
+        />
+
         {/* Code Editor Pane */}
         <div className="flex-grow flex flex-col overflow-hidden relative">
           <div className="h-11 border-b border-slate-850 px-4 bg-slate-900/20 flex items-center justify-between flex-shrink-0">
@@ -310,7 +369,8 @@ export default function WebExplorerPage() {
                   minimap: { enabled: false },
                   fontSize: 11,
                   lineNumbers: "on",
-                  scrollbar: { vertical: "auto", horizontal: "auto" }
+                  scrollbar: { vertical: "auto", horizontal: "auto" },
+                  automaticLayout: true
                 }}
               />
             )}
@@ -620,37 +680,58 @@ export default function WebExplorerPage() {
         <div className="flex-grow flex overflow-hidden">
           {/* Left Panel: Embedded VNC Browser Frame or Workspace Panel */}
           <div className="w-2/3 h-full bg-slate-950 flex flex-col overflow-hidden border-r border-slate-900">
-            {/* Left Panel Tabs */}
+            {/* Left Panel View Mode Toggle Buttons */}
             <div className="h-10 bg-slate-900 border-b border-slate-800/80 px-4 flex items-center justify-between flex-shrink-0">
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setActiveLeftTab("browser")}
-                  className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${
-                    activeLeftTab === "browser"
-                      ? "bg-indigo-600 text-white"
-                      : "text-slate-400 hover:text-slate-200"
-                  }`}
-                >
-                  Live Browser Screen
-                </button>
-                <button
-                  onClick={() => {
-                    setActiveLeftTab("workspace");
-                    fetchWorkspaceFiles();
-                  }}
-                  className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${
-                    activeLeftTab === "workspace"
-                      ? "bg-indigo-600 text-white"
-                      : "text-slate-400 hover:text-slate-200"
-                  }`}
-                >
-                  Project Workspace
-                </button>
+              <div className="flex items-center gap-3">
+                <span className="text-[10px] uppercase font-extrabold text-slate-500 tracking-wider">
+                  View Mode
+                </span>
+                <div className="flex bg-slate-950 border border-slate-850 rounded-lg p-0.5 overflow-hidden">
+                  <button
+                    onClick={() => setViewMode("browser")}
+                    className={`px-3 py-1 text-[10px] font-bold uppercase transition rounded-md flex items-center gap-1.5 ${
+                      viewMode === "browser"
+                        ? "bg-indigo-600 text-white"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    <Eye className="h-3 w-3" />
+                    Browser
+                  </button>
+                  <button
+                    onClick={() => {
+                      setViewMode("split");
+                      fetchWorkspaceFiles();
+                    }}
+                    className={`px-3 py-1 text-[10px] font-bold uppercase transition rounded-md flex items-center gap-1.5 ${
+                      viewMode === "split"
+                        ? "bg-indigo-600 text-white"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    <Columns className="h-3 w-3" />
+                    Split View
+                  </button>
+                  <button
+                    onClick={() => {
+                      setViewMode("workspace");
+                      fetchWorkspaceFiles();
+                    }}
+                    className={`px-3 py-1 text-[10px] font-bold uppercase transition rounded-md flex items-center gap-1.5 ${
+                      viewMode === "workspace"
+                        ? "bg-indigo-600 text-white"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    <FileCode className="h-3 w-3" />
+                    Workspace
+                  </button>
+                </div>
               </div>
             </div>
 
-            <div className="flex-grow overflow-hidden relative bg-black flex">
-              {activeLeftTab === "browser" ? (
+            <div ref={containerRef} className="flex-grow overflow-hidden relative bg-black flex">
+              {viewMode === "browser" && (
                 vncUrl ? (
                   <iframe
                     src={vncUrl}
@@ -662,14 +743,29 @@ export default function WebExplorerPage() {
                     VNC Session initialized. Loading Canvas...
                   </div>
                 )
-              ) : (
-                <div className="w-full h-full flex divide-x divide-slate-900">
+              )}
+
+              {viewMode === "workspace" && (
+                <div className="w-full h-full flex flex-col overflow-hidden">
+                  {renderWorkspacePanel()}
+                </div>
+              )}
+
+              {viewMode === "split" && (
+                <div className="w-full h-full flex overflow-hidden">
                   {/* Left Column: Workspace Panel */}
-                  <div className="w-1/2 h-full flex flex-col overflow-hidden">
+                  <div style={{ width: `${workspaceSplitPercent}%` }} className="h-full flex flex-col overflow-hidden flex-shrink-0">
                     {renderWorkspacePanel()}
                   </div>
+                  
+                  {/* Main Draggable Divider Splitter */}
+                  <div
+                    onMouseDown={handleSplitDragStart}
+                    className="w-1.5 hover:w-2 bg-slate-900/60 hover:bg-indigo-500/50 cursor-col-resize transition-all flex-shrink-0 self-stretch z-10 select-none flex items-center justify-center border-l border-r border-slate-850"
+                  />
+
                   {/* Right Column: VNC Browser Frame */}
-                  <div className="w-1/2 h-full bg-slate-950 flex flex-col overflow-hidden">
+                  <div style={{ width: `${100 - workspaceSplitPercent}%` }} className="h-full bg-slate-950 flex flex-col overflow-hidden flex-shrink-0">
                     {vncUrl ? (
                       <iframe
                         src={vncUrl}
@@ -896,7 +992,8 @@ export default function WebExplorerPage() {
                         readOnly: true,
                         minimap: { enabled: false },
                         fontSize: 10,
-                        scrollbar: { vertical: "auto", horizontal: "auto" }
+                        scrollbar: { vertical: "auto", horizontal: "auto" },
+                        automaticLayout: true
                       }}
                     />
                   </div>
