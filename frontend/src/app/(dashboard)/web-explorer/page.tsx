@@ -850,9 +850,14 @@ export default function WebExplorerPage() {
                           }}
                           className="w-full bg-slate-950 border border-slate-850 rounded px-2 py-1 text-xs outline-none"
                         >
-                          {selectedElementLocators.map((loc, idx) => (
-                            <option key={idx} value={idx}>{loc.strategy} (Score: {loc.score})</option>
-                          ))}
+                          {selectedElementLocators.map((loc, idx) => {
+                            const uniqueness = loc.unique === true ? " ✅ (Unique)" : loc.unique === false ? ` ⚠️ (Matches: ${loc.count})` : "";
+                            return (
+                              <option key={idx} value={idx}>
+                                {loc.strategy}: {loc.statement}{uniqueness}
+                              </option>
+                            );
+                          })}
                         </select>
                       </div>
                     </div>

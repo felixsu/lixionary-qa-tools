@@ -129,12 +129,30 @@ class BrowserSessionManager:
                 
                 ranked_locators = rank_locators(el_info)
                 
+                # Verify uniqueness on the active browser frame
+                validated_locators = []
+                for loc in ranked_locators:
+                    count = await cls._count_locator_matches(
+                        source["frame"],
+                        loc["strategy"],
+                        loc["selector"]
+                    )
+                    loc["count"] = count
+                    loc["unique"] = (count == 1)
+                    if count > 1:
+                        # Heavily penalize non-unique locators to push them to the bottom
+                        loc["score"] -= 1000
+                    validated_locators.append(loc)
+                
+                # Re-sort after adjusting scores
+                validated_locators.sort(key=lambda x: x["score"], reverse=True)
+                
                 if session.get("callback"):
                     await session["callback"]({
                         "type": "element_selected",
                         "data": {
                             "element": el_info,
-                            "locators": ranked_locators
+                            "locators": validated_locators
                         }
                     })
             except Exception as e:
@@ -188,6 +206,38 @@ class BrowserSessionManager:
             except Exception as e:
                 print(f"Error closing session: {e}")
             del cls._sessions[session_id]
+
+    @classmethod
+    async def _count_locator_matches(cls, frame, strategy: str, selector: str) -> int:
+        try:
+            if strategy == "get_by_test_id":
+                loc = frame.get_by_test_id(selector)
+            elif strategy == "get_by_label":
+                loc = frame.get_by_label(selector)
+            elif strategy == "get_by_role":
+                import re
+                match = re.match(r'^([^\[]+)\[name="(.+)"\]$', selector)
+                if match:
+                    role = match.group(1)
+                    name = match.group(2)
+                    loc = frame.get_by_role(role, name=name)
+                else:
+                    loc = frame.locator(selector)
+            elif strategy == "get_by_text":
+                loc = frame.get_by_text(selector)
+            elif strategy == "locator (CSS)":
+                loc = frame.locator(selector)
+            elif strategy == "locator (XPath)":
+                loc = frame.locator(selector)
+            elif strategy == "locator (Anchored XPath)":
+                loc = frame.locator(f"xpath={selector}")
+            else:
+                loc = frame.locator(selector)
+            
+            return await loc.count()
+        except Exception as e:
+            print(f"Error counting matches for strategy {strategy}, selector {selector}: {e}")
+            return 0
 
     @classmethod
     async def _setup_listeners(cls, session_id: str, page: Page):
