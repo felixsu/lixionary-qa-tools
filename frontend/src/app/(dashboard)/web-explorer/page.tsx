@@ -54,6 +54,7 @@ export default function WebExplorerPage() {
     apiCall,
     handleBrowserNavigate,
     handleToggleInspect,
+    handlePasteText,
     handleStartBrowser,
     handleDisconnectBrowser,
     handleLogClick,
@@ -505,6 +506,50 @@ export default function WebExplorerPage() {
                         scrollbar: { vertical: "auto", horizontal: "auto" }
                       }}
                     />
+                  </div>
+                </div>
+
+                {/* Accordion Item: Quick Paste Tool */}
+                <div className="rounded-xl border border-slate-850 bg-slate-900/10 p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Quick Paste Tool</span>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Paste value to send to remote browser..."
+                        id="lixionary-quick-paste-input"
+                        className="w-full bg-slate-950 border border-slate-850 rounded px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500/50"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            const input = e.currentTarget;
+                            const text = input.value;
+                            if (text) {
+                              handlePasteText(text);
+                              input.value = "";
+                            }
+                          }
+                        }}
+                      />
+                      <button
+                        onClick={() => {
+                          const input = document.getElementById('lixionary-quick-paste-input') as HTMLInputElement;
+                          const text = input?.value;
+                          if (text) {
+                            handlePasteText(text);
+                            input.value = "";
+                          }
+                        }}
+                        className="px-3 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-bold text-white transition"
+                      >
+                        Send
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-slate-500 leading-relaxed">
+                      Type/paste text above and click <strong>Send</strong> (or press Enter) to type it into the currently active element in the remote browser. You can also focus the browser canvas and press <strong>Ctrl+V / Cmd+V</strong> to paste directly.
+                    </p>
                   </div>
                 </div>
 

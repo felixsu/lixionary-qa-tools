@@ -202,6 +202,7 @@ interface AppContextType {
   apiCall: (path: string, options?: RequestInit) => Promise<any>;
   handleBrowserNavigate: () => void;
   handleToggleInspect: () => void;
+  handlePasteText: (text: string) => void;
   connectBrowserSession: (sessId: string, profileId?: string) => void;
   handleStartBrowser: (profileId?: string) => void;
   handleDisconnectBrowser: () => void;
@@ -301,6 +302,32 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     setIsLoadingAuth(false);
   }, []);
+
+  // Synchronize global paste event to VNC remote browser
+  useEffect(() => {
+    if (!isBrowserConnected) return;
+
+    const handleGlobalPaste = (e: ClipboardEvent) => {
+      const activeEl = document.activeElement;
+      // Do not intercept if focused on a standard input or textbox in the frontend UI
+      const isInput = activeEl && (
+        activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'TEXTAREA' ||
+        (activeEl as HTMLElement).isContentEditable
+      );
+      if (isInput) return;
+
+      const text = e.clipboardData?.getData("text");
+      if (text) {
+        handlePasteText(text);
+      }
+    };
+
+    document.addEventListener("paste", handleGlobalPaste);
+    return () => {
+      document.removeEventListener("paste", handleGlobalPaste);
+    };
+  }, [isBrowserConnected]);
 
   // Fetch data when authenticated
   useEffect(() => {
@@ -546,6 +573,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       wsRef.current.send(JSON.stringify({
         action: "toggle-inspect",
         enabled: nextMode
+      }));
+    }
+  };
+
+  const handlePasteText = (text: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        action: "paste",
+        text: text
       }));
     }
   };
@@ -941,6 +977,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         apiCall,
         handleBrowserNavigate,
         handleToggleInspect,
+        handlePasteText,
         connectBrowserSession,
         handleStartBrowser,
         handleDisconnectBrowser,

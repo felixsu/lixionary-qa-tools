@@ -363,10 +363,74 @@ class BrowserSessionManager:
             // Expose control API
             window.__setLixionaryInspectMode = function(enabled) {
                 inspectMode = enabled;
-                if (!inspectMode && hoverOverlay) {
+                
+                // Clean up any existing overlay
+                const existing = document.getElementById('lixionary-inspect-overlay');
+                if (existing) {
+                    existing.remove();
+                }
+                
+                if (hoverOverlay) {
                     hoverOverlay.style.display = 'none';
                 }
+
+                if (inspectMode) {
+                    createInspectOverlay();
+                }
             };
+
+            function createInspectOverlay() {
+                let overlay = document.getElementById('lixionary-inspect-overlay');
+                if (overlay) return;
+                
+                overlay = document.createElement('div');
+                overlay.id = 'lixionary-inspect-overlay';
+                overlay.style.position = 'fixed';
+                overlay.style.top = '0';
+                overlay.style.left = '0';
+                overlay.style.width = '100%';
+                overlay.style.height = '100%';
+                overlay.style.zIndex = '999998';
+                overlay.style.backgroundColor = 'rgba(255, 255, 255, 0)'; // fully transparent
+                overlay.style.cursor = 'crosshair';
+                overlay.style.pointerEvents = 'auto';
+
+                overlay.addEventListener('mousemove', function(e) {
+                    overlay.style.pointerEvents = 'none';
+                    const el = document.elementFromPoint(e.clientX, e.clientY);
+                    overlay.style.pointerEvents = 'auto';
+
+                    if (el && el.id !== 'lixionary-hover-overlay' && el.tagName.toLowerCase() !== 'html' && el.tagName.toLowerCase() !== 'body') {
+                        createHoverOverlay();
+                        const rect = el.getBoundingClientRect();
+                        hoverOverlay.style.top = (rect.top + window.scrollY) + 'px';
+                        hoverOverlay.style.left = (rect.left + window.scrollX) + 'px';
+                        hoverOverlay.style.width = rect.width + 'px';
+                        hoverOverlay.style.height = rect.height + 'px';
+                        hoverOverlay.style.display = 'block';
+                    } else if (hoverOverlay) {
+                        hoverOverlay.style.display = 'none';
+                    }
+                });
+
+                overlay.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+
+                    overlay.style.pointerEvents = 'none';
+                    const el = document.elementFromPoint(e.clientX, e.clientY);
+                    overlay.style.pointerEvents = 'auto';
+
+                    if (el && el.tagName.toLowerCase() !== 'html' && el.tagName.toLowerCase() !== 'body') {
+                        const metadata = getElementMetadata(el);
+                        if (window.pythonOnElementSelected) {
+                            window.pythonOnElementSelected(JSON.stringify(metadata));
+                        }
+                    }
+                }, true);
+
+                document.body.appendChild(overlay);
+            }
 
             // Helper to find preceding sibling with text label
             function findPrecedingTextSibling(element) {
@@ -539,52 +603,6 @@ class BrowserSessionManager:
                     }
                 };
             }
-
-            // Universal event block handler
-            function blockEvent(e) {
-                if (!inspectMode) return;
-                const el = e.target;
-                if (el.id === 'lixionary-hover-overlay') return;
-                e.preventDefault();
-                e.stopPropagation();
-            }
-
-            document.addEventListener('mouseover', function(e) {
-                if (!inspectMode) return;
-                createHoverOverlay();
-                
-                const el = e.target;
-                if (el.id === 'lixionary-hover-overlay') return;
-
-                const rect = el.getBoundingClientRect();
-                hoverOverlay.style.top = (rect.top + window.scrollY) + 'px';
-                hoverOverlay.style.left = (rect.left + window.scrollX) + 'px';
-                hoverOverlay.style.width = rect.width + 'px';
-                hoverOverlay.style.height = rect.height + 'px';
-                hoverOverlay.style.display = 'block';
-            }, true);
-
-            document.addEventListener('click', function(e) {
-                if (!inspectMode) return;
-                
-                const el = e.target;
-                if (el.id === 'lixionary-hover-overlay') return;
-
-                e.preventDefault();
-                e.stopPropagation();
-
-                // Build metadata and send to python backend
-                const metadata = getElementMetadata(el);
-                if (window.pythonOnElementSelected) {
-                    window.pythonOnElementSelected(JSON.stringify(metadata));
-                }
-            }, true);
-
-            // Block other pointer/mouse events to prevent dropdowns from opening/reacting
-            document.addEventListener('mousedown', blockEvent, true);
-            document.addEventListener('mouseup', blockEvent, true);
-            document.addEventListener('pointerdown', blockEvent, true);
-            document.addEventListener('pointerup', blockEvent, true);
         })();
         """
 
@@ -612,8 +630,8 @@ class BrowserSessionManager:
                 for frame in session["page"].frames:
                     try:
                         await frame.evaluate(eval_script)
-                    except Exception:
-                        pass
+                    except Exception as fe:
+                        print(f"Warning: Failed to evaluate inspect mode on frame {frame.url}: {fe}")
             except Exception as e:
                 print(f"Error setting inspect mode: {e}")
 

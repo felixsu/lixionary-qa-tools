@@ -219,6 +219,12 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
                 if selector:
                     await page.fill(selector, value)
 
+            elif action == "paste":
+                text = cmd.get("text", "")
+                if text:
+                    print(f"WebSocket inserting clipboard text (length: {len(text)})")
+                    await page.keyboard.insert_text(text)
+
     except WebSocketDisconnect:
         print(f"WebSocket disconnected for session: {session_id}")
         await BrowserSessionManager.close_session(session_id)
