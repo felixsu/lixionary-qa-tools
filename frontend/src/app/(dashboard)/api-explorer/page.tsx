@@ -1,34 +1,42 @@
 "use client";
 
 import React, { useState } from "react";
-import { 
-  Play, Send, Plus, Trash, Share2, 
-  Lock, Unlock, RefreshCw, AlertCircle, Copy, Check
+import {
+  Send, Plus, Trash2, Share2, ChevronDown, ChevronRight,
+  Sparkles, Code2, Copy, Check, X, CheckCircle2,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
 
+type ConfigTab = "headers" | "auth" | "variables" | "body";
+
+const methodStyle = (m: string): React.CSSProperties => {
+  const map: Record<string, { bg: string; c: string }> = {
+    GET: { bg: "#e3f5e9", c: "#276749" },
+    POST: { bg: "#e3ecff", c: "#1a4db5" },
+    PUT: { bg: "#fff3e0", c: "#9a5c00" },
+    DELETE: { bg: "#fde8e8", c: "#c64545" },
+    PATCH: { bg: "#f3e8ff", c: "#6d28d9" },
+  };
+  const s = map[m] || { bg: "#f0f0ee", c: "#6c6a64" };
+  return { background: s.bg, color: s.c };
+};
+
 export default function ApiExplorerPage() {
   const {
-    environments,
-    selectedEnvId,
     authFunctions,
     collections,
     selectedCollectionId,
     setSelectedCollectionId,
     selectedRequestId,
     setSelectedRequestId,
-    
-    reqName,
-    setReqName,
+
     reqMethod,
     setReqMethod,
     reqUrl,
     setReqUrl,
     reqHeaders,
     setReqHeaders,
-    reqQueryParams,
-    setReqQueryParams,
     reqBodyType,
     setReqBodyType,
     reqBody,
@@ -52,30 +60,42 @@ export default function ApiExplorerPage() {
     setIsGeneratingAiParser,
 
     apiCall,
-    fetchEnvironments,
     handleExecuteRequest,
     handleSaveRequest,
     handleCreateRequest,
     handleCreateCollection,
     handleImportCollection,
-    handleAddCollaborator
+    handleAddCollaborator,
   } = useAppContext();
 
-  // Local component states
   const [importId, setImportId] = useState("");
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareEmail, setShareEmail] = useState("");
-  const [copiedRequestId, setCopiedRequestId] = useState<string | null>(null);
-  const [requestConfigTab, setRequestConfigTab] = useState<"headers" | "auth" | "chaining">("headers");
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [configTab, setConfigTab] = useState<ConfigTab>("headers");
 
-  // Custom Modal States (XSS & Prompt Prevention)
   const [showNewCollectionModal, setShowNewCollectionModal] = useState(false);
   const [newColName, setNewColName] = useState("");
   const [showNewReqModal, setShowNewReqModal] = useState(false);
   const [newReqName, setNewReqName] = useState("");
+  const [toast, setToast] = useState<string | null>(null);
 
-  const activeCollection = collections.find(c => c.id === selectedCollectionId);
-  const activeRequest = activeCollection?.requests.find(r => r.id === selectedRequestId);
+  const activeCollection = collections.find((c) => c.id === selectedCollectionId);
+  const activeRequest = activeCollection?.requests.find((r) => r.id === selectedRequestId);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2600);
+  };
+
+  const onSave = async () => {
+    try {
+      await handleSaveRequest();
+      showToast("Request saved");
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
 
   const onCreateCollectionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -84,6 +104,7 @@ export default function ApiExplorerPage() {
       await handleCreateCollection(newColName);
       setNewColName("");
       setShowNewCollectionModal(false);
+      showToast("Collection created");
     } catch (err: any) {
       alert(err.message);
     }
@@ -106,7 +127,7 @@ export default function ApiExplorerPage() {
     try {
       await handleImportCollection(importId);
       setImportId("");
-      alert("Collection imported successfully!");
+      showToast("Collection imported");
     } catch (err: any) {
       alert(err.message);
     }
@@ -119,7 +140,7 @@ export default function ApiExplorerPage() {
       await handleAddCollaborator(shareEmail);
       setShareEmail("");
       setShowShareModal(false);
-      alert(`Shared successfully with ${shareEmail}`);
+      showToast(`Shared with ${shareEmail}`);
     } catch (err: any) {
       alert(err.message);
     }
@@ -127,614 +148,718 @@ export default function ApiExplorerPage() {
 
   const handleCopyId = (id: string) => {
     navigator.clipboard.writeText(id);
-    setCopiedRequestId(id);
-    setTimeout(() => setCopiedRequestId(null), 2000);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
   };
 
   const generateAiParserScript = async () => {
     if (!aiPrompt) return;
     setIsGeneratingAiParser(true);
     try {
-      const payload = {
-        prompt: aiPrompt,
-        responseSample: apiResponse ? JSON.stringify(apiResponse.body, null, 2) : ""
-      };
       const result = await apiCall("/api/ai/generate-parser", {
         method: "POST",
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          responseSample: apiResponse ? JSON.stringify(apiResponse.body, null, 2) : "",
+        }),
       });
       if (result.code) {
         setReqParserScript(result.code);
         setShowAiModal(false);
         setAiPrompt("");
+        showToast("Parser script generated");
       }
     } catch (e: any) {
-      alert(`AI Code Generation Failed: ${e.message}`);
+      alert(`AI code generation failed: ${e.message}`);
     } finally {
       setIsGeneratingAiParser(false);
     }
   };
 
+  const configTabs: { id: ConfigTab; label: string }[] = [
+    { id: "headers", label: "Headers" },
+    { id: "auth", label: "Auth" },
+    { id: "variables", label: "Variables" },
+    { id: "body", label: "Body" },
+  ];
+
+  const responseTabs: ("pretty" | "headers" | "raw" | "extracted")[] = [
+    "pretty", "headers", "raw", "extracted",
+  ];
+
+  const inputCls =
+    "h-[30px] bg-cream border border-line rounded-md px-2.5 font-mono text-xs text-graphite outline-none focus:border-clay";
+
   return (
     <div className="h-full flex overflow-hidden">
-      
-      {/* Collection Left Sidebar */}
-      <div className="w-72 border-r border-slate-850 bg-slate-900/10 flex-shrink-0 flex flex-col justify-between">
-        <div className="flex flex-col flex-grow overflow-hidden">
-          <div className="p-4 border-b border-slate-850 flex items-center justify-between flex-shrink-0">
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Collections</span>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setShowNewCollectionModal(true)}
-                className="p-1 rounded bg-slate-800 border border-slate-700 hover:bg-slate-750 text-indigo-400"
-                title="New Collection"
-              >
-                <Plus className="h-4 w-4" />
-              </button>
-              <button
-                onClick={() => setShowShareModal(true)}
-                className="p-1 rounded bg-slate-800 border border-slate-700 hover:bg-slate-750 text-indigo-400"
-                title="Share / Import Collections"
-                disabled={!selectedCollectionId}
-              >
-                <Share2 className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
 
-          {/* Import / Share bar */}
-          <form onSubmit={onImportSubmit} className="p-3 border-b border-slate-850 flex gap-2 flex-shrink-0">
-            <input
-              type="text"
-              placeholder="Import by Collection ID..."
-              value={importId}
-              onChange={(e) => setImportId(e.target.value)}
-              className="flex-grow bg-slate-950 border border-slate-850 rounded px-2.5 py-1 text-xs focus:outline-none focus:border-indigo-500/50"
-            />
+      {/* Collections sidebar */}
+      <div className="w-[272px] flex-shrink-0 bg-panel border-r border-line flex flex-col overflow-hidden">
+        <div className="px-4 py-3.5 border-b border-line flex items-center justify-between flex-shrink-0">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-stone">Collections</span>
+          <div className="flex gap-1">
             <button
-              type="submit"
-              className="px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition"
+              onClick={() => setShowNewCollectionModal(true)}
+              title="New collection"
+              className="h-7 w-7 rounded-md border border-line bg-cream flex items-center justify-center hover:bg-hover transition-colors"
             >
-              Import
+              <Plus className="h-3.5 w-3.5 text-graphite" />
             </button>
-          </form>
+            <button
+              onClick={() => setShowShareModal(true)}
+              disabled={!selectedCollectionId}
+              title="Share collection"
+              className="h-7 w-7 rounded-md border border-line bg-cream flex items-center justify-center hover:bg-hover transition-colors disabled:opacity-40"
+            >
+              <Share2 className="h-3.5 w-3.5 text-graphite" />
+            </button>
+          </div>
+        </div>
 
-          {/* Collections List */}
-          <div className="flex-grow overflow-y-auto p-3 space-y-3">
-            {collections.map(col => (
-              <div key={col.id} className={`rounded-xl border transition-all ${col.id === selectedCollectionId ? "border-indigo-500/40 bg-indigo-500/5" : "border-slate-850 bg-slate-900/10"}`}>
-                <div 
+        {/* Import bar */}
+        <form onSubmit={onImportSubmit} className="px-3 py-2.5 border-b border-line flex gap-1.5 flex-shrink-0">
+          <input
+            type="text"
+            placeholder="Import by collection ID…"
+            value={importId}
+            onChange={(e) => setImportId(e.target.value)}
+            className="flex-1 h-[30px] bg-cream border border-line rounded-md px-2.5 text-xs text-graphite outline-none focus:border-clay"
+          />
+          <button
+            type="submit"
+            className="h-[30px] px-2.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-hover transition-colors"
+          >
+            Import
+          </button>
+        </form>
+
+        {/* Collections list */}
+        <div className="flex-1 overflow-y-auto p-2">
+          {collections.map((col) => {
+            const isExpanded = col.id === selectedCollectionId;
+            return (
+              <div key={col.id} className="mb-1">
+                <div
                   onClick={() => {
                     setSelectedCollectionId(col.id);
-                    if (col.requests.length) {
-                      setSelectedRequestId(col.requests[0].id);
-                    } else {
-                      setSelectedRequestId("");
-                    }
+                    setSelectedRequestId(col.requests.length ? col.requests[0].id : "");
                   }}
-                  className="p-3 flex items-center justify-between cursor-pointer hover:bg-slate-800/20 rounded-t-xl"
+                  className="group flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer hover:bg-hover transition-colors"
+                  style={{ background: isExpanded ? "var(--color-hover)" : "transparent" }}
                 >
-                  <div>
-                    <h3 className="text-xs font-bold text-slate-200">{col.name}</h3>
-                    <p className="text-[10px] text-slate-500 truncate w-48 mt-0.5">ID: {col.id}</p>
-                  </div>
-                  <button 
+                  {isExpanded ? (
+                    <ChevronDown className="h-3 w-3 text-stone flex-shrink-0" />
+                  ) : (
+                    <ChevronRight className="h-3 w-3 text-stone flex-shrink-0" />
+                  )}
+                  <span className="flex-1 text-[13px] font-medium text-ink truncate">{col.name}</span>
+                  <button
                     onClick={(e) => {
                       e.stopPropagation();
                       handleCopyId(col.id);
                     }}
-                    className="text-[10px] bg-slate-800 hover:bg-slate-700 px-1.5 py-0.5 rounded text-slate-400"
+                    title="Copy collection ID"
+                    className="opacity-0 group-hover:opacity-100 text-stone hover:text-clay transition"
                   >
-                    {copiedRequestId === col.id ? "Copied" : "Copy ID"}
+                    {copiedId === col.id ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                   </button>
                 </div>
 
-                {col.id === selectedCollectionId && (
-                  <div className="p-2 border-t border-slate-850/60 bg-slate-900/20 space-y-1 rounded-b-xl">
-                    {col.requests.map(req => (
-                      <button
-                        key={req.id}
-                        onClick={() => setSelectedRequestId(req.id)}
-                        className={`flex w-full items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition ${req.id === selectedRequestId ? "bg-indigo-500/15 text-indigo-400" : "text-slate-400 hover:bg-slate-800/40 hover:text-slate-200"}`}
-                      >
-                        <span className="truncate w-40 text-left">{req.name}</span>
-                        <span className={`text-[9px] uppercase font-bold px-1 rounded ${
-                          req.method === "GET" ? "bg-emerald-500/10 text-emerald-400" :
-                          req.method === "POST" ? "bg-blue-500/10 text-blue-400" :
-                          req.method === "PUT" ? "bg-amber-500/10 text-amber-400" :
-                          "bg-rose-500/10 text-rose-400"
-                        }`}>{req.method}</span>
-                      </button>
-                    ))}
+                {isExpanded && (
+                  <div className="pl-2 py-0.5 flex flex-col gap-px">
+                    {col.requests.map((req) => {
+                      const active = req.id === selectedRequestId;
+                      return (
+                        <div
+                          key={req.id}
+                          onClick={() => setSelectedRequestId(req.id)}
+                          className="flex items-center gap-2 px-2.5 py-1.5 rounded-md cursor-pointer hover:bg-cream transition-colors"
+                          style={{
+                            background: active ? "var(--color-cream)" : "transparent",
+                            borderLeft: `3px solid ${active ? "var(--color-clay)" : "transparent"}`,
+                          }}
+                        >
+                          <span
+                            className="font-mono text-[10px] font-medium px-1.5 py-0.5 rounded flex-shrink-0"
+                            style={methodStyle(req.method)}
+                          >
+                            {req.method}
+                          </span>
+                          <span className="text-xs text-graphite truncate">{req.name}</span>
+                        </div>
+                      );
+                    })}
                     <button
                       onClick={() => setShowNewReqModal(true)}
-                      className="flex w-full items-center justify-center gap-1.5 px-3 py-2 mt-1 border border-dashed border-slate-800 hover:border-slate-700 text-[10px] font-semibold text-slate-500 hover:text-slate-400 rounded-lg transition"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 mt-1 w-full border border-dashed border-line rounded-md text-[11px] text-mute hover:border-clay hover:text-clay transition-colors"
                     >
-                      <Plus className="h-3 w-3" />
-                      Add Request
+                      <Plus className="h-3 w-3" /> Add request
                     </button>
                   </div>
                 )}
               </div>
-            ))}
-          </div>
+            );
+          })}
+          {collections.length === 0 && (
+            <p className="text-xs text-mute text-center px-4 py-8 leading-relaxed">
+              No collections yet. Create one with the + button above.
+            </p>
+          )}
         </div>
       </div>
 
-      {/* Main Request / Response Editor Panel */}
-      <div className="flex-grow flex flex-col overflow-hidden bg-slate-950">
+      {/* Workspace */}
+      <div className="flex-1 flex flex-col overflow-hidden">
         {activeRequest ? (
-          <div className="flex-grow flex flex-col overflow-hidden">
-            {/* Request Controller Header */}
-            <div className="p-4 border-b border-slate-850 bg-slate-900/10 flex items-center gap-3 flex-shrink-0">
-              <select
-                value={reqMethod}
-                onChange={(e) => setReqMethod(e.target.value)}
-                className="bg-slate-900 border border-slate-800 text-xs font-bold rounded-xl px-3 py-2 text-indigo-400 outline-none focus:ring-1 focus:ring-indigo-500/30"
-              >
-                <option value="GET">GET</option>
-                <option value="POST">POST</option>
-                <option value="PUT">PUT</option>
-                <option value="DELETE">DELETE</option>
-              </select>
+          <>
+            {/* Request bar */}
+            <div className="px-4 py-3.5 border-b border-line flex gap-2 items-center flex-shrink-0 bg-cream">
+              <div className="relative h-[38px] flex items-center bg-cream border border-line rounded-lg pl-3 pr-2 hover:bg-panel transition-colors flex-shrink-0">
+                <span
+                  className="font-mono text-xs font-medium px-2 py-0.5 rounded"
+                  style={methodStyle(reqMethod)}
+                >
+                  {reqMethod}
+                </span>
+                <ChevronDown className="h-3.5 w-3.5 text-stone ml-1.5 pointer-events-none" />
+                <select
+                  value={reqMethod}
+                  onChange={(e) => setReqMethod(e.target.value)}
+                  className="absolute inset-0 opacity-0 cursor-pointer"
+                >
+                  {["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </div>
 
               <input
                 type="text"
                 value={reqUrl}
                 onChange={(e) => setReqUrl(e.target.value)}
-                className="flex-grow bg-slate-950 border border-slate-850 rounded-xl px-4 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500/50"
                 placeholder="Request URL (e.g. {{BASE_URL}}/api/users)"
+                className="flex-1 h-[38px] bg-cream border border-line rounded-lg px-3.5 font-mono text-xs text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
               />
+
+              <button
+                onClick={onSave}
+                className="h-[38px] px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
+              >
+                Save
+              </button>
 
               <button
                 onClick={handleExecuteRequest}
                 disabled={isExecutingApi}
-                className="flex items-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-xs font-bold text-white transition disabled:opacity-50"
+                className="h-[38px] px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white flex items-center gap-2 transition-colors disabled:opacity-60 flex-shrink-0"
               >
-                {isExecutingApi ? <RefreshCw className="h-4.5 w-4.5 animate-spin" /> : <Send className="h-4.5 w-4.5" />}
+                {isExecutingApi ? (
+                  <span
+                    className="h-4 w-4 rounded-full border-2 border-white/40 border-t-white"
+                    style={{ animation: "spin 0.7s linear infinite" }}
+                  />
+                ) : (
+                  <Send className="h-4 w-4" />
+                )}
                 Send
-              </button>
-              <button
-                onClick={handleSaveRequest}
-                className="rounded-xl border border-slate-800 bg-slate-900/60 hover:bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-300 transition"
-              >
-                Save
               </button>
             </div>
 
-            {/* Request Settings Tabs and Payload Body editor vertically stacked */}
-            <div className="flex-grow flex flex-col overflow-hidden">
-              
-              {/* Tab Bar below URL */}
-              <div className="px-4 py-2 border-b border-slate-850 bg-slate-900/10 flex items-center justify-between flex-shrink-0">
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setRequestConfigTab("headers")}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${requestConfigTab === "headers" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
-                  >
-                    Headers
-                  </button>
-                  <button
-                    onClick={() => setRequestConfigTab("auth")}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${requestConfigTab === "auth" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
-                  >
-                    Authentication
-                  </button>
-                  <button
-                    onClick={() => setRequestConfigTab("chaining")}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${requestConfigTab === "chaining" ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
-                  >
-                    Variables Chaining
-                  </button>
-                </div>
-
-                {/* Additional controls for active tab */}
-                {requestConfigTab === "headers" && (
-                  <button
-                    onClick={() => setReqHeaders([...reqHeaders, { key: "", value: "" }])}
-                    className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold bg-slate-900 border border-slate-800 hover:bg-slate-800 text-indigo-400 rounded-lg transition"
-                  >
-                    <Plus className="h-3 w-3" /> Add Header
-                  </button>
-                )}
-                {requestConfigTab === "chaining" && (
-                  <button
-                    onClick={() => setShowAiModal(true)}
-                    className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/20 rounded-lg transition disabled:opacity-50"
-                    disabled={!apiResponse}
-                  >
-                    AI Agent Parser
-                  </button>
-                )}
+            {/* Config panel */}
+            <div className="flex-shrink-0 h-[250px] flex flex-col border-b border-line overflow-hidden">
+              <div className="flex border-b border-line flex-shrink-0 bg-cream">
+                {configTabs.map((tab) => {
+                  const on = configTab === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => setConfigTab(tab.id)}
+                      className="px-[18px] py-2.5 text-[13px] transition-colors"
+                      style={{
+                        borderBottom: `2px solid ${on ? "var(--color-clay)" : "transparent"}`,
+                        color: on ? "var(--color-ink)" : "var(--color-stone)",
+                        fontWeight: on ? 500 : 400,
+                      }}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
               </div>
 
-              {/* Tab Content Window */}
-              <div className="h-[250px] flex-shrink-0 border-b border-slate-850 flex flex-col overflow-hidden bg-slate-950">
-                {requestConfigTab === "headers" && (
-                  <div className="flex-grow overflow-y-auto p-4 space-y-2">
-                    {reqHeaders.length === 0 ? (
-                      <div className="flex h-full items-center justify-center text-slate-500 text-xs">
-                        No headers defined. Click "Add Header" above.
-                      </div>
-                    ) : (
-                      reqHeaders.map((header, idx) => (
-                        <div key={idx} className="flex gap-2">
-                          <input
-                            type="text"
-                            placeholder="Header Key"
-                            value={header.key}
-                            onChange={(e) => {
-                              const newH = [...reqHeaders];
-                              newH[idx].key = e.target.value;
-                              setReqHeaders(newH);
-                            }}
-                            className="w-1/2 bg-slate-950 border border-slate-850 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none"
-                          />
-                          <input
-                            type="text"
-                            placeholder="Value"
-                            value={header.value}
-                            onChange={(e) => {
-                              const newH = [...reqHeaders];
-                              newH[idx].value = e.target.value;
-                              setReqHeaders(newH);
-                            }}
-                            className="w-1/2 bg-slate-950 border border-slate-850 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none"
-                          />
-                          <button
-                            onClick={() => setReqHeaders(reqHeaders.filter((_, i) => i !== idx))}
-                            className="p-2 text-slate-600 hover:text-red-400"
-                          >
-                            <Trash className="h-4 w-4" />
-                          </button>
-                        </div>
-                      ))
+              <div className="flex-1 overflow-y-auto">
+                {/* Headers */}
+                {configTab === "headers" && (
+                  <div className="p-4 flex flex-col gap-1.5">
+                    {reqHeaders.length === 0 && (
+                      <p className="text-xs text-mute py-4 text-center">No headers defined.</p>
                     )}
+                    {reqHeaders.map((header, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <input
+                          value={header.key}
+                          placeholder="Header"
+                          onChange={(e) => {
+                            const next = [...reqHeaders];
+                            next[idx].key = e.target.value;
+                            setReqHeaders(next);
+                          }}
+                          className={`${inputCls} w-[156px]`}
+                        />
+                        <input
+                          value={header.value}
+                          placeholder="Value"
+                          onChange={(e) => {
+                            const next = [...reqHeaders];
+                            next[idx].value = e.target.value;
+                            setReqHeaders(next);
+                          }}
+                          className={`${inputCls} flex-1`}
+                        />
+                        <button
+                          onClick={() => setReqHeaders(reqHeaders.filter((_, i) => i !== idx))}
+                          className="h-7 w-7 rounded-md border border-line flex items-center justify-center text-stone hover:bg-danger-soft hover:text-danger transition-colors flex-shrink-0"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      onClick={() => setReqHeaders([...reqHeaders, { key: "", value: "" }])}
+                      className="flex items-center gap-1.5 px-3 py-1.5 mt-1 w-fit border border-dashed border-line rounded-md text-xs text-mute hover:border-clay hover:text-clay transition-colors"
+                    >
+                      <Plus className="h-3.5 w-3.5" /> Add header
+                    </button>
                   </div>
                 )}
 
-                {requestConfigTab === "auth" && (
-                  <div className="p-4 flex-grow flex flex-col bg-slate-950 justify-center">
-                    <div className="flex items-center gap-3 border-b border-slate-850 pb-3 mb-4 flex-shrink-0">
-                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Auth Type:</span>
-                      <select
-                        value={reqAuthType}
-                        onChange={(e) => setReqAuthType(e.target.value)}
-                        className="bg-slate-900 border border-slate-800 text-xs rounded-lg px-3 py-1.5 text-slate-300 outline-none"
-                      >
-                        <option value="NONE">No Auth</option>
-                        <option value="BEARER">Bearer Token</option>
-                        <option value="API_KEY">Header API Key</option>
-                        <option value="HOOK">Dynamic Auth Hook</option>
-                      </select>
+                {/* Auth */}
+                {configTab === "auth" && (
+                  <div className="p-4 flex flex-col gap-3">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-medium text-stone">Auth type</label>
+                      <div className="relative h-[38px]">
+                        <select
+                          value={reqAuthType}
+                          onChange={(e) => setReqAuthType(e.target.value)}
+                          className="appearance-none w-full h-full bg-cream border border-line rounded-lg pl-3.5 pr-9 text-[13px] text-ink outline-none focus:border-clay cursor-pointer"
+                        >
+                          <option value="NONE">No auth</option>
+                          <option value="BEARER">Bearer token</option>
+                          <option value="API_KEY">Header API key</option>
+                          <option value="HOOK">Dynamic auth hook</option>
+                        </select>
+                        <ChevronDown className="h-3.5 w-3.5 text-stone pointer-events-none absolute right-3 top-1/2 -translate-y-1/2" />
+                      </div>
                     </div>
-                    <div className="flex-grow flex items-center justify-center">
-                      {reqAuthType === "NONE" && <p className="text-[11px] text-slate-500">No authentication configured.</p>}
-                      {reqAuthType === "BEARER" && (
-                        <div className="w-full">
-                          <input
-                            type="text"
-                            placeholder="Token (or {{VARIABLE}})"
-                            value={reqAuthConfig.token || ""}
-                            onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, token: e.target.value })}
-                            className="w-full bg-slate-950 border border-slate-850 rounded-lg px-3 py-2 text-xs focus:outline-none"
-                          />
-                        </div>
-                      )}
-                      {reqAuthType === "API_KEY" && (
-                        <div className="w-full flex gap-3">
-                          <input
-                            type="text"
-                            placeholder="Header Key"
-                            value={reqAuthConfig.key || ""}
-                            onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, key: e.target.value })}
-                            className="w-1/2 bg-slate-950 border border-slate-850 rounded-lg px-3 py-2 text-xs focus:outline-none"
-                          />
-                          <input
-                            type="text"
-                            placeholder="Value"
-                            value={reqAuthConfig.value || ""}
-                            onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, value: e.target.value })}
-                            className="w-1/2 bg-slate-950 border border-slate-850 rounded-lg px-3 py-2 text-xs focus:outline-none"
-                          />
-                        </div>
-                      )}
-                      {reqAuthType === "HOOK" && (
-                        <div className="w-full">
+
+                    {reqAuthType === "BEARER" && (
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-xs font-medium text-stone">Token</label>
+                        <input
+                          type="text"
+                          placeholder="Token or {{VARIABLE}}"
+                          value={reqAuthConfig.token || ""}
+                          onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, token: e.target.value })}
+                          className="h-[38px] bg-cream border border-line rounded-lg px-3.5 font-mono text-xs text-ink outline-none focus:border-clay"
+                        />
+                      </div>
+                    )}
+
+                    {reqAuthType === "API_KEY" && (
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Header key"
+                          value={reqAuthConfig.key || ""}
+                          onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, key: e.target.value })}
+                          className="w-1/2 h-[38px] bg-cream border border-line rounded-lg px-3.5 font-mono text-xs text-ink outline-none focus:border-clay"
+                        />
+                        <input
+                          type="text"
+                          placeholder="Value"
+                          value={reqAuthConfig.value || ""}
+                          onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, value: e.target.value })}
+                          className="w-1/2 h-[38px] bg-cream border border-line rounded-lg px-3.5 font-mono text-xs text-ink outline-none focus:border-clay"
+                        />
+                      </div>
+                    )}
+
+                    {reqAuthType === "HOOK" && (
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-xs font-medium text-stone">Auth hook</label>
+                        <div className="relative h-[38px]">
                           <select
                             value={reqAuthConfig.authFunctionId || ""}
                             onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, authFunctionId: e.target.value })}
-                            className="w-full bg-slate-950 border border-slate-850 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none"
+                            className="appearance-none w-full h-full bg-cream border border-line rounded-lg pl-3.5 pr-9 text-[13px] text-ink outline-none focus:border-clay cursor-pointer"
                           >
-                            <option value="">Select Auth Hook script...</option>
-                            {authFunctions.map(f => (
+                            <option value="">Select auth hook…</option>
+                            {authFunctions.map((f) => (
                               <option key={f.id} value={f.id}>{f.name}</option>
                             ))}
                           </select>
+                          <ChevronDown className="h-3.5 w-3.5 text-stone pointer-events-none absolute right-3 top-1/2 -translate-y-1/2" />
                         </div>
+                      </div>
+                    )}
+
+                    {reqAuthType === "NONE" && (
+                      <p className="text-[11px] text-mute">No authentication configured.</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Variables */}
+                {configTab === "variables" && (
+                  <div className="flex flex-col h-full">
+                    <div className="px-4 py-3 flex items-center justify-between flex-shrink-0">
+                      <span className="text-xs text-stone">Parser script — runs after response</span>
+                      <button
+                        onClick={() => setShowAiModal(true)}
+                        disabled={!apiResponse}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-cream border border-line rounded-md text-xs font-medium text-clay hover:bg-panel transition-colors disabled:opacity-50"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" /> AI agent parser
+                      </button>
+                    </div>
+                    <div className="flex-1 mx-4 mb-4 rounded-lg overflow-hidden border border-line">
+                      <Editor
+                        height="100%"
+                        language="javascript"
+                        theme="vs-dark"
+                        value={reqParserScript}
+                        onChange={(val) => setReqParserScript(val || "")}
+                        options={{
+                          minimap: { enabled: false },
+                          fontSize: 12,
+                          lineNumbers: "on",
+                          scrollbar: { vertical: "auto", horizontal: "hidden" },
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Body */}
+                {configTab === "body" && (
+                  <div className="flex flex-col h-full">
+                    <div className="px-4 py-3 flex items-center gap-2 flex-shrink-0">
+                      <span className="text-xs font-medium text-stone">Type</span>
+                      <div className="relative h-[30px]">
+                        <select
+                          value={reqBodyType}
+                          onChange={(e) => setReqBodyType(e.target.value)}
+                          className="appearance-none h-full bg-cream border border-line rounded-md pl-3 pr-8 text-xs text-ink outline-none focus:border-clay cursor-pointer"
+                        >
+                          <option value="NONE">None</option>
+                          <option value="JSON">JSON</option>
+                          <option value="TEXT">Text</option>
+                        </select>
+                        <ChevronDown className="h-3 w-3 text-stone pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2" />
+                      </div>
+                    </div>
+                    <div className="flex-1 mx-4 mb-4 rounded-lg overflow-hidden border border-line">
+                      {reqBodyType === "NONE" ? (
+                        <div className="h-full flex items-center justify-center text-xs text-mute">
+                          No request body. Change type to edit.
+                        </div>
+                      ) : (
+                        <Editor
+                          height="100%"
+                          language={reqBodyType.toLowerCase()}
+                          theme="vs-dark"
+                          value={reqBody}
+                          onChange={(val) => setReqBody(val || "")}
+                          options={{
+                            minimap: { enabled: false },
+                            fontSize: 12,
+                            lineNumbers: "on",
+                            scrollbar: { vertical: "auto", horizontal: "hidden" },
+                          }}
+                        />
                       )}
                     </div>
                   </div>
                 )}
-
-                {requestConfigTab === "chaining" && (
-                  <div className="flex-grow relative bg-slate-950">
-                    <Editor
-                      height="100%"
-                      language="javascript"
-                      theme="vs-dark"
-                      value={reqParserScript}
-                      onChange={(val) => setReqParserScript(val || "")}
-                      options={{
-                        minimap: { enabled: false },
-                        fontSize: 11,
-                        lineNumbers: "on",
-                        scrollbar: { vertical: "auto", horizontal: "hidden" }
-                      }}
-                    />
-                  </div>
-                )}
               </div>
-
-              {/* Request Payload Editor */}
-              <div className="flex-grow flex flex-col overflow-hidden bg-slate-950">
-                <div className="px-4 py-2 border-b border-slate-850 bg-slate-900/5 flex items-center justify-between flex-shrink-0">
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Payload Body</span>
-                  <select
-                    value={reqBodyType}
-                    onChange={(e) => setReqBodyType(e.target.value)}
-                    className="bg-slate-900 border border-slate-800 text-[11px] rounded-lg px-2 py-1 text-slate-300 outline-none"
-                  >
-                    <option value="NONE">None</option>
-                    <option value="JSON">JSON</option>
-                    <option value="TEXT">Text</option>
-                  </select>
-                </div>
-                <div className="flex-grow relative bg-slate-950">
-                  {reqBodyType === "NONE" ? (
-                    <div className="flex h-full items-center justify-center text-slate-500 text-xs">
-                      No request body. Change payload body type above to edit.
-                    </div>
-                  ) : (
-                    <Editor
-                      height="100%"
-                      language={reqBodyType.toLowerCase()}
-                      theme="vs-dark"
-                      value={reqBody}
-                      onChange={(val) => setReqBody(val || "")}
-                      options={{
-                        minimap: { enabled: false },
-                        fontSize: 12,
-                        lineNumbers: "on",
-                        scrollbar: { vertical: "auto", horizontal: "hidden" }
-                      }}
-                    />
-                  )}
-                </div>
-              </div>
-
             </div>
 
-            {/* Execution Response Pane */}
-            <div className="h-72 border-t border-slate-850 flex flex-col overflow-hidden flex-shrink-0 bg-slate-950">
-              <div className="px-6 py-3 border-b border-slate-850 bg-slate-900/20 flex items-center justify-between flex-shrink-0">
-                <div className="flex items-center gap-4">
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Response Panel</span>
-                  {apiResponse && (
-                    <div className="flex items-center gap-3">
-                      <span className={`text-xs font-bold px-2 py-0.5 rounded ${apiResponse.status < 400 ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-400"}`}>
-                        {apiResponse.status} {apiResponse.statusText}
-                      </span>
-                      <span className="text-xs text-slate-500 font-medium">Time: {apiResponse.executionTimeMs} ms</span>
-                    </div>
-                  )}
-                </div>
-
+            {/* Response panel */}
+            <div className="flex-1 flex flex-col overflow-hidden min-h-[160px]">
+              <div className="flex items-stretch border-b border-line flex-shrink-0 bg-cream">
+                {responseTabs.map((tab) => {
+                  const on = responseTab === tab;
+                  return (
+                    <button
+                      key={tab}
+                      onClick={() => setResponseTab(tab)}
+                      className="px-4 py-2.5 text-[13px] capitalize transition-colors"
+                      style={{
+                        borderBottom: `2px solid ${on ? "var(--color-clay)" : "transparent"}`,
+                        color: on ? "var(--color-ink)" : "var(--color-stone)",
+                        fontWeight: on ? 500 : 400,
+                      }}
+                    >
+                      {tab}
+                    </button>
+                  );
+                })}
+                <div className="flex-1" />
                 {apiResponse && (
-                  <div className="flex border border-slate-850 rounded-lg overflow-hidden bg-slate-950">
-                    {["pretty", "headers", "raw", "extracted"].map((tab) => (
-                      <button
-                        key={tab}
-                        onClick={() => setResponseTab(tab as any)}
-                        className={`px-3 py-1 text-[10px] font-bold uppercase transition ${responseTab === tab ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
-                      >
-                        {tab}
-                      </button>
-                    ))}
+                  <div className="flex items-center gap-2 px-4">
+                    <span
+                      className="font-mono text-xs font-medium px-2.5 py-0.5 rounded-full"
+                      style={
+                        apiResponse.status < 400
+                          ? { background: "#e3f5e9", color: "#276749" }
+                          : { background: "#fde8e8", color: "#c64545" }
+                      }
+                    >
+                      {apiResponse.status} {apiResponse.statusText}
+                    </span>
+                    <span className="font-mono text-xs text-stone">{apiResponse.executionTimeMs} ms</span>
                   </div>
                 )}
               </div>
 
-              <div className="flex-grow overflow-auto p-4 bg-slate-950 text-xs">
-                {!apiResponse ? (
-                  <div className="flex h-full items-center justify-center text-slate-500">
-                    Send a request to see response details here.
+              {!apiResponse ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6">
+                  <Send className="h-7 w-7 text-mute" />
+                  <div className="text-sm font-medium text-mute">Send a request to see the response</div>
+                  <div className="text-[13px] text-mute text-center max-w-[300px] leading-relaxed">
+                    Pretty, Headers, Raw and Extracted variables appear here.
                   </div>
-                ) : (
-                  <>
-                    {responseTab === "pretty" && (
-                      <pre className="text-emerald-400 font-mono select-text whitespace-pre-wrap">
-                        {typeof apiResponse.body === "object" ? JSON.stringify(apiResponse.body, null, 2) : apiResponse.body}
-                      </pre>
-                    )}
-                    {responseTab === "headers" && (
-                      <div className="space-y-1 font-mono">
-                        {Object.entries(apiResponse.headers).map(([k, v]) => (
-                          <div key={k} className="flex border-b border-slate-900 pb-1">
-                            <span className="text-indigo-400 font-bold w-48">{k}:</span>
-                            <span className="text-slate-300">{v as string}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {responseTab === "raw" && (
-                      <pre className="text-slate-400 font-mono select-text whitespace-pre-wrap">
-                        {JSON.stringify(apiResponse, null, 2)}
-                      </pre>
-                    )}
-                    {responseTab === "extracted" && (
-                      <div>
-                        <h4 className="text-xs font-bold text-slate-400 mb-2">Variables Extracted and Saved:</h4>
-                        {apiResponse.parsedVariables && Object.keys(apiResponse.parsedVariables).length ? (
-                          <div className="space-y-1.5">
-                            {Object.entries(apiResponse.parsedVariables).map(([k, v]) => (
-                              <div key={k} className="flex items-center gap-2 bg-slate-900/50 p-2 rounded-lg border border-slate-900">
-                                <span className="font-bold text-indigo-400">{k}</span>
-                                <span className="text-slate-500 font-bold">=</span>
-                                <span className="text-emerald-400 font-mono">{String(v)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-[11px] text-slate-500">No variables saved by this execution.</p>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-hidden flex flex-col">
+                  {responseTab === "pretty" && (
+                    <pre className="flex-1 m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap">
+                      {typeof apiResponse.body === "object"
+                        ? JSON.stringify(apiResponse.body, null, 2)
+                        : apiResponse.body}
+                    </pre>
+                  )}
+                  {responseTab === "headers" && (
+                    <div className="flex-1 overflow-y-auto p-4">
+                      {Object.entries(apiResponse.headers || {}).map(([k, v]) => (
+                        <div key={k} className="flex items-baseline gap-2 py-2 border-b border-line-soft">
+                          <span className="font-mono text-xs text-stone flex-shrink-0 min-w-[180px]">{k}</span>
+                          <span className="font-mono text-xs text-ink break-all">{v as string}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {responseTab === "raw" && (
+                    <pre className="flex-1 m-0 p-4 bg-ink-900 text-cream/80 font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap">
+                      {JSON.stringify(apiResponse, null, 2)}
+                    </pre>
+                  )}
+                  {responseTab === "extracted" && (
+                    <div className="flex-1 p-4 overflow-y-auto">
+                      {apiResponse.parsedVariables && Object.keys(apiResponse.parsedVariables).length ? (
+                        <div className="flex flex-col gap-1.5">
+                          {Object.entries(apiResponse.parsedVariables).map(([k, v]) => (
+                            <div
+                              key={k}
+                              className="flex items-center gap-2.5 px-3.5 py-2.5 bg-panel border border-line rounded-lg"
+                            >
+                              <span className="font-mono text-xs font-medium text-clay min-w-[120px]">{k}</span>
+                              <span className="text-[11px] text-stone">=</span>
+                              <span className="font-mono text-[11px] text-graphite flex-1 truncate">{String(v)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center gap-2.5 min-h-[100px]">
+                          <Code2 className="h-6 w-6 text-mute" />
+                          <p className="text-[13px] text-mute text-center">
+                            No variables extracted. Add a parser script in the Variables tab.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-          </div>
+          </>
         ) : (
-          <div className="flex h-full items-center justify-center text-slate-500 text-sm">
-            Select a request from the sidebar collections to begin testing.
+          <div className="flex-1 flex items-center justify-center text-sm text-mute">
+            Select a request from the collections to begin testing.
           </div>
         )}
       </div>
 
-      {/* NEW COLLECTION MODAL */}
+      {/* Toast */}
+      {toast && (
+        <div
+          className="fixed bottom-5 right-5 z-50 flex items-center gap-2.5 bg-ink-900 text-cream px-4 py-3 rounded-lg border-l-4 border-sage text-[13px] shadow-[0_4px_16px_rgba(20,20,19,0.24)] max-w-[360px]"
+          style={{ animation: "fadeUp 0.2s ease-out" }}
+        >
+          <CheckCircle2 className="h-4 w-4 text-sage flex-shrink-0" />
+          <span>{toast}</span>
+        </div>
+      )}
+
+      {/* Modals */}
       {showNewCollectionModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <form onSubmit={onCreateCollectionSubmit} className="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-md space-y-4 shadow-xl">
-            <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">Create New Collection</h3>
-            <input 
-              type="text" 
-              placeholder="Collection name..."
-              value={newColName}
-              onChange={(e) => setNewColName(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs outline-none focus:border-indigo-500"
-              required
-            />
-            <div className="flex justify-end gap-3 pt-2">
-              <button 
-                type="button" 
-                onClick={() => { setShowNewCollectionModal(false); setNewColName(""); }}
-                className="px-3.5 py-1.5 rounded-lg border border-slate-800 text-xs font-semibold text-slate-400 hover:bg-slate-800 transition"
-              >
-                Cancel
-              </button>
-              <button 
-                type="submit" 
-                className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition"
-              >
-                Create
-              </button>
+        <Modal title="Create collection" onClose={() => setShowNewCollectionModal(false)}>
+          <form onSubmit={onCreateCollectionSubmit} className="flex flex-col gap-5">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[13px] font-medium text-graphite">Name</label>
+              <input
+                type="text"
+                placeholder="e.g. Authentication Suite"
+                value={newColName}
+                onChange={(e) => setNewColName(e.target.value)}
+                autoFocus
+                required
+                className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
+              />
             </div>
+            <ModalFooter onCancel={() => setShowNewCollectionModal(false)} submitLabel="Create" />
           </form>
-        </div>
+        </Modal>
       )}
 
-      {/* NEW REQUEST MODAL */}
       {showNewReqModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <form onSubmit={onCreateRequestSubmit} className="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-md space-y-4 shadow-xl">
-            <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">Create New Request</h3>
-            <input 
-              type="text" 
-              placeholder="Request name (e.g. Get User Profile)..."
-              value={newReqName}
-              onChange={(e) => setNewReqName(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs outline-none focus:border-indigo-500"
-              required
-            />
-            <div className="flex justify-end gap-3 pt-2">
-              <button 
-                type="button" 
-                onClick={() => { setShowNewReqModal(false); setNewReqName(""); }}
-                className="px-3.5 py-1.5 rounded-lg border border-slate-800 text-xs font-semibold text-slate-400 hover:bg-slate-800 transition"
-              >
-                Cancel
-              </button>
-              <button 
-                type="submit" 
-                className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition"
-              >
-                Create
-              </button>
+        <Modal title="Create request" onClose={() => setShowNewReqModal(false)}>
+          <form onSubmit={onCreateRequestSubmit} className="flex flex-col gap-5">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[13px] font-medium text-graphite">Name</label>
+              <input
+                type="text"
+                placeholder="e.g. Get user profile"
+                value={newReqName}
+                onChange={(e) => setNewReqName(e.target.value)}
+                autoFocus
+                className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
+              />
             </div>
+            <ModalFooter onCancel={() => setShowNewReqModal(false)} submitLabel="Create" />
           </form>
-        </div>
+        </Modal>
       )}
 
-      {/* COLLABORATOR SHARE MODAL */}
       {showShareModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <form onSubmit={onShareSubmit} className="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-md space-y-4 shadow-xl">
-            <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">Share Collection</h3>
-            <p className="text-[11px] text-slate-400">Share this collection with another developer by typing their email. They will see it in their workspaces.</p>
-            <input 
-              type="email" 
-              placeholder="collaborator@lixionary.com"
-              value={shareEmail}
-              onChange={(e) => setShareEmail(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs outline-none focus:border-indigo-500"
-              required
-            />
-            <div className="flex justify-end gap-3 pt-2">
-              <button 
-                type="button" 
-                onClick={() => { setShowShareModal(false); setShareEmail(""); }}
-                className="px-3.5 py-1.5 rounded-lg border border-slate-800 text-xs font-semibold text-slate-400 hover:bg-slate-800 transition"
-              >
-                Cancel
-              </button>
-              <button 
-                type="submit" 
-                className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition"
-              >
-                Share
-              </button>
+        <Modal title="Share collection" onClose={() => setShowShareModal(false)}>
+          <form onSubmit={onShareSubmit} className="flex flex-col gap-5">
+            <p className="text-[13px] text-stone leading-relaxed">
+              Share this collection with another developer by email. It will appear in their workspace.
+            </p>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[13px] font-medium text-graphite">Email</label>
+              <input
+                type="email"
+                placeholder="collaborator@lixionary.com"
+                value={shareEmail}
+                onChange={(e) => setShareEmail(e.target.value)}
+                autoFocus
+                required
+                className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
+              />
             </div>
+            <ModalFooter onCancel={() => setShowShareModal(false)} submitLabel="Share" />
           </form>
-        </div>
+        </Modal>
       )}
 
-      {/* AI PARSER MODAL */}
       {showAiModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-xl space-y-4 shadow-xl">
-            <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">AI Prompt Parser Generator</h3>
-            <p className="text-[11px] text-slate-400">Provide instructions to the Gemini AI Agent on how to extract tokens, variables, or keys from the sample API response. It will generate a sandboxed JS script for you.</p>
-            
+        <Modal title="AI agent parser" onClose={() => setShowAiModal(false)} width={560}>
+          <div className="flex flex-col gap-5">
+            <p className="text-[13px] text-stone leading-relaxed">
+              Describe how to extract tokens, variables, or keys from the sample response. The agent
+              generates a sandboxed JS parser script for you.
+            </p>
             <textarea
               rows={4}
-              placeholder="e.g. Extract the token value from body.token and save it to the environment variable access_token"
+              placeholder="e.g. Extract body.access_token and save it to access_token"
               value={aiPrompt}
               onChange={(e) => setAiPrompt(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs outline-none focus:border-indigo-500 text-slate-200"
+              autoFocus
+              className="bg-cream border border-line rounded-lg p-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)] resize-none"
             />
-            
-            <div className="flex justify-end gap-3 pt-2">
-              <button 
-                type="button" 
+            <div className="flex justify-end gap-2 pt-1 border-t border-line">
+              <button
                 onClick={() => { setShowAiModal(false); setAiPrompt(""); }}
-                className="px-3.5 py-1.5 rounded-lg border border-slate-800 text-xs font-semibold text-slate-400 hover:bg-slate-800 transition"
                 disabled={isGeneratingAiParser}
+                className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
               >
                 Cancel
               </button>
-              <button 
+              <button
                 onClick={generateAiParserScript}
                 disabled={isGeneratingAiParser || !aiPrompt}
-                className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition disabled:opacity-50"
+                className="h-10 px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white flex items-center gap-2 transition-colors disabled:opacity-50"
               >
-                {isGeneratingAiParser ? <RefreshCw className="h-4 w-4 animate-spin" /> : null}
-                Generate Script
+                {isGeneratingAiParser && (
+                  <span
+                    className="h-4 w-4 rounded-full border-2 border-white/40 border-t-white"
+                    style={{ animation: "spin 0.7s linear infinite" }}
+                  />
+                )}
+                Generate script
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
+    </div>
+  );
+}
+
+function Modal({
+  title,
+  onClose,
+  children,
+  width = 480,
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  width?: number;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: "rgba(20,20,19,0.5)", backdropFilter: "blur(2px)" }}
+    >
+      <div
+        className="bg-cream rounded-2xl p-8 shadow-[0_24px_48px_-12px_rgba(20,20,19,0.18)] flex flex-col gap-5"
+        style={{ width }}
+      >
+        <div className="flex items-center justify-between">
+          <h2 className="m-0 font-serif text-xl font-medium text-ink">{title}</h2>
+          <button
+            onClick={onClose}
+            className="h-8 w-8 rounded-lg border border-line flex items-center justify-center hover:bg-panel transition-colors"
+          >
+            <X className="h-4 w-4 text-graphite" />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function ModalFooter({ onCancel, submitLabel }: { onCancel: () => void; submitLabel: string }) {
+  return (
+    <div className="flex justify-end gap-2 pt-1 border-t border-line">
+      <button
+        type="button"
+        onClick={onCancel}
+        className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
+      >
+        Cancel
+      </button>
+      <button
+        type="submit"
+        className="h-10 px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors"
+      >
+        {submitLabel}
+      </button>
     </div>
   );
 }
