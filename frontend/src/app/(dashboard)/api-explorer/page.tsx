@@ -1,15 +1,124 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import {
   Send, Plus, Trash2, Share2, ChevronDown, ChevronRight,
-  Sparkles, Code2, Copy, Check, X, CheckCircle2,
+  Sparkles, Code2, Copy, Check, X, CheckCircle2, AlignLeft, Minimize2,
+  PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
 
-type ConfigTab = "headers" | "auth" | "variables" | "body";
+type ConfigTab = "headers" | "params" | "auth" | "variables" | "body";
+
+interface ParsedCurl {
+  method: string;
+  url: string;
+  headers: { key: string; value: string }[];
+  body: string;
+  bodyType: string;
+  authType?: string;
+  authConfig?: { token?: string; key?: string; value?: string };
+}
+
+// Tokenize a shell-ish command respecting single/double quotes and line continuations.
+const tokenizeShell = (input: string): string[] => {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  let has = false;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      else current += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      has = true;
+      continue;
+    }
+    if (ch === "\\" && (input[i + 1] === "\n" || input[i + 1] === "\r")) {
+      // line continuation
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (has || current) {
+        tokens.push(current);
+        current = "";
+        has = false;
+      }
+      continue;
+    }
+    current += ch;
+    has = true;
+  }
+  if (has || current) tokens.push(current);
+  return tokens;
+};
+
+const parseCurl = (text: string): ParsedCurl | null => {
+  const trimmed = text.trim();
+  if (!/^curl\s/i.test(trimmed)) return null;
+
+  const tokens = tokenizeShell(trimmed);
+  let method = "";
+  let url = "";
+  const headers: { key: string; value: string }[] = [];
+  let body = "";
+  let authConfig: ParsedCurl["authConfig"] | undefined;
+  let authType: string | undefined;
+
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === "-X" || t === "--request") {
+      method = (tokens[++i] || "").toUpperCase();
+    } else if (t === "-H" || t === "--header") {
+      const h = tokens[++i] || "";
+      const idx = h.indexOf(":");
+      if (idx > -1) {
+        headers.push({ key: h.slice(0, idx).trim(), value: h.slice(idx + 1).trim() });
+      }
+    } else if (t === "-d" || t === "--data" || t === "--data-raw" || t === "--data-binary" || t === "--data-ascii") {
+      body = tokens[++i] || "";
+    } else if (t === "-u" || t === "--user") {
+      const creds = tokens[++i] || "";
+      authType = "BASIC";
+      authConfig = { token: btoa(creds) };
+    } else if (t === "--url") {
+      url = tokens[++i] || "";
+    } else if (t.startsWith("-")) {
+      // skip unknown flags; consume an arg if it looks like one (best-effort no-op)
+    } else if (!url) {
+      url = t;
+    }
+  }
+
+  if (!url) return null;
+  if (!method) method = body ? "POST" : "GET";
+
+  const ctHeader = headers.find((h) => h.key.toLowerCase() === "content-type");
+  let bodyType = "NONE";
+  if (body) {
+    const isJson =
+      (ctHeader && ctHeader.value.toLowerCase().includes("json")) ||
+      (() => {
+        try { JSON.parse(body); return true; } catch { return false; }
+      })();
+    bodyType = isJson ? "JSON" : "TEXT";
+  }
+
+  // Basic auth from curl maps to an API-key style Authorization header in this app.
+  if (authType === "BASIC" && authConfig?.token) {
+    headers.push({ key: "Authorization", value: `Basic ${authConfig.token}` });
+    authType = undefined;
+    authConfig = undefined;
+  }
+
+  return { method, url, headers, body, bodyType, authType, authConfig };
+};
 
 const methodStyle = (m: string): React.CSSProperties => {
   const map: Record<string, { bg: string; c: string }> = {
@@ -38,6 +147,8 @@ export default function ApiExplorerPage() {
     setReqUrl,
     reqHeaders,
     setReqHeaders,
+    reqQueryParams,
+    setReqQueryParams,
     reqBodyType,
     setReqBodyType,
     reqBody,
@@ -80,6 +191,12 @@ export default function ApiExplorerPage() {
   const [showNewReqModal, setShowNewReqModal] = useState(false);
   const [newReqName, setNewReqName] = useState("");
   const [toast, setToast] = useState<string | null>(null);
+  const [bodyCopied, setBodyCopied] = useState(false);
+  const [responseCopied, setResponseCopied] = useState(false);
+  const [curlCopied, setCurlCopied] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [configHeight, setConfigHeight] = useState(250);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const activeCollection = collections.find((c) => c.id === selectedCollectionId);
   const activeRequest = activeCollection?.requests.find((r) => r.id === selectedRequestId);
@@ -177,8 +294,92 @@ export default function ApiExplorerPage() {
     }
   };
 
+  const handleUrlPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData("text");
+    const parsed = parseCurl(text);
+    if (!parsed) return; // not a curl command — allow normal paste
+    e.preventDefault();
+    setReqMethod(parsed.method);
+    setReqUrl(parsed.url);
+    setReqHeaders(parsed.headers.length ? parsed.headers : [{ key: "", value: "" }]);
+    setReqBodyType(parsed.bodyType);
+    setReqBody(parsed.body);
+    if (parsed.authType) {
+      setReqAuthType(parsed.authType);
+      setReqAuthConfig({ ...reqAuthConfig, ...parsed.authConfig });
+    }
+    showToast("Imported from curl");
+  };
+
+  const formatBody = (minify: boolean) => {
+    try {
+      const parsed = JSON.parse(reqBody);
+      setReqBody(JSON.stringify(parsed, null, minify ? undefined : 2));
+    } catch {
+      showToast("Invalid JSON");
+    }
+  };
+
+  const copyToClipboard = (text: string, setFlag: (v: boolean) => void) => {
+    navigator.clipboard.writeText(text);
+    setFlag(true);
+    setTimeout(() => setFlag(false), 2000);
+  };
+
+  const getResponseText = (): string => {
+    if (!apiResponse) return "";
+    if (responseTab === "headers") return JSON.stringify(apiResponse.headers || {}, null, 2);
+    if (responseTab === "raw") return JSON.stringify(apiResponse, null, 2);
+    if (responseTab === "extracted") return JSON.stringify(apiResponse.parsedVariables || {}, null, 2);
+    return typeof apiResponse.body === "object"
+      ? JSON.stringify(apiResponse.body, null, 2)
+      : String(apiResponse.body ?? "");
+  };
+
+  const buildCurl = (): string => {
+    const q = reqQueryParams.filter((p) => p.key !== "");
+    let url = reqUrl;
+    if (q.length) {
+      const qs = q.map((p) => `${encodeURIComponent(p.key)}=${encodeURIComponent(p.value)}`).join("&");
+      url += (url.includes("?") ? "&" : "?") + qs;
+    }
+    const shell = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+    const parts: string[] = [`curl -X ${reqMethod}`, `  ${shell(url)}`];
+    reqHeaders.filter((h) => h.key !== "").forEach((h) => {
+      parts.push(`  -H ${shell(`${h.key}: ${h.value}`)}`);
+    });
+    if (reqBodyType !== "NONE" && reqBody) {
+      parts.push(`  -d ${shell(reqBody)}`);
+    }
+    return parts.join(" \\\n");
+  };
+
+  const handleCopyCurl = () => {
+    copyToClipboard(buildCurl(), setCurlCopied);
+    showToast("cURL command copied");
+  };
+
+  const handleSplitDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = configHeight;
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const next = startHeight + (moveEvent.clientY - startY);
+      setConfigHeight(Math.min(Math.max(next, 140), rect.height - 160));
+    };
+    const handleMouseUp = () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+  };
+
   const configTabs: { id: ConfigTab; label: string }[] = [
     { id: "headers", label: "Headers" },
+    { id: "params", label: "Params" },
     { id: "auth", label: "Auth" },
     { id: "variables", label: "Variables" },
     { id: "body", label: "Body" },
@@ -195,30 +396,48 @@ export default function ApiExplorerPage() {
     <div className="h-full flex overflow-hidden">
 
       {/* Collections sidebar */}
-      <div className="w-[272px] flex-shrink-0 bg-panel border-r border-line flex flex-col overflow-hidden">
-        <div className="px-4 py-3.5 border-b border-line flex items-center justify-between flex-shrink-0">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-stone">Collections</span>
-          <div className="flex gap-1">
+      <div
+        className="flex-shrink-0 bg-panel border-r border-line flex flex-col overflow-hidden transition-all duration-200"
+        style={{ width: sidebarCollapsed ? 40 : 272 }}
+      >
+        <div className="px-2 py-3.5 border-b border-line flex items-center justify-between flex-shrink-0 gap-1">
+          {!sidebarCollapsed && (
+            <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-stone pl-2 flex-1">Collections</span>
+          )}
+          <div className="flex gap-1 items-center ml-auto">
+            {!sidebarCollapsed && (
+              <>
+                <button
+                  onClick={() => setShowNewCollectionModal(true)}
+                  title="New collection"
+                  className="h-7 w-7 rounded-md border border-line bg-cream flex items-center justify-center hover:bg-hover transition-colors"
+                >
+                  <Plus className="h-3.5 w-3.5 text-graphite" />
+                </button>
+                <button
+                  onClick={() => setShowShareModal(true)}
+                  disabled={!selectedCollectionId}
+                  title="Share collection"
+                  className="h-7 w-7 rounded-md border border-line bg-cream flex items-center justify-center hover:bg-hover transition-colors disabled:opacity-40"
+                >
+                  <Share2 className="h-3.5 w-3.5 text-graphite" />
+                </button>
+              </>
+            )}
             <button
-              onClick={() => setShowNewCollectionModal(true)}
-              title="New collection"
-              className="h-7 w-7 rounded-md border border-line bg-cream flex items-center justify-center hover:bg-hover transition-colors"
+              onClick={() => setSidebarCollapsed((v) => !v)}
+              title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              className="h-7 w-7 rounded-md border border-line bg-cream flex items-center justify-center hover:bg-hover transition-colors flex-shrink-0"
             >
-              <Plus className="h-3.5 w-3.5 text-graphite" />
-            </button>
-            <button
-              onClick={() => setShowShareModal(true)}
-              disabled={!selectedCollectionId}
-              title="Share collection"
-              className="h-7 w-7 rounded-md border border-line bg-cream flex items-center justify-center hover:bg-hover transition-colors disabled:opacity-40"
-            >
-              <Share2 className="h-3.5 w-3.5 text-graphite" />
+              {sidebarCollapsed
+                ? <PanelLeftOpen className="h-3.5 w-3.5 text-graphite" />
+                : <PanelLeftClose className="h-3.5 w-3.5 text-graphite" />}
             </button>
           </div>
         </div>
 
         {/* Import bar */}
-        <form onSubmit={onImportSubmit} className="px-3 py-2.5 border-b border-line flex gap-1.5 flex-shrink-0">
+        <form onSubmit={onImportSubmit} className="px-3 py-2.5 border-b border-line flex gap-1.5 flex-shrink-0" style={{ display: sidebarCollapsed ? "none" : undefined }}>
           <input
             type="text"
             placeholder="Import by collection ID…"
@@ -235,7 +454,7 @@ export default function ApiExplorerPage() {
         </form>
 
         {/* Collections list */}
-        <div className="flex-1 overflow-y-auto p-2">
+        <div className="flex-1 overflow-y-auto p-2" style={{ display: sidebarCollapsed ? "none" : undefined }}>
           {collections.map((col) => {
             const isExpanded = col.id === selectedCollectionId;
             return (
@@ -310,7 +529,7 @@ export default function ApiExplorerPage() {
       </div>
 
       {/* Workspace */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div ref={containerRef} className="flex-1 flex flex-col overflow-hidden">
         {activeRequest ? (
           <>
             {/* Request bar */}
@@ -337,7 +556,8 @@ export default function ApiExplorerPage() {
                 type="text"
                 value={reqUrl}
                 onChange={(e) => setReqUrl(e.target.value)}
-                placeholder="Request URL (e.g. {{BASE_URL}}/api/users)"
+                onPaste={handleUrlPaste}
+                placeholder="Request URL (paste a curl command to import)"
                 className="flex-1 h-[38px] bg-cream border border-line rounded-lg px-3.5 font-mono text-xs text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
               />
 
@@ -346,6 +566,15 @@ export default function ApiExplorerPage() {
                 className="h-[38px] px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
               >
                 Save
+              </button>
+
+              <button
+                onClick={handleCopyCurl}
+                title="Copy as cURL"
+                className="h-[38px] px-3 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors flex items-center gap-1.5 flex-shrink-0"
+              >
+                {curlCopied ? <Check className="h-3.5 w-3.5 text-sage" /> : <Copy className="h-3.5 w-3.5" />}
+                cURL
               </button>
 
               <button
@@ -366,7 +595,7 @@ export default function ApiExplorerPage() {
             </div>
 
             {/* Config panel */}
-            <div className="flex-shrink-0 h-[250px] flex flex-col border-b border-line overflow-hidden">
+            <div className="flex-shrink-0 flex flex-col border-b border-line overflow-hidden" style={{ height: configHeight }}>
               <div className="flex border-b border-line flex-shrink-0 bg-cream">
                 {configTabs.map((tab) => {
                   const on = configTab === tab.id;
@@ -429,6 +658,51 @@ export default function ApiExplorerPage() {
                       className="flex items-center gap-1.5 px-3 py-1.5 mt-1 w-fit border border-dashed border-line rounded-md text-xs text-mute hover:border-clay hover:text-clay transition-colors"
                     >
                       <Plus className="h-3.5 w-3.5" /> Add header
+                    </button>
+                  </div>
+                )}
+
+                {/* Query Params */}
+                {configTab === "params" && (
+                  <div className="p-4 flex flex-col gap-1.5">
+                    {reqQueryParams.length === 0 && (
+                      <p className="text-xs text-mute py-4 text-center">No query parameters defined.</p>
+                    )}
+                    {reqQueryParams.map((param, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <input
+                          value={param.key}
+                          placeholder="Parameter"
+                          onChange={(e) => {
+                            const next = [...reqQueryParams];
+                            next[idx].key = e.target.value;
+                            setReqQueryParams(next);
+                          }}
+                          className={`${inputCls} w-[156px]`}
+                        />
+                        <input
+                          value={param.value}
+                          placeholder="Value"
+                          onChange={(e) => {
+                            const next = [...reqQueryParams];
+                            next[idx].value = e.target.value;
+                            setReqQueryParams(next);
+                          }}
+                          className={`${inputCls} flex-1`}
+                        />
+                        <button
+                          onClick={() => setReqQueryParams(reqQueryParams.filter((_, i) => i !== idx))}
+                          className="h-7 w-7 rounded-md border border-line flex items-center justify-center text-stone hover:bg-danger-soft hover:text-danger transition-colors flex-shrink-0"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      onClick={() => setReqQueryParams([...reqQueryParams, { key: "", value: "" }])}
+                      className="flex items-center gap-1.5 px-3 py-1.5 mt-1 w-fit border border-dashed border-line rounded-md text-xs text-mute hover:border-clay hover:text-clay transition-colors"
+                    >
+                      <Plus className="h-3.5 w-3.5" /> Add param
                     </button>
                   </div>
                 )}
@@ -548,6 +822,35 @@ export default function ApiExplorerPage() {
                           { value: "TEXT", label: "Text" },
                         ]}
                       />
+                      {reqBodyType !== "NONE" && (
+                        <div className="ml-auto flex items-center gap-1.5">
+                          {reqBodyType === "JSON" && (
+                            <>
+                              <button
+                                onClick={() => formatBody(false)}
+                                title="Pretty print"
+                                className="h-[30px] px-2.5 flex items-center gap-1.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors"
+                              >
+                                <AlignLeft className="h-3.5 w-3.5" /> Pretty
+                              </button>
+                              <button
+                                onClick={() => formatBody(true)}
+                                title="Minify"
+                                className="h-[30px] px-2.5 flex items-center gap-1.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors"
+                              >
+                                <Minimize2 className="h-3.5 w-3.5" /> Minify
+                              </button>
+                            </>
+                          )}
+                          <button
+                            onClick={() => copyToClipboard(reqBody, setBodyCopied)}
+                            title="Copy body"
+                            className="h-[30px] px-2.5 flex items-center gap-1.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors"
+                          >
+                            {bodyCopied ? <Check className="h-3.5 w-3.5 text-sage" /> : <Copy className="h-3.5 w-3.5" />} Copy
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div className="flex-1 mx-4 mb-4 rounded-lg overflow-hidden border border-line">
                       {reqBodyType === "NONE" ? (
@@ -574,6 +877,12 @@ export default function ApiExplorerPage() {
                 )}
               </div>
             </div>
+
+            {/* Draggable divider */}
+            <div
+              onMouseDown={handleSplitDragStart}
+              className="h-1 bg-line hover:bg-clay cursor-row-resize transition-colors flex-shrink-0 w-full z-10 select-none"
+            />
 
             {/* Response panel */}
             <div className="flex-1 flex flex-col overflow-hidden min-h-[160px]">
@@ -609,6 +918,13 @@ export default function ApiExplorerPage() {
                       {apiResponse.status} {apiResponse.statusText}
                     </span>
                     <span className="font-mono text-xs text-stone">{apiResponse.executionTimeMs} ms</span>
+                    <button
+                      onClick={() => copyToClipboard(getResponseText(), setResponseCopied)}
+                      title="Copy response"
+                      className="h-7 px-2.5 flex items-center gap-1.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors"
+                    >
+                      {responseCopied ? <Check className="h-3.5 w-3.5 text-sage" /> : <Copy className="h-3.5 w-3.5" />} Copy
+                    </button>
                   </div>
                 )}
               </div>

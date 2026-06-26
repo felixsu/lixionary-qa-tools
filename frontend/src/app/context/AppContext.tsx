@@ -349,6 +349,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [token]);
 
+  // Ref to suppress the auth-persist write on the render right after a selection
+  // change (when reqAuthType/reqAuthConfig haven't synced to the new request yet).
+  const authPersistIdRef = useRef<string>("");
+
   // Synchronize request inputs when selection changes
   useEffect(() => {
     if (selectedCollectionId && selectedRequestId) {
@@ -362,13 +366,44 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setReqQueryParams(req.queryParams.length ? req.queryParams : [{ key: "", value: "" }]);
         setReqBodyType(req.bodyType);
         setReqBody(req.body || "");
-        setReqAuthType(req.authType);
-        setReqAuthConfig(req.authConfig || { token: "", key: "", value: "", authFunctionId: "" });
+
+        // Auth: prefer unsaved override from localStorage, else the saved request value.
+        let authType = req.authType;
+        let authConfig = req.authConfig || { token: "", key: "", value: "", authFunctionId: "" };
+        try {
+          const override = localStorage.getItem(`lixionary_auth_${selectedRequestId}`);
+          if (override) {
+            const parsed = JSON.parse(override);
+            authType = parsed.authType ?? authType;
+            authConfig = parsed.authConfig ?? authConfig;
+          }
+        } catch { /* ignore malformed override */ }
+        setReqAuthType(authType);
+        setReqAuthConfig(authConfig);
+
         setReqParserScript(req.responseParserScript || "");
         setApiResponse(null);
       }
     }
   }, [selectedRequestId, selectedCollectionId, collections]);
+
+  // Auto-persist auth selection per request so it survives switches/reloads
+  // without a manual Save.
+  useEffect(() => {
+    if (!selectedRequestId) return;
+    if (authPersistIdRef.current !== selectedRequestId) {
+      // Selection just changed; auth state not yet synced to this request — skip
+      // this run. The follow-up render (once auth state updates) writes correctly.
+      authPersistIdRef.current = selectedRequestId;
+      return;
+    }
+    try {
+      localStorage.setItem(
+        `lixionary_auth_${selectedRequestId}`,
+        JSON.stringify({ authType: reqAuthType, authConfig: reqAuthConfig })
+      );
+    } catch { /* storage unavailable — non-fatal */ }
+  }, [reqAuthType, reqAuthConfig, selectedRequestId]);
 
   // REST API helpers
   const apiCall = async (path: string, options: RequestInit = {}) => {
@@ -716,6 +751,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         method: "PUT",
         body: JSON.stringify({ requests: updatedRequests })
       });
+
+      // Saved state is now authoritative — drop the unsaved auth override.
+      try { localStorage.removeItem(`lixionary_auth_${selectedRequestId}`); } catch { /* non-fatal */ }
 
       await fetchCollections();
     } catch (e: any) {

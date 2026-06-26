@@ -2,8 +2,8 @@
 
 import React, { useEffect } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { Cpu, Send, Globe, Database, Key, LogOut, ChevronDown } from "lucide-react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Cpu, Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import Dropdown from "../components/Dropdown";
 
@@ -37,6 +37,20 @@ export default function DashboardLayout({
 
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const collapsed = searchParams.get("sidebar") === "collapsed";
+
+  const toggleSidebar = () => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (collapsed) {
+      params.delete("sidebar");
+    } else {
+      params.set("sidebar", "collapsed");
+    }
+    window.history.replaceState(null, "", `?${params.toString()}`);
+    // Force re-render via a shallow router replace so useSearchParams picks up the change.
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  };
 
   useEffect(() => {
     if (!isLoadingAuth && !token) {
@@ -82,24 +96,32 @@ export default function DashboardLayout({
     <div className="flex h-screen w-screen overflow-hidden bg-cream text-ink font-sans">
 
       {/* Sidebar */}
-      <aside className="w-[236px] flex-shrink-0 flex flex-col bg-cream border-r border-line">
+      <aside
+        className="flex-shrink-0 flex flex-col bg-cream border-r border-line transition-all duration-200"
+        style={{ width: collapsed ? 52 : 236 }}
+      >
         {/* Brand */}
-        <div className="h-14 flex items-center gap-2.5 px-4 bg-ink-900 flex-shrink-0">
+        <div className="h-14 flex items-center gap-2.5 px-3 bg-ink-900 flex-shrink-0 overflow-hidden">
           <div className="h-7 w-7 rounded-md bg-clay flex items-center justify-center flex-shrink-0">
             <Cpu className="h-4 w-4 text-cream" />
           </div>
-          <span className="text-sm font-semibold text-cream">Lixionary</span>
-          <span className="ml-auto text-[11px] text-cream/35">Explorer</span>
+          {!collapsed && (
+            <>
+              <span className="text-sm font-semibold text-cream whitespace-nowrap">Lixionary</span>
+              <span className="ml-auto text-[11px] text-cream/35 whitespace-nowrap">Explorer</span>
+            </>
+          )}
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 px-2 py-3 flex flex-col gap-0.5 overflow-y-auto">
+        <nav className="flex-1 px-1.5 py-3 flex flex-col gap-0.5 overflow-y-auto overflow-x-hidden">
           {NAV.map((entry, i) => {
             if (entry.type === "section") {
+              if (collapsed) return null;
               return (
                 <div
                   key={`sec-${i}`}
-                  className={`px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-mute ${
+                  className={`px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-mute whitespace-nowrap ${
                     i === 0 ? "pt-2" : "pt-3.5"
                   }`}
                 >
@@ -113,42 +135,75 @@ export default function DashboardLayout({
               <Link
                 key={entry.href}
                 href={entry.href}
-                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors hover:bg-panel"
+                title={collapsed ? entry.label : undefined}
+                className="flex items-center gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-panel"
                 style={{
                   background: active ? "var(--color-hover)" : "transparent",
                   borderLeft: `3px solid ${active ? "var(--color-clay)" : "transparent"}`,
+                  justifyContent: collapsed ? "center" : undefined,
+                  paddingLeft: collapsed ? undefined : undefined,
                 }}
               >
                 <Icon className={`h-3.5 w-3.5 flex-shrink-0 ${active ? "text-clay" : "text-stone"}`} />
-                <span className={`flex-1 text-[13px] ${active ? "font-medium text-clay" : "text-graphite"}`}>
-                  {entry.label}
-                </span>
-                {entry.badge === "env" && environments.length > 0 && (
-                  <span className="font-mono text-[11px] bg-chip text-stone px-1.5 py-0.5 rounded-full">
-                    {environments.length}
-                  </span>
+                {!collapsed && (
+                  <>
+                    <span className={`flex-1 text-[13px] whitespace-nowrap ${active ? "font-medium text-clay" : "text-graphite"}`}>
+                      {entry.label}
+                    </span>
+                    {entry.badge === "env" && environments.length > 0 && (
+                      <span className="font-mono text-[11px] bg-chip text-stone px-1.5 py-0.5 rounded-full">
+                        {environments.length}
+                      </span>
+                    )}
+                  </>
                 )}
               </Link>
             );
           })}
         </nav>
 
-        {/* User block */}
-        <div className="p-3 border-t border-line flex items-center gap-2.5 flex-shrink-0">
-          <div className="h-8 w-8 rounded-full bg-chip flex items-center justify-center flex-shrink-0">
-            <span className="text-xs font-semibold text-graphite">{userInitial}</span>
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-xs font-medium text-ink truncate">{user?.name || "Developer"}</div>
-            <div className="text-[11px] text-mute truncate">{user?.email || "developer@lixionary.com"}</div>
-          </div>
+        {/* User block + collapse toggle */}
+        <div className="p-2 border-t border-line flex flex-col gap-1 flex-shrink-0">
+          {/* Collapse toggle */}
           <button
-            onClick={handleLogout}
-            title="Logout"
-            className="p-1.5 rounded-lg text-mute hover:text-danger hover:bg-danger-soft transition-colors"
+            onClick={toggleSidebar}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="flex items-center gap-2.5 rounded-lg px-2 py-2 w-full transition-colors hover:bg-panel text-mute hover:text-graphite"
+            style={{ justifyContent: collapsed ? "center" : undefined }}
           >
-            <LogOut className="h-4 w-4" />
+            {collapsed
+              ? <PanelLeftOpen className="h-3.5 w-3.5 flex-shrink-0" />
+              : <PanelLeftClose className="h-3.5 w-3.5 flex-shrink-0" />}
+            {!collapsed && <span className="text-[13px]">Collapse</span>}
           </button>
+
+          {/* User row */}
+          <div
+            className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 overflow-hidden"
+            style={{ justifyContent: collapsed ? "center" : undefined }}
+          >
+            <div
+              title={collapsed ? (user?.name || user?.email || "Developer") : undefined}
+              className="h-8 w-8 rounded-full bg-chip flex items-center justify-center flex-shrink-0"
+            >
+              <span className="text-xs font-semibold text-graphite">{userInitial}</span>
+            </div>
+            {!collapsed && (
+              <>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-medium text-ink truncate">{user?.name || "Developer"}</div>
+                  <div className="text-[11px] text-mute truncate">{user?.email || "developer@lixionary.com"}</div>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  title="Logout"
+                  className="p-1.5 rounded-lg text-mute hover:text-danger hover:bg-danger-soft transition-colors flex-shrink-0"
+                >
+                  <LogOut className="h-4 w-4" />
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </aside>
 
