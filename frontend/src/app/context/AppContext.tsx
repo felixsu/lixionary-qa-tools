@@ -403,10 +403,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const handleGuestLogin = async () => {
     try {
-      // Exchange email for token
-      const data = await apiCall("/api/auth/google", {
-        method: "POST",
-        body: JSON.stringify({ idToken: "guest@lixionary.com" })
+      const data = await apiCall("/api/auth/guest", {
+        method: "POST"
       });
       setToken(data.token);
       setUser(data.user);

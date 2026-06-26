@@ -146,7 +146,7 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
     auth_type = request_data.get("authType", "NONE").upper()
     auth_config = request_data.get("authConfig", {})
 
-    if auth_type == "HOOK" and auth_config.get("authFunctionId"):
+    if auth_type in ("HOOK", "AUTH_HOOK") and auth_config.get("authFunctionId"):
         auth_func_id = auth_config["authFunctionId"]
         cached_token = await get_valid_auth_token(auth_func_id, environment_id)
         headers["Authorization"] = f"Bearer {cached_token}"

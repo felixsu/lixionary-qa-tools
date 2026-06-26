@@ -220,7 +220,7 @@ export default function WebExplorerPage() {
     }
 
     try {
-      const response = await fetch(`http://localhost:8000/api/workspace/run`, {
+      const response = await fetch(`/api/workspace/run`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -246,6 +246,14 @@ export default function WebExplorerPage() {
       setWorkspaceLogs(prev => prev + `\nExecution Error: ${err.message}\n`);
     } finally {
       setIsScriptRunning(false);
+    }
+  };
+
+  const handleStopScript = async () => {
+    try {
+      await apiCall("/api/workspace/stop", { method: "POST" });
+    } catch (e: any) {
+      alert(`Failed to stop script: ${e.message}`);
     }
   };
 
@@ -339,16 +347,24 @@ export default function WebExplorerPage() {
                 <Save className="h-3.5 w-3.5" />
                 Save
               </button>
-              <button
-                onClick={handleRunScript}
-                disabled={!selectedWorkspaceFile || isScriptRunning}
-                className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 text-white ${
-                  isScriptRunning ? "bg-amber-600 hover:bg-amber-500" : "bg-indigo-600 hover:bg-indigo-500"
-                } disabled:opacity-50`}
-              >
-                <Play className="h-3.5 w-3.5" />
-                {isScriptRunning ? "Running..." : "Run Script"}
-              </button>
+              {isScriptRunning ? (
+                <button
+                  onClick={handleStopScript}
+                  className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-xs font-bold flex items-center gap-1.5 text-white transition-all duration-200"
+                >
+                  <XCircle className="h-3.5 w-3.5 animate-pulse" />
+                  Stop Script
+                </button>
+              ) : (
+                <button
+                  onClick={handleRunScript}
+                  disabled={!selectedWorkspaceFile}
+                  className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-bold flex items-center gap-1.5 text-white disabled:opacity-50 transition-all duration-200"
+                >
+                  <Play className="h-3.5 w-3.5" />
+                  Run Script
+                </button>
+              )}
             </div>
           </div>
 

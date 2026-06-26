@@ -405,7 +405,7 @@ export default function ApiExplorerPage() {
                         <option value="NONE">No Auth</option>
                         <option value="BEARER">Bearer Token</option>
                         <option value="API_KEY">Header API Key</option>
-                        <option value="AUTH_HOOK">Dynamic Auth Hook</option>
+                        <option value="HOOK">Dynamic Auth Hook</option>
                       </select>
                     </div>
                     <div className="flex-grow flex items-center justify-center">
@@ -439,7 +439,7 @@ export default function ApiExplorerPage() {
                           />
                         </div>
                       )}
-                      {reqAuthType === "AUTH_HOOK" && (
+                      {reqAuthType === "HOOK" && (
                         <div className="w-full">
                           <select
                             value={reqAuthConfig.authFunctionId || ""}

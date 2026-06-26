@@ -11,6 +11,9 @@ from config import settings
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
+# Track running Python scripts by user: {user_id: process}
+_running_processes = {}
+
 class FileSavePayload(BaseModel):
     content: str
 
@@ -40,7 +43,12 @@ async def get_workspace_files(current_user: dict = Depends(get_current_user)):
     main_py_path = os.path.join(workspace_dir, "main.py")
     if not os.path.exists(main_py_path):
         default_content = """import os
+import time
 from playwright.sync_api import sync_playwright
+
+# Pre-made delay helper (ms: milliseconds)
+def delay(ms: int):
+    time.sleep(ms / 1000)
 
 # Retrieve VNC browser remote debugging URL from environment
 cdp_url = os.getenv("BROWSER_CDP_URL", "http://vnc-browser:9222")
@@ -56,6 +64,9 @@ try:
         
         print(f"Current page URL: {page.url}")
         print("Executing sample POM test tasks...")
+        
+        # Example delay call:
+        # delay(1500)
         
         # Add your Playwright operations here!
         # e.g., page.click("button")
@@ -153,6 +164,7 @@ async def run_workspace_script(payload: RunScriptPayload, current_user: dict = D
     
     async def log_streamer():
         yield f"--- Starting execution of {safe_name} ---\n"
+        process = None
         try:
             process = await asyncio.create_subprocess_exec(
                 "python", file_path,
@@ -161,6 +173,7 @@ async def run_workspace_script(payload: RunScriptPayload, current_user: dict = D
                 cwd=workspace_dir,
                 env=env
             )
+            _running_processes[user_id] = process
             
             while True:
                 line = await process.stdout.readline()
@@ -172,5 +185,33 @@ async def run_workspace_script(payload: RunScriptPayload, current_user: dict = D
             yield f"\n--- Process finished with exit code {process.returncode} ---\n"
         except Exception as e:
             yield f"\nERROR: Process execution failed: {str(e)}\n"
+        finally:
+            if process:
+                try:
+                    if process.returncode is None:
+                        process.terminate()
+                except Exception:
+                    pass
+            _running_processes.pop(user_id, None)
             
     return StreamingResponse(log_streamer(), media_type="text/plain")
+
+@router.post("/stop")
+async def stop_workspace_script(current_user: dict = Depends(get_current_user)):
+    user_id = str(current_user["id"])
+    process = _running_processes.get(user_id)
+    if not process:
+        return {"message": "No script is currently running"}
+    try:
+        process.terminate()
+        # Wait briefly to clean up
+        for _ in range(5):
+            if process.returncode is not None:
+                break
+            await asyncio.sleep(0.1)
+        if process.returncode is None:
+            process.kill()
+        _running_processes.pop(user_id, None)
+        return {"message": "Script execution stopped successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to stop script: {str(e)}")
