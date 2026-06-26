@@ -71,3 +71,6 @@ yarn-error.log*
 # TypeScript Build Info
 *.tsbuildinfo
 /frontend/next-env.d.ts
+
+# User Workspace Files (runtime-generated, not source code)
+workspaces/
