@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
+import Dropdown from "../../components/Dropdown";
 
 type ConfigTab = "headers" | "auth" | "variables" | "body";
 
@@ -314,24 +315,23 @@ export default function ApiExplorerPage() {
           <>
             {/* Request bar */}
             <div className="px-4 py-3.5 border-b border-line flex gap-2 items-center flex-shrink-0 bg-cream">
-              <div className="relative h-[38px] flex items-center bg-cream border border-line rounded-lg pl-3 pr-2 hover:bg-panel transition-colors flex-shrink-0">
-                <span
-                  className="font-mono text-xs font-medium px-2 py-0.5 rounded"
-                  style={methodStyle(reqMethod)}
-                >
-                  {reqMethod}
-                </span>
-                <ChevronDown className="h-3.5 w-3.5 text-stone ml-1.5 pointer-events-none" />
-                <select
-                  value={reqMethod}
-                  onChange={(e) => setReqMethod(e.target.value)}
-                  className="absolute inset-0 opacity-0 cursor-pointer"
-                >
-                  {["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
-              </div>
+              <Dropdown
+                value={reqMethod}
+                onChange={setReqMethod}
+                options={["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => ({
+                  value: m,
+                  label: <span className="font-mono text-xs font-medium">{m}</span>,
+                }))}
+                className="h-[38px] flex items-center bg-cream border border-line rounded-lg pl-3 pr-2 hover:bg-panel transition-colors flex-shrink-0"
+                renderTrigger={(_, open) => (
+                  <>
+                    <span className="font-mono text-xs font-medium px-2 py-0.5 rounded" style={methodStyle(reqMethod)}>
+                      {reqMethod}
+                    </span>
+                    <ChevronDown className={`h-3.5 w-3.5 text-stone ml-1.5 transition-transform ${open ? "rotate-180" : ""}`} />
+                  </>
+                )}
+              />
 
               <input
                 type="text"
@@ -438,19 +438,17 @@ export default function ApiExplorerPage() {
                   <div className="p-4 flex flex-col gap-3">
                     <div className="flex flex-col gap-1.5">
                       <label className="text-xs font-medium text-stone">Auth type</label>
-                      <div className="relative h-[38px]">
-                        <select
-                          value={reqAuthType}
-                          onChange={(e) => setReqAuthType(e.target.value)}
-                          className="appearance-none w-full h-full bg-cream border border-line rounded-lg pl-3.5 pr-9 text-[13px] text-ink outline-none focus:border-clay cursor-pointer"
-                        >
-                          <option value="NONE">No auth</option>
-                          <option value="BEARER">Bearer token</option>
-                          <option value="API_KEY">Header API key</option>
-                          <option value="HOOK">Dynamic auth hook</option>
-                        </select>
-                        <ChevronDown className="h-3.5 w-3.5 text-stone pointer-events-none absolute right-3 top-1/2 -translate-y-1/2" />
-                      </div>
+                      <Dropdown
+                        value={reqAuthType}
+                        onChange={setReqAuthType}
+                        widthClass="w-full"
+                        options={[
+                          { value: "NONE", label: "No auth" },
+                          { value: "BEARER", label: "Bearer token" },
+                          { value: "API_KEY", label: "Header API key" },
+                          { value: "HOOK", label: "Dynamic auth hook" },
+                        ]}
+                      />
                     </div>
 
                     {reqAuthType === "BEARER" && (
@@ -488,19 +486,13 @@ export default function ApiExplorerPage() {
                     {reqAuthType === "HOOK" && (
                       <div className="flex flex-col gap-1.5">
                         <label className="text-xs font-medium text-stone">Auth hook</label>
-                        <div className="relative h-[38px]">
-                          <select
-                            value={reqAuthConfig.authFunctionId || ""}
-                            onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, authFunctionId: e.target.value })}
-                            className="appearance-none w-full h-full bg-cream border border-line rounded-lg pl-3.5 pr-9 text-[13px] text-ink outline-none focus:border-clay cursor-pointer"
-                          >
-                            <option value="">Select auth hook…</option>
-                            {authFunctions.map((f) => (
-                              <option key={f.id} value={f.id}>{f.name}</option>
-                            ))}
-                          </select>
-                          <ChevronDown className="h-3.5 w-3.5 text-stone pointer-events-none absolute right-3 top-1/2 -translate-y-1/2" />
-                        </div>
+                        <Dropdown
+                          value={reqAuthConfig.authFunctionId || ""}
+                          onChange={(v) => setReqAuthConfig({ ...reqAuthConfig, authFunctionId: v })}
+                          placeholder="Select auth hook…"
+                          widthClass="w-full"
+                          options={authFunctions.map((f) => ({ value: f.id, label: f.name }))}
+                        />
                       </div>
                     )}
 
@@ -546,18 +538,16 @@ export default function ApiExplorerPage() {
                   <div className="flex flex-col h-full">
                     <div className="px-4 py-3 flex items-center gap-2 flex-shrink-0">
                       <span className="text-xs font-medium text-stone">Type</span>
-                      <div className="relative h-[30px]">
-                        <select
-                          value={reqBodyType}
-                          onChange={(e) => setReqBodyType(e.target.value)}
-                          className="appearance-none h-full bg-cream border border-line rounded-md pl-3 pr-8 text-xs text-ink outline-none focus:border-clay cursor-pointer"
-                        >
-                          <option value="NONE">None</option>
-                          <option value="JSON">JSON</option>
-                          <option value="TEXT">Text</option>
-                        </select>
-                        <ChevronDown className="h-3 w-3 text-stone pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2" />
-                      </div>
+                      <Dropdown
+                        value={reqBodyType}
+                        onChange={setReqBodyType}
+                        className="h-[30px] px-3 rounded-md text-xs text-ink"
+                        options={[
+                          { value: "NONE", label: "None" },
+                          { value: "JSON", label: "JSON" },
+                          { value: "TEXT", label: "Text" },
+                        ]}
+                      />
                     </div>
                     <div className="flex-1 mx-4 mb-4 rounded-lg overflow-hidden border border-line">
                       {reqBodyType === "NONE" ? (

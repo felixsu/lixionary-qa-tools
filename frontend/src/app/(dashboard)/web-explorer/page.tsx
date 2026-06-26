@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
+import Dropdown from "../../components/Dropdown";
 
 const methodStyle = (m: string): React.CSSProperties => {
   const map: Record<string, { bg: string; c: string }> = {
@@ -567,18 +568,15 @@ export default function WebExplorerPage() {
           </>
         ) : (
           <>
-            <div className="relative h-[34px]">
-              <select
-                value={selectedProfileId}
-                onChange={(e) => setSelectedProfileId(e.target.value)}
-                className="appearance-none h-full bg-cream border border-line rounded-lg pl-3 pr-8 text-[13px] text-graphite outline-none focus:border-clay cursor-pointer"
-              >
-                <option value="">No profile (clean session)</option>
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </div>
+            <Dropdown
+              value={selectedProfileId}
+              onChange={setSelectedProfileId}
+              className="h-[34px] px-3 rounded-lg text-[13px] text-graphite"
+              options={[
+                { value: "", label: "No profile (clean session)" },
+                ...profiles.map((p) => ({ value: p.id, label: p.name })),
+              ]}
+            />
             <button
               onClick={() => setShowProfileModal(true)}
               className="h-[34px] px-3 bg-cream border border-line rounded-lg text-[13px] text-graphite hover:bg-panel transition-colors"
@@ -693,40 +691,38 @@ export default function WebExplorerPage() {
 
                     <div className="flex flex-col gap-1">
                       <label className="text-xs font-medium text-stone">Action type</label>
-                      <select
+                      <Dropdown
                         value={selectedElementAction}
-                        onChange={(e) => setSelectedElementAction(e.target.value)}
-                        className={`${fieldCls} cursor-pointer`}
-                      >
-                        <option value="click">Click</option>
-                        <option value="fill">Fill / Type</option>
-                        <option value="hover">Hover</option>
-                        <option value="select_option">Select option</option>
-                      </select>
+                        onChange={setSelectedElementAction}
+                        className="h-[34px] px-2.5 rounded-md text-xs text-ink"
+                        options={[
+                          { value: "click", label: "Click" },
+                          { value: "fill", label: "Fill / Type" },
+                          { value: "hover", label: "Hover" },
+                          { value: "select_option", label: "Select option" },
+                        ]}
+                      />
                     </div>
 
                     <div className="flex flex-col gap-1">
                       <label className="text-xs font-medium text-stone">Best strategy locator</label>
-                      <select
-                        onChange={(e) => {
-                          const selectedIdx = parseInt(e.target.value);
+                      <Dropdown
+                        value="0"
+                        onChange={(v) => {
+                          const selectedIdx = parseInt(v);
                           const loc = selectedElementLocators[selectedIdx];
                           if (loc) {
                             setSelectedElementLocators([loc, ...selectedElementLocators.filter((_, i) => i !== selectedIdx)]);
                           }
                         }}
-                        className={`${fieldCls} font-mono cursor-pointer`}
-                      >
-                        {selectedElementLocators.map((loc, idx) => {
+                        widthClass="w-full"
+                        className="h-[34px] px-2.5 rounded-md text-xs text-ink font-mono"
+                        options={selectedElementLocators.map((loc, idx) => {
                           const uniqueness =
                             loc.unique === true ? " ✅ (Unique)" : loc.unique === false ? ` ⚠️ (Matches: ${loc.count})` : "";
-                          return (
-                            <option key={idx} value={idx}>
-                              {loc.strategy}: {loc.statement}{uniqueness}
-                            </option>
-                          );
+                          return { value: String(idx), label: `${loc.strategy}${uniqueness}` };
                         })}
-                      </select>
+                      />
                     </div>
 
                     <button
@@ -750,15 +746,13 @@ export default function WebExplorerPage() {
                   </button>
                 </div>
                 <div className="px-4 pb-2.5">
-                  <select
+                  <Dropdown
                     value={activePomClass}
-                    onChange={(e) => setActivePomClass(e.target.value)}
-                    className={`${fieldCls} w-full cursor-pointer`}
-                  >
-                    {pomClasses.map((cls) => (
-                      <option key={cls} value={cls}>{cls}</option>
-                    ))}
-                  </select>
+                    onChange={setActivePomClass}
+                    widthClass="w-full"
+                    className="h-[34px] px-2.5 rounded-md text-xs text-ink"
+                    options={pomClasses.map((cls) => ({ value: cls, label: cls }))}
+                  />
                 </div>
                 <div className="px-4 pb-3 flex flex-col gap-0.5">
                   {(pomElements[activePomClass] || []).length ? (
@@ -1161,18 +1155,19 @@ export default function WebExplorerPage() {
                     <h4 className="text-[11px] font-semibold text-clay uppercase tracking-[0.08em]">Auth hook integration</h4>
                     <div className="flex flex-col gap-1.5">
                       <label className="text-[13px] font-medium text-graphite">Link auth hook</label>
-                      <select
+                      <Dropdown
                         value={profileAuthFunctionId}
-                        onChange={(e) => setProfileAuthFunctionId(e.target.value)}
-                        className="h-10 bg-cream border border-line rounded-lg px-3 text-sm text-ink outline-none focus:border-clay cursor-pointer"
-                      >
-                        <option value="">— No auth hook linked —</option>
-                        {authFunctions.map((f) => (
-                          <option key={f.id} value={f.id}>
-                            {f.name} {f.expires_in ? `(${f.expires_in}s TTL)` : "(default TTL)"}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={setProfileAuthFunctionId}
+                        placeholder="— No auth hook linked —"
+                        className="h-10 px-3 rounded-lg text-sm text-ink"
+                        options={[
+                          { value: "", label: "— No auth hook linked —" },
+                          ...authFunctions.map((f) => ({
+                            value: f.id,
+                            label: `${f.name} ${f.expires_in ? `(${f.expires_in}s TTL)` : "(default TTL)"}`,
+                          })),
+                        ]}
+                      />
                     </div>
 
                     {profileAuthFunctionId && (
@@ -1180,14 +1175,16 @@ export default function WebExplorerPage() {
                         <div className="grid grid-cols-2 gap-3">
                           <div className="flex flex-col gap-1.5">
                             <label className="text-[13px] font-medium text-graphite">Injection type</label>
-                            <select
+                            <Dropdown
                               value={profileAuthInjectionType}
-                              onChange={(e) => setProfileAuthInjectionType(e.target.value as "cookie" | "localStorage")}
-                              className="h-9 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay cursor-pointer"
-                            >
-                              <option value="cookie">Cookie</option>
-                              <option value="localStorage">Local storage</option>
-                            </select>
+                              onChange={(v) => setProfileAuthInjectionType(v as "cookie" | "localStorage")}
+                              widthClass="w-full"
+                              className="h-9 px-2.5 rounded-md text-xs text-ink"
+                              options={[
+                                { value: "cookie", label: "Cookie" },
+                                { value: "localStorage", label: "Local storage" },
+                              ]}
+                            />
                           </div>
                           <div className="flex flex-col gap-1.5">
                             <label className="text-[13px] font-medium text-graphite">Target key / name</label>

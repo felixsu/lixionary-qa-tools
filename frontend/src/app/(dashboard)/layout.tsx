@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Cpu, Send, Globe, Database, Key, LogOut, ChevronDown } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
+import Dropdown from "../components/Dropdown";
 
 type NavEntry =
   | { type: "section"; label: string }
@@ -164,20 +165,23 @@ export default function DashboardLayout({
               <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-mute">
                 Active env
               </span>
-              <div className="relative flex items-center gap-1.5 bg-cream border border-line rounded-lg pl-3 pr-2 py-1.5 hover:bg-panel transition-colors">
-                <div className="h-1.5 w-1.5 rounded-full bg-sage" />
-                <select
-                  value={selectedEnvId}
-                  onChange={(e) => setSelectedEnvId(e.target.value)}
-                  className="appearance-none bg-transparent pr-5 text-[13px] font-medium text-ink outline-none cursor-pointer"
-                >
-                  <option value="">No environment</option>
-                  {environments.map((env) => (
-                    <option key={env.id} value={env.id}>{env.name}</option>
-                  ))}
-                </select>
-                <ChevronDown className="h-3.5 w-3.5 text-stone pointer-events-none absolute right-2" />
-              </div>
+              <Dropdown
+                value={selectedEnvId}
+                onChange={setSelectedEnvId}
+                align="right"
+                options={[
+                  { value: "", label: "No environment" },
+                  ...environments.map((env) => ({ value: env.id, label: env.name })),
+                ]}
+                className="flex items-center gap-1.5 bg-cream border border-line rounded-lg pl-3 pr-2 py-1.5 text-[13px] font-medium text-ink outline-none cursor-pointer transition-colors hover:bg-panel"
+                renderTrigger={(selected, open) => (
+                  <>
+                    <div className="h-1.5 w-1.5 rounded-full bg-sage" />
+                    <span className="text-ink">{selected?.label ?? "No environment"}</span>
+                    <ChevronDown className={`h-3.5 w-3.5 text-stone transition-transform ${open ? "rotate-180" : ""}`} />
+                  </>
+                )}
+              />
             </>
           )}
         </header>
