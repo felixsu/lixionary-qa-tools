@@ -1,12 +1,13 @@
 import os
 import asyncio
 from datetime import datetime, timezone
-from typing import List
-from fastapi import APIRouter, HTTPException, Depends
+from typing import List, Optional
+from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from routes.auth import get_current_user
+from db.mongo import MongoDB
 from config import settings
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
@@ -19,27 +20,34 @@ class FileSavePayload(BaseModel):
 
 class RunScriptPayload(BaseModel):
     filename: str
+    session_id: str
 
-def get_workspace_dir(user_id: str) -> str:
-    # Ensure workspaces are kept within the app storage directory
-    base_dir = "/workspaces"
-    user_workspace = os.path.join(base_dir, user_id)
-    os.makedirs(user_workspace, exist_ok=True)
-    return user_workspace
+def get_workspace_dir(user_id: str, session_id: str) -> str:
+    path = os.path.join("/workspaces", user_id, session_id)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 def sanitize_filename(filename: str) -> str:
-    # Restrict to flat python files to prevent directory traversal
     base = os.path.basename(filename)
     if not base.endswith(".py"):
         raise HTTPException(status_code=400, detail="Only python (.py) files are supported")
     return base
 
+async def validate_session_owner(session_id: str, user_id: str):
+    sessions_col = MongoDB.get_collection("browser_sessions")
+    session = await sessions_col.find_one({"session_id": session_id, "user_id": user_id})
+    if not session:
+        raise HTTPException(status_code=403, detail="Session not found or access denied")
+
 @router.get("/files")
-async def get_workspace_files(current_user: dict = Depends(get_current_user)):
+async def get_workspace_files(
+    session_id: str = Query(...),
+    current_user: dict = Depends(get_current_user),
+):
     user_id = str(current_user["id"])
-    workspace_dir = get_workspace_dir(user_id)
-    
-    # Initialize main.py with template if empty
+    await validate_session_owner(session_id, user_id)
+    workspace_dir = get_workspace_dir(user_id, session_id)
+
     main_py_path = os.path.join(workspace_dir, "main.py")
     if not os.path.exists(main_py_path):
         default_content = """import os
@@ -57,20 +65,20 @@ print(f"Connecting to VNC browser at: {cdp_url}...")
 try:
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(cdp_url)
-        
+
         # Reuse the first active context and page
         context = browser.contexts[0]
         page = context.pages[0]
-        
+
         print(f"Current page URL: {page.url}")
         print("Executing sample POM test tasks...")
-        
+
         # Example delay call:
         # delay(1500)
-        
+
         # Add your Playwright operations here!
         # e.g., page.click("button")
-        
+
         print("Execution completed successfully!")
 except Exception as e:
     print(f"ERROR: Execution failed: {e}")
@@ -94,20 +102,24 @@ except Exception as e:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to scan workspace: {str(e)}")
 
-    # Sort so main.py is always first, then others alphabetically
     files.sort(key=lambda x: (x["name"] != "main.py", x["name"]))
     return files
 
 @router.get("/files/{filename:path}")
-async def get_workspace_file_content(filename: str, current_user: dict = Depends(get_current_user)):
+async def get_workspace_file_content(
+    filename: str,
+    session_id: str = Query(...),
+    current_user: dict = Depends(get_current_user),
+):
     user_id = str(current_user["id"])
-    workspace_dir = get_workspace_dir(user_id)
+    await validate_session_owner(session_id, user_id)
+    workspace_dir = get_workspace_dir(user_id, session_id)
     safe_name = sanitize_filename(filename)
     file_path = os.path.join(workspace_dir, safe_name)
-    
+
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
-        
+
     try:
         with open(file_path, "r") as f:
             content = f.read()
@@ -116,12 +128,18 @@ async def get_workspace_file_content(filename: str, current_user: dict = Depends
         raise HTTPException(status_code=500, detail=f"Failed to read file: {str(e)}")
 
 @router.post("/files/{filename:path}")
-async def save_workspace_file(filename: str, payload: FileSavePayload, current_user: dict = Depends(get_current_user)):
+async def save_workspace_file(
+    filename: str,
+    payload: FileSavePayload,
+    session_id: str = Query(...),
+    current_user: dict = Depends(get_current_user),
+):
     user_id = str(current_user["id"])
-    workspace_dir = get_workspace_dir(user_id)
+    await validate_session_owner(session_id, user_id)
+    workspace_dir = get_workspace_dir(user_id, session_id)
     safe_name = sanitize_filename(filename)
     file_path = os.path.join(workspace_dir, safe_name)
-    
+
     try:
         with open(file_path, "w") as f:
             f.write(payload.content)
@@ -130,18 +148,23 @@ async def save_workspace_file(filename: str, payload: FileSavePayload, current_u
         raise HTTPException(status_code=500, detail=f"Failed to write file: {str(e)}")
 
 @router.delete("/files/{filename:path}")
-async def delete_workspace_file(filename: str, current_user: dict = Depends(get_current_user)):
+async def delete_workspace_file(
+    filename: str,
+    session_id: str = Query(...),
+    current_user: dict = Depends(get_current_user),
+):
     user_id = str(current_user["id"])
-    workspace_dir = get_workspace_dir(user_id)
+    await validate_session_owner(session_id, user_id)
+    workspace_dir = get_workspace_dir(user_id, session_id)
     safe_name = sanitize_filename(filename)
     file_path = os.path.join(workspace_dir, safe_name)
-    
+
     if safe_name == "main.py":
         raise HTTPException(status_code=400, detail="Cannot delete main.py")
-        
+
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
-        
+
     try:
         os.remove(file_path)
         return {"message": f"File {safe_name} deleted successfully"}
@@ -149,19 +172,22 @@ async def delete_workspace_file(filename: str, current_user: dict = Depends(get_
         raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(e)}")
 
 @router.post("/run")
-async def run_workspace_script(payload: RunScriptPayload, current_user: dict = Depends(get_current_user)):
+async def run_workspace_script(
+    payload: RunScriptPayload,
+    current_user: dict = Depends(get_current_user),
+):
     user_id = str(current_user["id"])
-    workspace_dir = get_workspace_dir(user_id)
+    await validate_session_owner(payload.session_id, user_id)
+    workspace_dir = get_workspace_dir(user_id, payload.session_id)
     safe_name = sanitize_filename(payload.filename)
     file_path = os.path.join(workspace_dir, safe_name)
-    
+
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Script not found")
-        
-    # Inject BROWSER_CDP_URL env variable so script can connect automatically
+
     env = os.environ.copy()
     env["BROWSER_CDP_URL"] = settings.BROWSER_CDP_URL
-    
+
     async def log_streamer():
         yield f"--- Starting execution of {safe_name} ---\n"
         process = None
@@ -174,13 +200,13 @@ async def run_workspace_script(payload: RunScriptPayload, current_user: dict = D
                 env=env
             )
             _running_processes[user_id] = process
-            
+
             while True:
                 line = await process.stdout.readline()
                 if not line:
                     break
                 yield line.decode("utf-8")
-                
+
             await process.wait()
             yield f"\n--- Process finished with exit code {process.returncode} ---\n"
         except Exception as e:
@@ -193,7 +219,7 @@ async def run_workspace_script(payload: RunScriptPayload, current_user: dict = D
                 except Exception:
                     pass
             _running_processes.pop(user_id, None)
-            
+
     return StreamingResponse(log_streamer(), media_type="text/plain")
 
 @router.post("/stop")
@@ -204,7 +230,6 @@ async def stop_workspace_script(current_user: dict = Depends(get_current_user)):
         return {"message": "No script is currently running"}
     try:
         process.terminate()
-        # Wait briefly to clean up
         for _ in range(5):
             if process.returncode is not None:
                 break

@@ -92,6 +92,13 @@ export interface BrowserProfile {
   createdAt: string;
 }
 
+export interface SessionInfo {
+  session_id: string;
+  status: "pending" | "active" | "disconnected" | "error";
+  created_at: string;
+  profile_id: string | null;
+}
+
 interface AppContextType {
   // Auth State
   token: string | null;
@@ -201,13 +208,25 @@ interface AppContextType {
   selectedProfileId: string;
   setSelectedProfileId: (id: string) => void;
 
+  // Browser Session Management
+  userSessions: SessionInfo[];
+  fetchUserSessions: () => Promise<void>;
+  handleCloseSession: (sessionId: string) => Promise<void>;
+  handleReconnectSession: (sessionId: string, profileId?: string) => void;
+
+  // Browser Tab State
+  browserTabs: { index: number; url: string }[];
+  activeTabIndex: number;
+  handleSwitchTab: (index: number) => void;
+  handleCloseTab: (index: number) => void;
+
   // Common operations
   apiCall: (path: string, options?: RequestInit) => Promise<any>;
   handleBrowserNavigate: () => void;
   handleToggleInspect: () => void;
   handlePasteText: (text: string) => void;
   connectBrowserSession: (sessId: string, profileId?: string) => void;
-  handleStartBrowser: (profileId?: string) => void;
+  handleStartBrowser: (profileId?: string) => Promise<void>;
   handleDisconnectBrowser: () => void;
   fetchNetworkLogs: (sessId: string) => Promise<void>;
   handleLogClick: (logId: string) => Promise<void>;
@@ -282,9 +301,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [networkFilter, setNetworkFilter] = useState("");
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [logDetails, setLogDetails] = useState<NetworkDetails | null>(null);
-  const [activePomClass, setActivePomClass] = useState("LandingPage");
-  const [pomClasses, setPomClasses] = useState<string[]>(["LandingPage"]);
-  const [pomElements, setPomElements] = useState<Record<string, RecordedElement[]>>({ "LandingPage": [] });
+  const [activePomClass, setActivePomClass] = useState("MyPage");
+  const [pomClasses, setPomClasses] = useState<string[]>(["MyPage"]);
+  const [pomElements, setPomElements] = useState<Record<string, RecordedElement[]>>({ "MyPage": [] });
   const [selectedElement, setSelectedElement] = useState<any>(null);
   const [selectedElementLocators, setSelectedElementLocators] = useState<any[]>([]);
   const [selectedElementAction, setSelectedElementAction] = useState("click");
@@ -298,6 +317,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Browser Profiles State
   const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string>("");
+
+  // Browser Session Management
+  const [userSessions, setUserSessions] = useState<SessionInfo[]>([]);
+
+  // Browser Tab State
+  const [browserTabs, setBrowserTabs] = useState<{ index: number; url: string }[]>([]);
+  const [activeTabIndex, setActiveTabIndex] = useState(0);
 
   // WebSocket Ref for browser interactions
   const wsRef = useRef<WebSocket | null>(null);
@@ -346,6 +372,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       fetchAuthFunctions();
       fetchCollections();
       fetchProfiles();
+      fetchUserSessions();
     }
   }, [token]);
 
@@ -535,10 +562,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         case "status":
           setIsBrowserConnected(true);
           setBrowserUrl(msg.data.url);
+          setBrowserTabs([{ index: 0, url: msg.data.url }]);
+          setActiveTabIndex(0);
           break;
         case "navigation":
           setBrowserUrl(msg.data.url);
           fetchNetworkLogs(sessId);
+          setActiveTabIndex((ai) => {
+            setBrowserTabs((prev) => prev.map((t, i) => i === ai ? { ...t, url: msg.data.url } : t));
+            return ai;
+          });
+          break;
+        case "tab_opened":
+          setBrowserTabs((prev) => [...prev, { index: msg.data.index, url: msg.data.url }]);
+          break;
+        case "tab_closed":
+          setBrowserTabs((prev) => prev.filter((_, i) => i !== msg.data.index));
+          setActiveTabIndex(msg.data.active_index);
           break;
         case "network_request":
           setNetworkLogs(prev => {
@@ -565,6 +605,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         case "error":
           alert(`Browser session error: ${msg.message}`);
           setIsBrowserConnected(false);
+          fetchUserSessions();
           break;
       }
     };
@@ -573,6 +614,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       console.log("WS Control Connection Closed");
       setIsBrowserConnected(false);
       setInspectMode(false);
+      fetchUserSessions();
     };
 
     ws.onerror = (err) => {
@@ -581,26 +623,84 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   };
 
-  const handleStartBrowser = (profileId?: string) => {
-    const sessId = `session_${Math.random().toString(36).substring(2, 9)}`;
+  const fetchUserSessions = async () => {
+    try {
+      const data = await apiCall("/api/browser/sessions");
+      setUserSessions(data);
+    } catch (e) {
+      console.error("Failed to fetch user sessions", e);
+    }
+  };
+
+  const handleCloseSession = async (sessId: string) => {
+    try {
+      await apiCall(`/api/browser/sessions/${sessId}`, { method: "DELETE" });
+      if (sessId === sessionId) {
+        if (wsRef.current) wsRef.current.close();
+        setIsBrowserConnected(false);
+        setInspectMode(false);
+        setVncUrl("");
+        setSessionId("");
+      }
+      await fetchUserSessions();
+    } catch (e) {
+      console.error("Failed to close session", e);
+    }
+  };
+
+  const handleReconnectSession = (sessId: string, profileId?: string) => {
     setSessionId(sessId);
     setNetworkLogs([]);
     setSelectedElement(null);
     setSelectedElementLocators([]);
-
+    setBrowserTabs([]);
+    setActiveTabIndex(0);
     setVncUrl(`http://localhost:8080/vnc.html?autoconnect=true&resize=scale&password=`);
-
     connectBrowserSession(sessId, profileId);
   };
 
+  const handleStartBrowser = async (profileId?: string) => {
+    try {
+      const { session_id: sessId } = await apiCall("/api/browser/sessions", { method: "POST" });
+      setSessionId(sessId);
+      setNetworkLogs([]);
+      setSelectedElement(null);
+      setSelectedElementLocators([]);
+      setBrowserTabs([]);
+      setActiveTabIndex(0);
+      setVncUrl(`http://localhost:8080/vnc.html?autoconnect=true&resize=scale&password=`);
+      connectBrowserSession(sessId, profileId);
+      await fetchUserSessions();
+    } catch (e: any) {
+      console.error("Failed to create browser session:", e.message);
+    }
+  };
+
   const handleDisconnectBrowser = () => {
+    // Close the WebSocket only — the browser session stays alive in the backend
+    // so the user can reconnect later. Use handleCloseSession to fully terminate.
     if (wsRef.current) {
       wsRef.current.close();
     }
     setIsBrowserConnected(false);
     setInspectMode(false);
     setVncUrl("");
-    setSessionId("");
+    setBrowserTabs([]);
+    setActiveTabIndex(0);
+    // Keep sessionId so the UI can show the disconnected state and offer reconnect.
+  };
+
+  const handleSwitchTab = (index: number) => {
+    setActiveTabIndex(index);
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action: "switch_tab", page_index: index }));
+    }
+  };
+
+  const handleCloseTab = (index: number) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action: "close_tab", page_index: index }));
+    }
   };
 
   const handleBrowserNavigate = () => {
@@ -1033,6 +1133,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         fetchProfiles,
         selectedProfileId,
         setSelectedProfileId,
+
+        userSessions,
+        fetchUserSessions,
+        handleCloseSession,
+        handleReconnectSession,
+
+        browserTabs,
+        activeTabIndex,
+        handleSwitchTab,
+        handleCloseTab,
 
         apiCall,
         handleBrowserNavigate,

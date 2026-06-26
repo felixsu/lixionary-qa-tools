@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Globe, Terminal, Eye, Crosshair, Download, Trash2, Plus, FileCode, Play,
   Save, File, Folder, XCircle, Rows, Lock, X, Layers, Code2, Clipboard, Activity,
+  ChevronDown,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
@@ -78,6 +79,14 @@ export default function WebExplorerPage() {
     handleLogClick,
     handleSaveProfile,
     handleDeleteProfile,
+    userSessions,
+    fetchUserSessions,
+    handleCloseSession,
+    handleReconnectSession,
+    browserTabs,
+    activeTabIndex,
+    handleSwitchTab,
+    handleCloseTab,
   } = useAppContext();
 
   const [workspaceFiles, setWorkspaceFiles] = useState<{ name: string; size: number; updatedAt: string }[]>([]);
@@ -93,6 +102,13 @@ export default function WebExplorerPage() {
   const [isScriptRunning, setIsScriptRunning] = useState<boolean>(false);
   const [newFileName, setNewFileName] = useState<string>("");
   const [showNewFileModal, setShowNewFileModal] = useState<boolean>(false);
+  const [showSaveToWorkspaceModal, setShowSaveToWorkspaceModal] = useState<boolean>(false);
+  const [saveToWorkspaceFilename, setSaveToWorkspaceFilename] = useState<string>("");
+  const [showSessionsDropdown, setShowSessionsDropdown] = useState<boolean>(false);
+
+  const toClassName = (snake: string) =>
+    snake.replace(/\.py$/, "").split("_").filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join("");
 
   const handleSplitDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -129,8 +145,9 @@ export default function WebExplorerPage() {
   };
 
   const fetchWorkspaceFiles = async () => {
+    if (!sessionId) return;
     try {
-      const data = await apiCall("/api/workspace/files");
+      const data = await apiCall(`/api/workspace/files?session_id=${sessionId}`);
       setWorkspaceFiles(data);
       if (data.length > 0 && !selectedWorkspaceFile) setSelectedWorkspaceFile(data[0].name);
     } catch (e) {
@@ -139,10 +156,10 @@ export default function WebExplorerPage() {
   };
 
   const fetchFileContent = async (filename: string) => {
-    if (!filename) return;
+    if (!filename || !sessionId) return;
     try {
       setIsWorkspaceLoading(true);
-      const res = await apiCall(`/api/workspace/files/${filename}`);
+      const res = await apiCall(`/api/workspace/files/${filename}?session_id=${sessionId}`);
       setWorkspaceFileContent(res.content);
     } catch (e) {
       console.error("Failed to fetch file content", e);
@@ -152,13 +169,12 @@ export default function WebExplorerPage() {
   };
 
   const handleSaveWorkspaceFile = async () => {
-    if (!selectedWorkspaceFile) return;
+    if (!selectedWorkspaceFile || !sessionId) return;
     try {
-      await apiCall(`/api/workspace/files/${selectedWorkspaceFile}`, {
+      await apiCall(`/api/workspace/files/${selectedWorkspaceFile}?session_id=${sessionId}`, {
         method: "POST",
         body: JSON.stringify({ content: workspaceFileContent }),
       });
-      alert(`File ${selectedWorkspaceFile} saved successfully.`);
       fetchWorkspaceFiles();
     } catch (e: any) {
       alert(`Failed to save file: ${e.message}`);
@@ -167,11 +183,11 @@ export default function WebExplorerPage() {
 
   const handleCreateFile = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newFileName) return;
+    if (!newFileName || !sessionId) return;
     let name = newFileName.trim();
     if (!name.endsWith(".py")) name += ".py";
     try {
-      await apiCall(`/api/workspace/files/${name}`, {
+      await apiCall(`/api/workspace/files/${name}?session_id=${sessionId}`, {
         method: "POST",
         body: JSON.stringify({ content: "# New workspace module\n" }),
       });
@@ -185,13 +201,11 @@ export default function WebExplorerPage() {
   };
 
   const handleDeleteFile = async (filename: string) => {
-    if (filename === "main.py") {
-      alert("main.py cannot be deleted.");
-      return;
-    }
+    if (filename === "main.py") { alert("main.py cannot be deleted."); return; }
     if (!confirm(`Are you sure you want to delete ${filename}?`)) return;
+    if (!sessionId) return;
     try {
-      await apiCall(`/api/workspace/files/${filename}`, { method: "DELETE" });
+      await apiCall(`/api/workspace/files/${filename}?session_id=${sessionId}`, { method: "DELETE" });
       if (selectedWorkspaceFile === filename) setSelectedWorkspaceFile("main.py");
       await fetchWorkspaceFiles();
     } catch (e: any) {
@@ -199,12 +213,57 @@ export default function WebExplorerPage() {
     }
   };
 
+  const injectImportIntoMain = async (filename: string) => {
+    if (!sessionId) return;
+    const moduleName = filename.replace(/\.py$/, "");
+    const className = toClassName(filename);
+    const importLine = `from ${moduleName} import ${className}`;
+    try {
+      const res = await apiCall(`/api/workspace/files/main.py?session_id=${sessionId}`);
+      const lines: string[] = res.content.split("\n");
+      if (lines.some((l: string) => l.trim() === importLine)) return; // already imported
+      let lastImportIdx = -1;
+      lines.forEach((l: string, i: number) => {
+        if (/^(import |from )/.test(l)) lastImportIdx = i;
+      });
+      lines.splice(lastImportIdx + 1, 0, importLine);
+      await apiCall(`/api/workspace/files/main.py?session_id=${sessionId}`, {
+        method: "POST",
+        body: JSON.stringify({ content: lines.join("\n") }),
+      });
+    } catch (e) {
+      console.warn("Failed to auto-import into main.py", e);
+    }
+  };
+
+  const handleSaveToWorkspace = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sessionId) { alert("No active session. Start a browser session first."); return; }
+    const code = activeGenCodeTab === "pom" ? generatedPomCode : generatedClientCode;
+    if (!code) return;
+    let name = saveToWorkspaceFilename.trim();
+    if (!name.endsWith(".py")) name += ".py";
+    try {
+      await apiCall(`/api/workspace/files/${name}?session_id=${sessionId}`, {
+        method: "POST",
+        body: JSON.stringify({ content: code }),
+      });
+      if (activeGenCodeTab === "pom") await injectImportIntoMain(name);
+      await fetchWorkspaceFiles();
+      setSelectedWorkspaceFile(name);
+      setShowSaveToWorkspaceModal(false);
+      setSaveToWorkspaceFilename("");
+    } catch (err: any) {
+      alert(`Failed to save to workspace: ${err.message}`);
+    }
+  };
+
   const handleRunScript = async () => {
-    if (!selectedWorkspaceFile) return;
+    if (!selectedWorkspaceFile || !sessionId) return;
     setIsScriptRunning(true);
     setWorkspaceLogs("");
     try {
-      await apiCall(`/api/workspace/files/${selectedWorkspaceFile}`, {
+      await apiCall(`/api/workspace/files/${selectedWorkspaceFile}?session_id=${sessionId}`, {
         method: "POST",
         body: JSON.stringify({ content: workspaceFileContent }),
       });
@@ -215,7 +274,7 @@ export default function WebExplorerPage() {
       const response = await fetch(`/api/workspace/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ filename: selectedWorkspaceFile }),
+        body: JSON.stringify({ filename: selectedWorkspaceFile, session_id: sessionId }),
       });
       if (!response.body) throw new Error("No response body available");
       const reader = response.body.getReader();
@@ -241,8 +300,12 @@ export default function WebExplorerPage() {
   };
 
   useEffect(() => {
-    fetchWorkspaceFiles();
-  }, []);
+    if (sessionId) {
+      fetchWorkspaceFiles();
+      setSelectedWorkspaceFile("");
+      setWorkspaceFileContent("");
+    }
+  }, [sessionId]);
 
   useEffect(() => {
     if (selectedWorkspaceFile) fetchFileContent(selectedWorkspaceFile);
@@ -559,6 +622,50 @@ export default function WebExplorerPage() {
               <Crosshair className="h-3.5 w-3.5" />
               {inspectMode ? "Inspecting" : "Inspect"}
             </button>
+            {/* Sessions dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => { setShowSessionsDropdown((v) => !v); fetchUserSessions(); }}
+                className="h-[34px] px-3 bg-cream border border-line rounded-lg text-[13px] text-graphite hover:bg-panel transition-colors flex items-center gap-1.5"
+              >
+                Sessions <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+              {showSessionsDropdown && (
+                <div className="absolute right-0 top-full mt-1 w-[320px] bg-cream border border-line rounded-xl shadow-[0_8px_24px_rgba(20,20,19,0.12)] z-50 overflow-hidden">
+                  <div className="px-3 py-2 border-b border-line flex items-center justify-between">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone">Your sessions</span>
+                    <button onClick={() => setShowSessionsDropdown(false)} className="text-mute hover:text-graphite">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <div className="max-h-[240px] overflow-y-auto">
+                    {userSessions.length === 0 && (
+                      <p className="text-xs text-mute text-center py-4">No sessions found.</p>
+                    )}
+                    {userSessions.map((s) => (
+                      <div key={s.session_id} className="flex items-center gap-2 px-3 py-2 border-b border-line last:border-0 hover:bg-panel transition-colors">
+                        <span className={`h-2 w-2 rounded-full flex-shrink-0 ${s.status === "active" ? "bg-sage" : s.status === "disconnected" ? "bg-stone" : "bg-danger"}`} />
+                        <span className="font-mono text-[11px] text-graphite flex-1 truncate" title={s.session_id}>{s.session_id}</span>
+                        <span className="text-[10px] text-mute capitalize">{s.status}</span>
+                        {s.status === "disconnected" && (
+                          <button
+                            onClick={() => { handleReconnectSession(s.session_id); setShowSessionsDropdown(false); }}
+                            className="text-[11px] font-medium text-clay hover:text-clay-dark"
+                          >Reconnect</button>
+                        )}
+                        <button
+                          onClick={() => handleCloseSession(s.session_id)}
+                          className="text-mute hover:text-danger transition-colors"
+                          title="Close session"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
             <button
               onClick={handleDisconnectBrowser}
               className="h-[34px] px-3.5 bg-cream border border-line rounded-lg text-[13px] text-graphite hover:bg-panel transition-colors flex items-center gap-1.5"
@@ -583,11 +690,29 @@ export default function WebExplorerPage() {
             >
               Manage profiles
             </button>
+            {/* Pre-connect: show existing sessions to reconnect */}
+            {userSessions.length > 0 && (
+              <div className="flex flex-col gap-1 border border-line rounded-lg px-3 py-2 max-w-[240px]">
+                {userSessions.slice(0, 3).map((s) => (
+                  <div key={s.session_id} className="flex items-center gap-2">
+                    <span className={`h-2 w-2 rounded-full flex-shrink-0 ${s.status === "active" ? "bg-sage" : "bg-stone"}`} />
+                    <span className="font-mono text-[10px] text-graphite truncate flex-1" title={s.session_id}>{s.session_id}</span>
+                    <button
+                      onClick={() => handleReconnectSession(s.session_id)}
+                      className="text-[11px] font-medium text-clay hover:text-clay-dark whitespace-nowrap"
+                    >Reconnect</button>
+                    <button onClick={() => handleCloseSession(s.session_id)} className="text-mute hover:text-danger">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <button
               onClick={() => handleStartBrowser(selectedProfileId)}
               className="h-[34px] px-4 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white flex items-center gap-1.5 transition-colors"
             >
-              <Play className="h-3.5 w-3.5" /> Connect VNC browser
+              <Play className="h-3.5 w-3.5" /> New session
             </button>
           </>
         )}
@@ -619,14 +744,43 @@ export default function WebExplorerPage() {
             </div>
 
             <div ref={containerRef} className="flex-1 overflow-hidden relative bg-ink-950 flex">
-              {viewMode === "browser" &&
-                (vncUrl ? (
-                  <iframe src={vncUrl} className="w-full h-full border-none" title="VNC Browser Frame" />
-                ) : (
-                  <div className="flex h-full w-full items-center justify-center text-cream/40 text-xs">
-                    VNC session initialized. Loading canvas…
-                  </div>
-                ))}
+              {viewMode === "browser" && (
+                <div className="w-full h-full flex flex-col">
+                  {isBrowserConnected && browserTabs.length > 1 && (
+                    <div className="flex items-center gap-0.5 px-2 py-1 bg-ink-900 border-b border-white/10 overflow-x-auto flex-shrink-0">
+                      {browserTabs.map((tab, i) => (
+                        <div
+                          key={tab.index}
+                          onClick={() => handleSwitchTab(i)}
+                          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] cursor-pointer whitespace-nowrap max-w-[180px] select-none transition-colors ${
+                            activeTabIndex === i ? "bg-cream/15 text-cream" : "text-cream/40 hover:bg-cream/10 hover:text-cream/70"
+                          }`}
+                        >
+                          <Globe className="h-3 w-3 flex-shrink-0" />
+                          <span className="truncate">
+                            {tab.url ? (() => { try { return new URL(tab.url).hostname || "New tab"; } catch { return "New tab"; } })() : "New tab"}
+                          </span>
+                          {i > 0 && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleCloseTab(i); }}
+                              className="ml-0.5 text-cream/30 hover:text-danger transition-colors"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {vncUrl ? (
+                    <iframe src={vncUrl} className="w-full flex-1 border-none" title="VNC Browser Frame" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-cream/40 text-xs">
+                      VNC session initialized. Loading canvas…
+                    </div>
+                  )}
+                </div>
+              )}
 
               {viewMode === "workspace" && <div className="w-full h-full flex flex-col overflow-hidden">{renderWorkspacePanel()}</div>}
 
@@ -637,8 +791,34 @@ export default function WebExplorerPage() {
                   </div>
                   <div onMouseDown={handleSplitDragStart} className="h-1 bg-line hover:bg-clay cursor-row-resize transition-colors flex-shrink-0 w-full z-10 select-none" />
                   <div style={{ height: `${100 - workspaceSplitPercent}%` }} className="w-full bg-ink-950 flex flex-col overflow-hidden flex-shrink-0">
+                    {isBrowserConnected && browserTabs.length > 1 && (
+                      <div className="flex items-center gap-0.5 px-2 py-1 bg-ink-900 border-b border-white/10 overflow-x-auto flex-shrink-0">
+                        {browserTabs.map((tab, i) => (
+                          <div
+                            key={tab.index}
+                            onClick={() => handleSwitchTab(i)}
+                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] cursor-pointer whitespace-nowrap max-w-[180px] select-none transition-colors ${
+                              activeTabIndex === i ? "bg-cream/15 text-cream" : "text-cream/40 hover:bg-cream/10 hover:text-cream/70"
+                            }`}
+                          >
+                            <Globe className="h-3 w-3 flex-shrink-0" />
+                            <span className="truncate">
+                              {tab.url ? (() => { try { return new URL(tab.url).hostname || "New tab"; } catch { return "New tab"; } })() : "New tab"}
+                            </span>
+                            {i > 0 && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleCloseTab(i); }}
+                                className="ml-0.5 text-cream/30 hover:text-danger transition-colors"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {vncUrl ? (
-                      <iframe src={vncUrl} className="w-full h-full border-none" title="VNC Browser Frame" />
+                      <iframe src={vncUrl} className="w-full flex-1 border-none" title="VNC Browser Frame" />
                     ) : (
                       <div className="flex h-full items-center justify-center text-cream/40 text-xs">
                         VNC session initialized. Loading canvas…
@@ -821,18 +1001,10 @@ export default function WebExplorerPage() {
                     );
                   })}
                   <button
-                    onClick={async () => {
-                      const code = activeGenCodeTab === "pom" ? generatedPomCode : generatedClientCode;
-                      const defaultFilename = activeGenCodeTab === "pom" ? `${activePomClass.toLowerCase()}_pom.py` : "http_client.py";
-                      const filename = prompt("Enter filename to save to workspace:", defaultFilename);
-                      if (!filename || !code) return;
-                      try {
-                        await apiCall(`/api/workspace/files/${filename}`, { method: "POST", body: JSON.stringify({ content: code }) });
-                        alert(`File ${filename} saved to workspace successfully!`);
-                        fetchWorkspaceFiles();
-                      } catch (err: any) {
-                        alert(`Failed to save to workspace: ${err.message}`);
-                      }
+                    onClick={() => {
+                      const defaultName = activeGenCodeTab === "pom" ? `${activePomClass.toLowerCase()}_page.py` : "http_client.py";
+                      setSaveToWorkspaceFilename(defaultName);
+                      setShowSaveToWorkspaceModal(true);
                     }}
                     disabled={activeGenCodeTab === "pom" ? !generatedPomCode : !generatedClientCode}
                     className="ml-auto text-[11px] font-medium text-clay hover:text-clay-dark transition-colors disabled:opacity-50"
@@ -1044,6 +1216,33 @@ export default function WebExplorerPage() {
               />
             </div>
             <FooterButtons onCancel={() => { setShowNewFileModal(false); setNewFileName(""); }} submitLabel="Create" />
+          </form>
+        </ModalShell>
+      )}
+
+      {/* Save to workspace modal */}
+      {showSaveToWorkspaceModal && (
+        <ModalShell title="Save to workspace" onClose={() => { setShowSaveToWorkspaceModal(false); setSaveToWorkspaceFilename(""); }} width={420}>
+          <form onSubmit={handleSaveToWorkspace} className="flex flex-col gap-5">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[13px] font-medium text-graphite">File name <span className="text-mute font-normal">(snake_case, .py)</span></label>
+              <input
+                type="text"
+                placeholder="e.g. order_page.py"
+                value={saveToWorkspaceFilename}
+                onChange={(e) => setSaveToWorkspaceFilename(e.target.value)}
+                autoFocus
+                required
+                className="h-10 bg-cream border border-line rounded-lg px-3.5 font-mono text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
+              />
+            </div>
+            {saveToWorkspaceFilename && activeGenCodeTab === "pom" && (
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px] font-medium text-mute uppercase tracking-[0.08em]">Class name preview</span>
+                <span className="font-mono text-sm text-clay">{toClassName(saveToWorkspaceFilename)}</span>
+              </div>
+            )}
+            <FooterButtons onCancel={() => { setShowSaveToWorkspaceModal(false); setSaveToWorkspaceFilename(""); }} submitLabel="Save" />
           </form>
         </ModalShell>
       )}

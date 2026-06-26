@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 from typing import Dict, Any, List, Optional
@@ -20,9 +21,8 @@ class BrowserSessionManager:
             # Check if browser is still connected
             if session["browser"].is_connected():
                 if ws_send_callback:
-                    # Update callback
                     session["callback"] = ws_send_callback
-                return session["page"]
+                return cls._active_page(session)
             else:
                 await cls.close_session(session_id)
 
@@ -34,24 +34,12 @@ class BrowserSessionManager:
         # Connect over CDP to VNC browser
         browser = await playwright_mgr.chromium.connect_over_cdp(settings.BROWSER_CDP_URL)
         
-        # Get active context or create new one
-        contexts = browser.contexts
-        if contexts:
-            context = contexts[0]
-        else:
-            context = await browser.new_context(viewport={"width": 1280, "height": 720})
-
-        # Inject cookies/local storage if provided
-        try:
-            # Clear previous session cookies to enforce clean state or new login profile
-            await context.clear_cookies()
-            print(f"Cleared cookies for browser session {session_id}")
-        except Exception as e:
-            print(f"Failed to clear cookies: {e}")
+        # Always create a fresh isolated context — never reuse an existing one
+        context = await browser.new_context(viewport={"width": 1280, "height": 720})
 
         if cookies:
             try:
-                if isinstance(cookies, list):
+                if isinstance(cookies, list) and cookies:
                     await context.add_cookies(cookies)
                     print(f"Successfully injected {len(cookies)} cookies into browser session {session_id}")
             except Exception as e:
@@ -124,7 +112,7 @@ class BrowserSessionManager:
                 el_info = json.loads(element_info_str)
                 
                 # Resolve parent frame locators chain
-                frame_chain = await cls._get_frame_locators_chain(source["frame"], session["page"])
+                frame_chain = await cls._get_frame_locators_chain(source["frame"], cls._active_page(session))
                 el_info["frameLocators"] = frame_chain
                 
                 ranked_locators = rank_locators(el_info)
@@ -170,29 +158,58 @@ class BrowserSessionManager:
         except Exception as e:
             print(f"Error adding inspector init script to context: {e}")
 
-        # Get active page or create one
-        pages = context.pages
-        if pages:
-            page = pages[0]
-        else:
-            page = await context.new_page()
+        # New context always starts empty — create the first page
+        page = await context.new_page()
 
         cls._sessions[session_id] = {
             "playwright_mgr": playwright_mgr,
             "browser": browser,
             "context": context,
-            "page": page,
+            "pages": [page],
+            "active_page_index": 0,
             "callback": ws_send_callback,
-            "inspect_enabled": False
+            "inspect_enabled": False,
         }
 
-        # Setup event listeners
+        # Setup event listeners on the first page
         await cls._setup_listeners(session_id, page)
-        
-        # Inject element inspection javascript overlay script for currently loaded page
         await cls.inject_inspector_script(page, session_id)
 
+        # Listen for new tabs/popups opened inside this session's context
+        async def handle_new_page(new_page: Page):
+            session = cls._sessions.get(session_id)
+            if not session:
+                return
+            idx = len(session["pages"])
+            session["pages"].append(new_page)
+            await cls._setup_listeners(session_id, new_page)
+            await cls.inject_inspector_script(new_page, session_id)
+            if session.get("callback"):
+                await session["callback"]({"type": "tab_opened", "data": {"index": idx, "url": new_page.url}})
+
+            async def on_tab_close():
+                session2 = cls._sessions.get(session_id)
+                if not session2:
+                    return
+                try:
+                    close_idx = session2["pages"].index(new_page)
+                except ValueError:
+                    return
+                session2["pages"].pop(close_idx)
+                if session2["active_page_index"] >= len(session2["pages"]):
+                    session2["active_page_index"] = max(0, len(session2["pages"]) - 1)
+                if session2.get("callback"):
+                    await session2["callback"]({"type": "tab_closed", "data": {"index": close_idx, "active_index": session2["active_page_index"]}})
+
+            new_page.on("close", lambda: asyncio.create_task(on_tab_close()))
+
+        context.on("page", lambda p: asyncio.create_task(handle_new_page(p)))
+
         return page
+
+    @classmethod
+    def _active_page(cls, session: dict) -> Page:
+        return session["pages"][session["active_page_index"]]
 
     @classmethod
     async def close_session(cls, session_id: str):
@@ -200,11 +217,13 @@ class BrowserSessionManager:
             print(f"Closing browser session: {session_id}")
             session = cls._sessions[session_id]
             try:
-                # We do not close the browser since it's a shared VNC instance,
-                # we just disconnect our CDP client and stop the playwright manager.
+                await session["context"].close()
+            except Exception as e:
+                print(f"Error closing context for session {session_id}: {e}")
+            try:
                 await session["playwright_mgr"].stop()
             except Exception as e:
-                print(f"Error closing session: {e}")
+                print(f"Error stopping playwright for session {session_id}: {e}")
             del cls._sessions[session_id]
 
     @classmethod
@@ -665,8 +684,7 @@ class BrowserSessionManager:
                     "    return false;\n"
                     "})()"
                 )
-                # Apply to all active frames in the page
-                for frame in session["page"].frames:
+                for frame in cls._active_page(session).frames:
                     try:
                         await frame.evaluate(eval_script)
                     except Exception as fe:
