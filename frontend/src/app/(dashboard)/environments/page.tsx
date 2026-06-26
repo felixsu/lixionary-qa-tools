@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Plus, Trash } from "lucide-react";
+import { Plus, Trash2, Pencil, X, Check } from "lucide-react";
 import { useAppContext, Environment } from "../../context/AppContext";
 
 export default function EnvironmentsPage() {
@@ -10,15 +10,14 @@ export default function EnvironmentsPage() {
     selectedEnvId,
     setSelectedEnvId,
     handleSaveEnv,
-    handleDeleteEnv
+    handleDeleteEnv,
   } = useAppContext();
 
-  // Local modal states
   const [showEnvModal, setShowEnvModal] = useState(false);
   const [envModalName, setEnvModalName] = useState("");
-  const [envModalVariables, setEnvModalVariables] = useState<{ key: string; value: string; isSecret: boolean }[]>([
-    { key: "", value: "", isSecret: false }
-  ]);
+  const [envModalVariables, setEnvModalVariables] = useState<
+    { key: string; value: string; isSecret: boolean }[]
+  >([{ key: "", value: "", isSecret: false }]);
   const [editingEnvId, setEditingEnvId] = useState<string | null>(null);
 
   const openEnvCreate = () => {
@@ -31,14 +30,16 @@ export default function EnvironmentsPage() {
   const openEnvEdit = (env: Environment) => {
     setEditingEnvId(env.id);
     setEnvModalName(env.name);
-    setEnvModalVariables(env.variables.length ? env.variables : [{ key: "", value: "", isSecret: false }]);
+    setEnvModalVariables(
+      env.variables.length ? env.variables : [{ key: "", value: "", isSecret: false }]
+    );
     setShowEnvModal(true);
   };
 
   const onSaveSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!envModalName) return;
-    const vars = envModalVariables.filter(v => v.key !== "");
+    const vars = envModalVariables.filter((v) => v.key !== "");
     try {
       await handleSaveEnv(envModalName, vars, editingEnvId);
       setShowEnvModal(false);
@@ -48,163 +49,209 @@ export default function EnvironmentsPage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-8 space-y-6">
-      <div className="flex justify-between items-center border-b border-slate-800 pb-4">
-        <div>
-          <h3 className="text-base font-bold text-slate-200">Variable Environments</h3>
-          <p className="text-xs text-slate-500">Manage scopes for environment variables and base URLs substituted inside request parameters.</p>
-        </div>
+    <div className="h-full flex flex-col overflow-hidden">
+      {/* Action bar */}
+      <div className="h-14 flex items-center justify-end px-6 border-b border-line flex-shrink-0">
         <button
           onClick={openEnvCreate}
-          className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-xs px-3.5 py-2 rounded-lg font-bold transition-all shadow-md shadow-indigo-600/10 text-white"
+          className="h-[38px] px-4 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white flex items-center gap-2 transition-colors"
         >
-          <Plus className="h-4 w-4" />
-          Create Environment
+          <Plus className="h-4 w-4" /> Create environment
         </button>
       </div>
 
-      {/* Environments grids */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {environments.map(env => (
-          <div key={env.id} className="border border-slate-850 rounded-2xl bg-slate-900/40 p-5 space-y-4 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between border-b border-slate-850 pb-2.5">
-                <span className="font-bold text-slate-200">{env.name}</span>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => openEnvEdit(env)}
-                    className="text-xs text-indigo-400 hover:underline"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (confirm("Are you sure you want to delete this environment?")) {
-                        await handleDeleteEnv(env.id);
-                      }
-                    }}
-                    className="text-xs text-red-400 hover:underline"
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-
-              {/* Variables list */}
-              <div className="mt-4 space-y-2 max-h-48 overflow-y-auto font-mono text-[11px] text-slate-400">
-                {env.variables.length ? (
-                  env.variables.map((v, idx) => (
-                    <div key={idx} className="flex justify-between bg-slate-950/60 p-2 rounded border border-slate-900">
-                      <span className="text-indigo-400 font-semibold truncate max-w-[120px]">{v.key}:</span>
-                      <span className="text-slate-300 truncate max-w-[120px]" title={v.value}>
-                        {v.isSecret ? "••••••••" : v.value}
-                      </span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-slate-500 italic">No variables defined.</div>
-                )}
-              </div>
+      {/* Grid */}
+      <div className="flex-1 overflow-y-auto p-6">
+        {environments.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
+            <div className="text-base font-medium text-graphite">No environments yet</div>
+            <div className="text-[13px] text-mute max-w-sm leading-relaxed">
+              Create an environment to manage base URLs, tokens, and variables substituted into your requests.
             </div>
           </div>
-        ))}
-      </div>
-
-      {/* CREATE/EDIT ENVIRONMENT MODAL */}
-      {showEnvModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <form onSubmit={onSaveSubmit} className="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-xl space-y-4 shadow-xl">
-            <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">
-              {editingEnvId ? "Edit Environment" : "Create New Environment"}
-            </h3>
-
-            <div>
-              <label className="text-[10px] uppercase font-bold text-slate-400">Environment Name</label>
-              <input
-                type="text"
-                placeholder="e.g. Production, Staging"
-                value={envModalName}
-                onChange={(e) => setEnvModalName(e.target.value)}
-                className="w-full mt-1.5 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500"
-                required
-              />
-            </div>
-
-            <div className="space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
-                <span className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider">Variables</span>
-                <button
-                  type="button"
-                  onClick={() => setEnvModalVariables([...envModalVariables, { key: "", value: "", isSecret: false }])}
-                  className="text-[10px] bg-slate-850 hover:bg-slate-800 px-2 py-0.5 rounded text-indigo-400 font-bold"
-                >
-                  Add Variable
-                </button>
-              </div>
-
-              <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
-                {envModalVariables.map((v, idx) => (
-                  <div key={idx} className="flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="KEY (e.g. BASE_URL)"
-                      value={v.key}
-                      onChange={(e) => {
-                        const newV = [...envModalVariables];
-                        newV[idx].key = e.target.value;
-                        setEnvModalVariables(newV);
-                      }}
-                      className="w-1/2 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none"
-                    />
-                    <input
-                      type="text"
-                      placeholder="Value"
-                      value={v.value}
-                      onChange={(e) => {
-                        const newV = [...envModalVariables];
-                        newV[idx].value = e.target.value;
-                        setEnvModalVariables(newV);
-                      }}
-                      className="w-1/2 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none"
-                    />
-                    <label className="flex items-center gap-1 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={v.isSecret}
-                        onChange={(e) => {
-                          const newV = [...envModalVariables];
-                          newV[idx].isSecret = e.target.checked;
-                          setEnvModalVariables(newV);
-                        }}
-                        className="rounded bg-slate-950 border-slate-800 text-indigo-600 focus:ring-0 focus:ring-offset-0 h-3.5 w-3.5"
-                      />
-                      <span className="text-[9px] text-slate-500 font-semibold uppercase">Secret</span>
-                    </label>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 content-start">
+            {environments.map((env) => {
+              const isActive = env.id === selectedEnvId;
+              return (
+                <div key={env.id} className="bg-cream border border-line rounded-xl overflow-hidden flex flex-col">
+                  <div className="px-5 py-4 flex items-center gap-2">
                     <button
-                      type="button"
-                      onClick={() => setEnvModalVariables(envModalVariables.filter((_, i) => i !== idx))}
-                      className="p-2 text-slate-500 hover:text-red-400"
+                      onClick={() => setSelectedEnvId(env.id)}
+                      className="flex-1 text-left text-sm font-medium text-ink truncate hover:text-clay transition-colors"
+                      title="Set as active environment"
                     >
-                      <Trash className="h-4 w-4" />
+                      {env.name}
+                    </button>
+                    {isActive && (
+                      <span
+                        className="text-[11px] font-medium px-2 py-0.5 rounded-full"
+                        style={{ background: "#e3f5e9", color: "#276749" }}
+                      >
+                        Active
+                      </span>
+                    )}
+                    <button
+                      onClick={() => openEnvEdit(env)}
+                      className="h-7 w-7 rounded-md border border-line flex items-center justify-center hover:bg-panel transition-colors"
+                      title="Edit"
+                    >
+                      <Pencil className="h-3.5 w-3.5 text-graphite" />
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (confirm("Delete this environment?")) await handleDeleteEnv(env.id);
+                      }}
+                      className="h-7 w-7 rounded-md border border-line flex items-center justify-center hover:bg-danger-soft hover:text-danger transition-colors"
+                      title="Delete"
+                    >
+                      <Trash2 className="h-3.5 w-3.5 text-graphite" />
                     </button>
                   </div>
-                ))}
-              </div>
-            </div>
 
-            <div className="flex justify-end gap-3 pt-2">
+                  <div className="border-t border-line px-5 pt-2 pb-3 flex flex-col">
+                    {env.variables.length ? (
+                      env.variables.map((v, idx) => (
+                        <div
+                          key={idx}
+                          className="flex items-baseline gap-3 py-1.5 border-b border-line-soft last:border-0"
+                        >
+                          <span className="font-mono text-[11px] text-clay min-w-[96px] flex-shrink-0 truncate">
+                            {v.key}
+                          </span>
+                          <span
+                            className="font-mono text-[11px] text-stone flex-1 truncate"
+                            title={v.isSecret ? "secret" : v.value}
+                          >
+                            {v.isSecret ? "••••••••" : v.value}
+                          </span>
+                        </div>
+                      ))
+                    ) : (
+                      <span className="text-[11px] text-mute italic py-1.5">No variables defined.</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Modal */}
+      {showEnvModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ background: "rgba(20,20,19,0.5)", backdropFilter: "blur(2px)" }}
+        >
+          <form
+            onSubmit={onSaveSubmit}
+            className="bg-cream rounded-2xl p-8 w-[560px] max-h-[85vh] overflow-y-auto shadow-[0_24px_48px_-12px_rgba(20,20,19,0.18)] flex flex-col gap-5"
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="m-0 font-serif text-xl font-medium text-ink">
+                {editingEnvId ? "Edit environment" : "Create environment"}
+              </h2>
               <button
                 type="button"
                 onClick={() => setShowEnvModal(false)}
-                className="px-3.5 py-1.5 rounded-lg border border-slate-800 text-xs font-semibold text-slate-400 hover:bg-slate-800 transition"
+                className="h-8 w-8 rounded-lg border border-line flex items-center justify-center hover:bg-panel transition-colors"
+              >
+                <X className="h-4 w-4 text-graphite" />
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[13px] font-medium text-graphite">Name</label>
+              <input
+                type="text"
+                placeholder="e.g. Production"
+                value={envModalName}
+                onChange={(e) => setEnvModalName(e.target.value)}
+                required
+                autoFocus
+                className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
+              />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label className="text-[13px] font-medium text-graphite">Variables</label>
+              <div className="flex gap-1.5 items-center">
+                <span className="w-[120px] text-[10px] font-semibold uppercase tracking-[0.06em] text-mute">Key</span>
+                <span className="flex-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-mute">Value</span>
+                <span className="w-14 text-[10px] font-semibold uppercase tracking-[0.06em] text-mute text-center">Secret</span>
+                <span className="w-[26px]" />
+              </div>
+
+              {envModalVariables.map((v, idx) => (
+                <div key={idx} className="flex gap-1.5 items-center">
+                  <input
+                    type="text"
+                    placeholder="KEY"
+                    value={v.key}
+                    onChange={(e) => {
+                      const next = [...envModalVariables];
+                      next[idx].key = e.target.value;
+                      setEnvModalVariables(next);
+                    }}
+                    className="w-[120px] h-[34px] bg-cream border border-line rounded-md px-2.5 font-mono text-xs text-ink outline-none focus:border-clay"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Value"
+                    value={v.value}
+                    onChange={(e) => {
+                      const next = [...envModalVariables];
+                      next[idx].value = e.target.value;
+                      setEnvModalVariables(next);
+                    }}
+                    className="flex-1 h-[34px] bg-cream border border-line rounded-md px-2.5 font-mono text-xs text-ink outline-none focus:border-clay"
+                  />
+                  <div className="w-14 flex items-center justify-center">
+                    <input
+                      type="checkbox"
+                      checked={v.isSecret}
+                      onChange={(e) => {
+                        const next = [...envModalVariables];
+                        next[idx].isSecret = e.target.checked;
+                        setEnvModalVariables(next);
+                      }}
+                      className="h-4 w-4 cursor-pointer"
+                      style={{ accentColor: "#cc785c" }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEnvModalVariables(envModalVariables.filter((_, i) => i !== idx))}
+                    className="h-[26px] w-[26px] flex-shrink-0 rounded-md border border-line flex items-center justify-center hover:bg-danger-soft hover:text-danger transition-colors"
+                  >
+                    <Trash2 className="h-3.5 w-3.5 text-graphite" />
+                  </button>
+                </div>
+              ))}
+
+              <button
+                type="button"
+                onClick={() => setEnvModalVariables([...envModalVariables, { key: "", value: "", isSecret: false }])}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 w-fit border border-dashed border-line rounded-md text-xs text-mute hover:border-clay hover:text-clay transition-colors"
+              >
+                <Plus className="h-3.5 w-3.5" /> Add variable
+              </button>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1 border-t border-line">
+              <button
+                type="button"
+                onClick={() => setShowEnvModal(false)}
+                className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition"
+                className="h-10 px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white flex items-center gap-2 transition-colors"
               >
-                Save
+                <Check className="h-4 w-4" /> Save environment
               </button>
             </div>
           </form>

@@ -1,193 +1,234 @@
 "use client";
 
 import React, { useState } from "react";
-import { Plus } from "lucide-react";
+import { Plus, Trash2, Pencil, X, Clock, CheckCircle2, Circle } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, AuthFunction } from "../../context/AppContext";
 
+const DEFAULT_SCRIPT = `async function getToken() {
+  const response = fetchToken("https://api.example.com/oauth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: env.CLIENT_ID, client_secret: env.CLIENT_SECRET })
+  });
+  const data = JSON.parse(response);
+  return data.access_token;
+}`;
+
 export default function AuthFunctionsPage() {
-  const {
-    authFunctions,
-    handleSaveAuthFunc,
-    handleDeleteAuthFunc
-  } = useAppContext();
+  const { authFunctions, handleSaveAuthFunc, handleDeleteAuthFunc } = useAppContext();
 
-  // Local modal states
-  const [showAuthFuncModal, setShowAuthFuncModal] = useState(false);
-  const [authFuncName, setAuthFuncName] = useState("");
-  const [authFuncDesc, setAuthFuncDesc] = useState("");
-  const [authFuncScript, setAuthFuncScript] = useState("");
-  const [authFuncExpiresIn, setAuthFuncExpiresIn] = useState<string>("");
-  const [editingAuthFuncId, setEditingAuthFuncId] = useState<string | null>(null);
+  const [showModal, setShowModal] = useState(false);
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  const [script, setScript] = useState("");
+  const [expiresIn, setExpiresIn] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
 
-  const openAuthFuncCreate = () => {
-    setEditingAuthFuncId(null);
-    setAuthFuncName("");
-    setAuthFuncDesc("");
-    setAuthFuncExpiresIn("");
-    setAuthFuncScript(`// Write code to fetch token contextually\nconst response = fetchToken("https://api.example.com/oauth/token", {\n  method: "POST",\n  headers: { "Content-Type": "application/json" },\n  body: JSON.stringify({ client_id: env.CLIENT_ID, client_secret: env.CLIENT_SECRET })\n});\nconst data = JSON.parse(response);\nreturn data.access_token;`);
-    setShowAuthFuncModal(true);
+  const openCreate = () => {
+    setEditingId(null);
+    setName("");
+    setDesc("");
+    setExpiresIn("");
+    setScript(DEFAULT_SCRIPT);
+    setShowModal(true);
   };
 
-  const openAuthFuncEdit = (func: AuthFunction) => {
-    setEditingAuthFuncId(func.id);
-    setAuthFuncName(func.name);
-    setAuthFuncDesc(func.description);
-    setAuthFuncScript(func.script);
-    setAuthFuncExpiresIn(func.expires_in ? String(func.expires_in) : "");
-    setShowAuthFuncModal(true);
+  const openEdit = (func: AuthFunction) => {
+    setEditingId(func.id);
+    setName(func.name);
+    setDesc(func.description);
+    setScript(func.script);
+    setExpiresIn(func.expires_in ? String(func.expires_in) : "");
+    setShowModal(true);
   };
 
   const onSaveSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!authFuncName || !authFuncScript) return;
-    const expiresSec = authFuncExpiresIn ? parseInt(authFuncExpiresIn, 10) : null;
+    if (!name || !script) return;
     try {
-      await handleSaveAuthFunc(authFuncName, authFuncDesc, authFuncScript, expiresSec, editingAuthFuncId);
-      setShowAuthFuncModal(false);
+      await handleSaveAuthFunc(name, desc, script, expiresIn ? parseInt(expiresIn, 10) : null, editingId);
+      setShowModal(false);
     } catch (err: any) {
       alert(err.message);
     }
   };
 
   return (
-    <div className="h-full overflow-y-auto p-8 space-y-6">
-      <div className="flex justify-between items-center border-b border-slate-800 pb-4">
-        <div>
-          <h3 className="text-base font-bold text-slate-200">Self-Refreshing Auth Functions</h3>
-          <p className="text-xs text-slate-500">Create sandboxed JS snippets to call APIs, get authorization tokens, and keep JWTs active in the background.</p>
-        </div>
+    <div className="h-full flex flex-col overflow-hidden">
+      {/* Action bar */}
+      <div className="h-14 flex items-center justify-end px-6 border-b border-line flex-shrink-0">
         <button
-          onClick={openAuthFuncCreate}
-          className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-xs px-3.5 py-2 rounded-lg font-bold transition-all shadow-md shadow-indigo-600/10 text-white"
+          onClick={openCreate}
+          className="h-[38px] px-4 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white flex items-center gap-2 transition-colors"
         >
-          <Plus className="h-4 w-4" />
-          Create Auth Function
+          <Plus className="h-4 w-4" /> Create auth function
         </button>
       </div>
 
-      {/* Grid lists */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {authFunctions.map(func => (
-          <div key={func.id} className="border border-slate-850 rounded-2xl bg-slate-900/40 p-5 space-y-4 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between border-b border-slate-850 pb-2.5">
-                <span className="font-bold text-slate-200">{func.name}</span>
-                <div className="flex gap-2">
+      {/* Grid */}
+      <div className="flex-1 overflow-y-auto p-6">
+        {authFunctions.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
+            <div className="text-base font-medium text-graphite">No auth functions yet</div>
+            <div className="text-[13px] text-mute max-w-sm leading-relaxed">
+              Create sandboxed JS hooks that fetch and keep authorization tokens fresh in the background.
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 content-start">
+            {authFunctions.map((func) => (
+              <div key={func.id} className="bg-cream border border-line rounded-xl overflow-hidden flex flex-col">
+                <div className="px-5 pt-4 pb-3 flex items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-ink mb-1 truncate">{func.name}</div>
+                    <div className="text-xs text-stone leading-relaxed">
+                      {func.description || "No description provided."}
+                    </div>
+                  </div>
                   <button
-                    onClick={() => openAuthFuncEdit(func)}
-                    className="text-xs text-indigo-400 hover:underline"
+                    onClick={() => openEdit(func)}
+                    className="h-7 w-7 rounded-md border border-line flex items-center justify-center hover:bg-panel transition-colors flex-shrink-0"
+                    title="Edit"
                   >
-                    Edit
+                    <Pencil className="h-3.5 w-3.5 text-graphite" />
                   </button>
                   <button
                     onClick={async () => {
-                      if (confirm("Are you sure you want to delete this auth function?")) {
-                        await handleDeleteAuthFunc(func.id);
-                      }
+                      if (confirm("Delete this auth function?")) await handleDeleteAuthFunc(func.id);
                     }}
-                    className="text-xs text-red-400 hover:underline"
+                    className="h-7 w-7 rounded-md border border-line flex items-center justify-center hover:bg-danger-soft hover:text-danger transition-colors flex-shrink-0"
+                    title="Delete"
                   >
-                    Delete
+                    <Trash2 className="h-3.5 w-3.5 text-graphite" />
                   </button>
                 </div>
-              </div>
 
-              <p className="text-xs text-slate-400 mt-2">{func.description || "No description provided."}</p>
+                <div className="px-5 pb-4">
+                  <pre className="m-0 p-3.5 bg-ink-900 text-cream rounded-lg font-mono text-[11px] leading-relaxed overflow-auto max-h-[110px] whitespace-pre">
+                    {func.script}
+                  </pre>
+                </div>
 
-              <div className="mt-4 bg-slate-950 p-3 rounded-lg border border-slate-900 max-h-40 overflow-y-auto font-mono text-[11px] text-slate-400">
-                <pre className="text-slate-300 leading-relaxed overflow-x-auto whitespace-pre">{func.script}</pre>
+                <div className="px-5 py-3 border-t border-line flex items-center gap-2">
+                  {func.cachedToken ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 text-sage" />
+                  ) : (
+                    <Circle className="h-3.5 w-3.5 text-mute" />
+                  )}
+                  <span
+                    className="text-xs font-medium"
+                    style={{ color: func.cachedToken ? "#276749" : "#8e8b82" }}
+                  >
+                    {func.cachedToken ? "Cached token active" : "No token cached"}
+                  </span>
+                  {func.expires_in ? (
+                    <div className="ml-auto flex items-center gap-1">
+                      <Clock className="h-3.5 w-3.5 text-stone" />
+                      <span className="font-mono text-[11px] text-stone">{func.expires_in}s TTL</span>
+                    </div>
+                  ) : (
+                    <span className="ml-auto text-[11px] text-mute">JWT / default TTL</span>
+                  )}
+                </div>
               </div>
-            </div>
-
-            <div className="text-[10px] text-slate-500 font-semibold border-t border-slate-850/80 pt-3 flex items-center justify-between">
-              <div className="flex flex-col gap-0.5">
-                <span>Token Status:</span>
-                {func.expires_in && <span className="text-[9px] text-slate-500">TTL: {func.expires_in}s</span>}
-              </div>
-              <span className={func.cachedToken ? "text-emerald-400" : "text-amber-400"}>
-                {func.cachedToken ? "Cached Token Active" : "No Token Cached"}
-              </span>
-            </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
 
-      {/* CREATE/EDIT AUTH FUNCTION MODAL */}
-      {showAuthFuncModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <form onSubmit={onSaveSubmit} className="w-full max-w-2xl bg-slate-900 border border-slate-850 rounded-2xl p-6 space-y-4 max-h-[85vh] flex flex-col shadow-2xl">
-            <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">
-              {editingAuthFuncId ? "Edit Auth Function" : "Create Auth Function"}
-            </h3>
+      {/* Modal */}
+      {showModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ background: "rgba(20,20,19,0.5)", backdropFilter: "blur(2px)" }}
+        >
+          <form
+            onSubmit={onSaveSubmit}
+            className="bg-cream rounded-2xl p-8 w-[620px] max-h-[85vh] overflow-y-auto shadow-[0_24px_48px_-12px_rgba(20,20,19,0.18)] flex flex-col gap-5"
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="m-0 font-serif text-xl font-medium text-ink">
+                {editingId ? "Edit auth function" : "Create auth function"}
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowModal(false)}
+                className="h-8 w-8 rounded-lg border border-line flex items-center justify-center hover:bg-panel transition-colors"
+              >
+                <X className="h-4 w-4 text-graphite" />
+              </button>
+            </div>
 
-            <div className="grid grid-cols-3 gap-4">
-              <div className="space-y-1">
-                <label className="text-[10px] uppercase font-bold text-slate-400">Hook Name</label>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5 col-span-2">
+                <label className="text-[13px] font-medium text-graphite">Hook name</label>
                 <input
                   type="text"
-                  placeholder="e.g. JWT Refresh"
-                  value={authFuncName}
-                  onChange={(e) => setAuthFuncName(e.target.value)}
-                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500"
+                  placeholder="e.g. Prod OAuth hook"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
                   required
+                  className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
                 />
               </div>
-              <div className="space-y-1">
-                <label className="text-[10px] uppercase font-bold text-slate-400">Description</label>
+              <div className="flex flex-col gap-1.5 col-span-2">
+                <label className="text-[13px] font-medium text-graphite">
+                  Description <span className="font-normal text-mute">Optional</span>
+                </label>
                 <input
                   type="text"
-                  placeholder="e.g. Acquires fresh access credentials"
-                  value={authFuncDesc}
-                  onChange={(e) => setAuthFuncDesc(e.target.value)}
-                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500"
+                  placeholder="What does this hook do?"
+                  value={desc}
+                  onChange={(e) => setDesc(e.target.value)}
+                  className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
                 />
               </div>
-              <div className="space-y-1">
-                <label className="text-[10px] uppercase font-bold text-slate-400">Expires In (secs)</label>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[13px] font-medium text-graphite">Expires-in (seconds)</label>
                 <input
                   type="number"
-                  placeholder="e.g. 3600 (optional)"
-                  value={authFuncExpiresIn}
-                  onChange={(e) => setAuthFuncExpiresIn(e.target.value)}
-                  className="w-full mt-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500"
                   min="0"
+                  placeholder="3600"
+                  value={expiresIn}
+                  onChange={(e) => setExpiresIn(e.target.value)}
+                  className="h-10 bg-cream border border-line rounded-lg px-3.5 font-mono text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
                 />
               </div>
             </div>
 
-            <div className="flex-grow flex flex-col space-y-1 overflow-hidden">
-              <label className="text-[10px] uppercase font-bold text-slate-400">Sandbox Script (JS)</label>
-              <div className="flex-grow border border-slate-800 rounded-xl overflow-hidden mt-1 bg-slate-950">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[13px] font-medium text-graphite">Token fetch script</label>
+              <div className="rounded-lg overflow-hidden border border-line">
                 <Editor
                   height="260px"
                   language="javascript"
                   theme="vs-dark"
-                  value={authFuncScript}
-                  onChange={(val) => setAuthFuncScript(val || "")}
+                  value={script}
+                  onChange={(val) => setScript(val || "")}
                   options={{
                     minimap: { enabled: false },
-                    fontSize: 11,
+                    fontSize: 12,
                     lineNumbers: "on",
-                    scrollbar: { vertical: "auto", horizontal: "hidden" }
+                    scrollbar: { vertical: "auto", horizontal: "hidden" },
                   }}
                 />
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-800/80">
+            <div className="flex justify-end gap-2 pt-1 border-t border-line">
               <button
                 type="button"
-                onClick={() => setShowAuthFuncModal(false)}
-                className="px-3.5 py-1.5 rounded-lg border border-slate-800 text-xs font-semibold text-slate-400 hover:bg-slate-800 transition"
+                onClick={() => setShowModal(false)}
+                className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition font-bold"
+                className="h-10 px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors"
               >
-                Save
+                Save auth function
               </button>
             </div>
           </form>

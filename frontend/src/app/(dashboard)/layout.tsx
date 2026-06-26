@@ -1,10 +1,23 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Cpu, Send, Globe, Database, Key, User, LogOut, ChevronLeft } from "lucide-react";
+import { Cpu, Send, Globe, Database, Key, LogOut, ChevronDown } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
+
+type NavEntry =
+  | { type: "section"; label: string }
+  | { type: "item"; href: string; icon: typeof Send; label: string; badge?: "env" };
+
+const NAV: NavEntry[] = [
+  { type: "section", label: "QA Tools" },
+  { type: "item", href: "/api-explorer", icon: Send, label: "API explorer" },
+  { type: "item", href: "/web-explorer", icon: Globe, label: "Web explorer" },
+  { type: "section", label: "Configuration" },
+  { type: "item", href: "/environments", icon: Database, label: "Environments", badge: "env" },
+  { type: "item", href: "/auth-functions", icon: Key, label: "Auth functions" },
+];
 
 export default function DashboardLayout({
   children,
@@ -18,14 +31,12 @@ export default function DashboardLayout({
     environments,
     selectedEnvId,
     setSelectedEnvId,
-    handleLogout
+    handleLogout,
   } = useAppContext();
 
-  const [isCollapsed, setIsCollapsed] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
 
-  // If not logged in, redirect to login page
   useEffect(() => {
     if (!isLoadingAuth && !token) {
       router.replace("/login");
@@ -34,227 +45,145 @@ export default function DashboardLayout({
 
   if (isLoadingAuth || !token) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-slate-950 text-slate-200">
+      <div className="flex h-screen w-screen items-center justify-center bg-cream text-ink">
         <div className="flex flex-col items-center gap-4">
-          <svg className="animate-spin h-8 w-8 text-indigo-500" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-          </svg>
-          <p className="text-sm font-medium">Authenticating Workspace Session...</p>
+          <div
+            className="h-8 w-8 rounded-full border-2 border-line border-t-clay"
+            style={{ animation: "spin 0.8s linear infinite" }}
+          />
+          <p className="text-sm font-medium text-stone">Authenticating workspace session…</p>
         </div>
       </div>
     );
   }
 
-  // Helper to determine active route highlighting
   const isActive = (path: string) => pathname === path;
 
-  // Title for Header
   const getHeaderTitle = () => {
     switch (pathname) {
       case "/api-explorer":
         return "API Automation Engine";
       case "/web-explorer":
-        return "Web Automation & POM Generator";
+        return "Web automation & POM generator";
       case "/environments":
-        return "Workspace Environments";
+        return "Variable environments";
       case "/auth-functions":
-        return "Dynamic Authentication Hooks";
+        return "Self-refreshing auth functions";
       default:
         return "Lixionary Workspace";
     }
   };
 
+  const showEnvPill = pathname === "/api-explorer" || pathname === "/web-explorer";
+  const userInitial = (user?.name || user?.email || "D").charAt(0).toUpperCase();
+
   return (
-    <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
-      
-      {/* Sidebar Panel */}
-      <aside className={`flex-shrink-0 border-r border-slate-800/80 bg-slate-900/60 flex flex-col justify-between transition-all duration-300 ease-in-out ${
-        isCollapsed ? "w-16" : "w-64"
-      }`}>
-        <div>
-          {/* Logo / Header */}
-          {isCollapsed ? (
-            <div className="h-16 flex items-center justify-center border-b border-slate-800/80">
-              <button
-                onClick={() => setIsCollapsed(false)}
-                className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 shadow-md shadow-indigo-500/20 hover:scale-105 transition-all text-white"
-                title="Expand Sidebar"
-              >
-                <Cpu className="h-5 w-5" />
-              </button>
-            </div>
-          ) : (
-            <div className="h-16 flex items-center justify-between px-5 border-b border-slate-800/80">
-              <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 shadow-md shadow-indigo-500/20">
-                  <Cpu className="h-5 w-5 text-white" />
-                </div>
-                <span className="font-extrabold text-lg tracking-tight bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent">
-                  Lixionary
-                </span>
-              </div>
-              <button
-                onClick={() => setIsCollapsed(true)}
-                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
-                title="Collapse Sidebar"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-            </div>
-          )}
+    <div className="flex h-screen w-screen overflow-hidden bg-cream text-ink font-sans">
 
-          {/* Navigation Menu */}
-          <nav className={`mt-6 space-y-4 ${isCollapsed ? "px-2" : "px-4"}`}>
-            {/* QA Tools Section */}
-            <div className="space-y-1">
-              {!isCollapsed && (
-                <p className="text-[9px] uppercase font-extrabold tracking-wider text-slate-500 px-3 mb-2">
-                  QA Tools
-                </p>
-              )}
-              <Link
-                href="/api-explorer"
-                title="API Automation Explorer"
-                className={`flex items-center rounded-xl transition-all duration-200 ${
-                  isCollapsed ? "justify-center p-3" : "gap-3 px-3 py-2.5 text-xs font-semibold"
-                } ${
-                  isActive("/api-explorer")
-                    ? "bg-indigo-600/10 border border-indigo-500/30 text-indigo-400"
-                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent"
-                }`}
-              >
-                <Send className="h-4 w-4 flex-shrink-0" />
-                {!isCollapsed && <span>API Automation Explorer</span>}
-              </Link>
-
-              <Link
-                href="/web-explorer"
-                title="Web Explorer & POM"
-                className={`flex items-center rounded-xl transition-all duration-200 ${
-                  isCollapsed ? "justify-center p-3" : "gap-3 px-3 py-2.5 text-xs font-semibold"
-                } ${
-                  isActive("/web-explorer")
-                    ? "bg-indigo-600/10 border border-indigo-500/30 text-indigo-400"
-                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent"
-                }`}
-              >
-                <Globe className="h-4 w-4 flex-shrink-0" />
-                {!isCollapsed && <span>Web Explorer & POM</span>}
-              </Link>
-            </div>
-
-            {/* Separator / Divider */}
-            {isCollapsed ? (
-              <div className="border-t border-slate-800/80 my-2 mx-1"></div>
-            ) : (
-              <div className="border-t border-slate-800/30 my-1 mx-3"></div>
-            )}
-
-            {/* Configuration Section */}
-            <div className="space-y-1">
-              {!isCollapsed && (
-                <p className="text-[9px] uppercase font-extrabold tracking-wider text-slate-500 px-3 mb-2">
-                  Configuration
-                </p>
-              )}
-              <Link
-                href="/environments"
-                title={`Environments (${environments.length})`}
-                className={`flex items-center rounded-xl transition-all duration-200 ${
-                  isCollapsed ? "justify-center p-3" : "gap-3 px-3 py-2.5 text-xs font-semibold"
-                } ${
-                  isActive("/environments")
-                    ? "bg-indigo-600/10 border border-indigo-500/30 text-indigo-400"
-                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent"
-                }`}
-              >
-                <Database className="h-4 w-4 flex-shrink-0" />
-                {!isCollapsed && <span>Environments ({environments.length})</span>}
-              </Link>
-
-              <Link
-                href="/auth-functions"
-                title="Auth Hook Functions"
-                className={`flex items-center rounded-xl transition-all duration-200 ${
-                  isCollapsed ? "justify-center p-3" : "gap-3 px-3 py-2.5 text-xs font-semibold"
-                } ${
-                  isActive("/auth-functions")
-                    ? "bg-indigo-600/10 border border-indigo-500/30 text-indigo-400"
-                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent"
-                }`}
-              >
-                <Key className="h-4 w-4 flex-shrink-0" />
-                {!isCollapsed && <span>Auth Hook Functions</span>}
-              </Link>
-            </div>
-          </nav>
+      {/* Sidebar */}
+      <aside className="w-[236px] flex-shrink-0 flex flex-col bg-cream border-r border-line">
+        {/* Brand */}
+        <div className="h-14 flex items-center gap-2.5 px-4 bg-ink-900 flex-shrink-0">
+          <div className="h-7 w-7 rounded-md bg-clay flex items-center justify-center flex-shrink-0">
+            <Cpu className="h-4 w-4 text-cream" />
+          </div>
+          <span className="text-sm font-semibold text-cream">Lixionary</span>
+          <span className="ml-auto text-[11px] text-cream/35">Explorer</span>
         </div>
 
-        {/* User Info Block */}
-        {isCollapsed ? (
-          <div className="p-3 border-t border-slate-800/80 bg-slate-900/30 flex justify-center">
-            <button
-              onClick={handleLogout}
-              className="p-2 rounded-xl text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-              title={`Logout (${user?.name || ""})`}
-            >
-              <LogOut className="h-5 w-5" />
-            </button>
-          </div>
-        ) : (
-          <div className="p-4 border-t border-slate-800/80 bg-slate-900/30">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5 overflow-hidden">
-                <div className="h-9 w-9 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center flex-shrink-0">
-                  <User className="h-4 w-4 text-slate-400" />
+        {/* Nav */}
+        <nav className="flex-1 px-2 py-3 flex flex-col gap-0.5 overflow-y-auto">
+          {NAV.map((entry, i) => {
+            if (entry.type === "section") {
+              return (
+                <div
+                  key={`sec-${i}`}
+                  className={`px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-mute ${
+                    i === 0 ? "pt-2" : "pt-3.5"
+                  }`}
+                >
+                  {entry.label}
                 </div>
-                <div className="overflow-hidden">
-                  <p className="text-xs font-semibold text-slate-200 truncate">{user?.name}</p>
-                  <p className="text-[10px] text-slate-500 truncate">{user?.email}</p>
-                </div>
-              </div>
-              <button
-                onClick={handleLogout}
-                className="p-2 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                title="Logout"
+              );
+            }
+            const Icon = entry.icon;
+            const active = isActive(entry.href);
+            return (
+              <Link
+                key={entry.href}
+                href={entry.href}
+                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors hover:bg-panel"
+                style={{
+                  background: active ? "var(--color-hover)" : "transparent",
+                  borderLeft: `3px solid ${active ? "var(--color-clay)" : "transparent"}`,
+                }}
               >
-                <LogOut className="h-4.5 w-4.5" />
-              </button>
-            </div>
+                <Icon className={`h-3.5 w-3.5 flex-shrink-0 ${active ? "text-clay" : "text-stone"}`} />
+                <span className={`flex-1 text-[13px] ${active ? "font-medium text-clay" : "text-graphite"}`}>
+                  {entry.label}
+                </span>
+                {entry.badge === "env" && environments.length > 0 && (
+                  <span className="font-mono text-[11px] bg-chip text-stone px-1.5 py-0.5 rounded-full">
+                    {environments.length}
+                  </span>
+                )}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {/* User block */}
+        <div className="p-3 border-t border-line flex items-center gap-2.5 flex-shrink-0">
+          <div className="h-8 w-8 rounded-full bg-chip flex items-center justify-center flex-shrink-0">
+            <span className="text-xs font-semibold text-graphite">{userInitial}</span>
           </div>
-        )}
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-medium text-ink truncate">{user?.name || "Developer"}</div>
+            <div className="text-[11px] text-mute truncate">{user?.email || "developer@lixionary.com"}</div>
+          </div>
+          <button
+            onClick={handleLogout}
+            title="Logout"
+            className="p-1.5 rounded-lg text-mute hover:text-danger hover:bg-danger-soft transition-colors"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
+        </div>
       </aside>
 
-      {/* Main Workspace Frame */}
-      <div className="flex-grow flex flex-col overflow-hidden">
-        
-        {/* Header Block */}
-        <header className="h-16 flex items-center justify-between px-8 border-b border-slate-800/80 bg-slate-900/20 backdrop-blur-md">
-          <h2 className="text-lg font-bold tracking-tight text-slate-200">
+      {/* Main */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Header */}
+        <header className="h-14 flex items-center gap-4 px-6 bg-cream border-b border-line flex-shrink-0">
+          <h1 className="flex-1 m-0 font-serif text-[22px] font-medium tracking-[-0.3px] text-ink">
             {getHeaderTitle()}
-          </h2>
+          </h1>
 
-          {/* Context Selector */}
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Active Env:</span>
-              <select
-                value={selectedEnvId}
-                onChange={(e) => setSelectedEnvId(e.target.value)}
-                className="bg-slate-900/80 border border-slate-850 hover:border-slate-700 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500/40 text-slate-300"
-              >
-                <option value="">No Active Environment</option>
-                {environments.map(env => (
-                  <option key={env.id} value={env.id}>{env.name}</option>
-                ))}
-              </select>
-            </div>
-          </div>
+          {showEnvPill && (
+            <>
+              <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-mute">
+                Active env
+              </span>
+              <div className="relative flex items-center gap-1.5 bg-cream border border-line rounded-lg pl-3 pr-2 py-1.5 hover:bg-panel transition-colors">
+                <div className="h-1.5 w-1.5 rounded-full bg-sage" />
+                <select
+                  value={selectedEnvId}
+                  onChange={(e) => setSelectedEnvId(e.target.value)}
+                  className="appearance-none bg-transparent pr-5 text-[13px] font-medium text-ink outline-none cursor-pointer"
+                >
+                  <option value="">No environment</option>
+                  {environments.map((env) => (
+                    <option key={env.id} value={env.id}>{env.name}</option>
+                  ))}
+                </select>
+                <ChevronDown className="h-3.5 w-3.5 text-stone pointer-events-none absolute right-2" />
+              </div>
+            </>
+          )}
         </header>
 
-        {/* Dynamic Route Content */}
-        <main className="flex-grow overflow-hidden relative">
+        {/* Content */}
+        <main className="flex-1 overflow-hidden relative">
           {children}
         </main>
       </div>
