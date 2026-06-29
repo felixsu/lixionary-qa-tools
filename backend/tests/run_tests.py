@@ -15,6 +15,7 @@ from tests.test_profiles import test_serialize_doc
 from tests.test_executor import test_interpolate_variables, test_extract_jwt_expiry_fallback, test_get_valid_auth_token_caching
 from tests.test_generator import test_generate_pom_class_strategies
 from tests.test_workspace import test_sanitize_filename
+from tests.test_admin import test_serialize_user, test_serialize_collection
 
 def run():
     print("Running tests...")
@@ -40,6 +41,12 @@ def run():
         
         test_generate_pom_class_strategies()
         print("✓ test_generate_pom_class_strategies passed")
+        
+        test_serialize_user()
+        print("✓ test_serialize_user passed")
+        
+        test_serialize_collection()
+        print("✓ test_serialize_collection passed")
         
         print("\nAll tests passed successfully!")
     except AssertionError as e:

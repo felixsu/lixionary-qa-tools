@@ -43,11 +43,23 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
             
+        if user.get("disabled", False):
+            raise HTTPException(status_code=403, detail="User account is disabled")
+            
         # Convert ObjectId to string
         user["id"] = str(user["_id"])
         return user
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Could not validate credentials")
+
+async def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    """
+    FastAPI dependency to restrict routes to admin users only.
+    """
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    return current_user
+
 
 @router.post("/google", response_model=TokenResponse)
 async def google_login(payload: GoogleLoginRequest):
@@ -80,6 +92,7 @@ async def google_login(payload: GoogleLoginRequest):
             name = email.split("@")[0].capitalize()
 
     users_col = MongoDB.get_collection("users")
+    is_db_empty = await users_col.count_documents({}) == 0
     user = await users_col.find_one({"googleId": google_id})
 
     if not user:
@@ -89,6 +102,8 @@ async def google_login(payload: GoogleLoginRequest):
             "email": email,
             "name": name,
             "avatarUrl": avatar_url,
+            "role": "admin" if is_db_empty else "member",
+            "disabled": False,
             "createdAt": datetime.now(timezone.utc),
             "updatedAt": datetime.now(timezone.utc)
         }
@@ -97,6 +112,10 @@ async def google_login(payload: GoogleLoginRequest):
         user = new_user
     else:
         user_id = str(user["_id"])
+
+    # Double-check that we do not let a disabled user login
+    if user.get("disabled", False):
+        raise HTTPException(status_code=403, detail="User account is disabled")
 
     # Issue local JWT
     jwt_token = create_jwt_token(user_id, email)
@@ -107,7 +126,9 @@ async def google_login(payload: GoogleLoginRequest):
             "id": user_id,
             "email": email,
             "name": name,
-            "avatarUrl": avatar_url
+            "avatarUrl": avatar_url,
+            "role": user.get("role", "member"),
+            "disabled": user.get("disabled", False)
         }
     }
 
@@ -121,6 +142,7 @@ async def guest_login():
     name = "Guest Developer"
     
     users_col = MongoDB.get_collection("users")
+    is_db_empty = await users_col.count_documents({}) == 0
     user = await users_col.find_one({"googleId": google_id})
 
     if not user:
@@ -129,13 +151,20 @@ async def guest_login():
             "email": email,
             "name": name,
             "avatarUrl": "",
+            "role": "admin" if is_db_empty else "member",
+            "disabled": False,
             "createdAt": datetime.now(timezone.utc),
             "updatedAt": datetime.now(timezone.utc)
         }
         res = await users_col.insert_one(new_user)
         user_id = str(res.inserted_id)
+        user = new_user
     else:
         user_id = str(user["_id"])
+
+    # Double-check that we do not let a disabled user login
+    if user.get("disabled", False):
+        raise HTTPException(status_code=403, detail="User account is disabled")
 
     jwt_token = create_jwt_token(user_id, email)
     
@@ -145,6 +174,8 @@ async def guest_login():
             "id": user_id,
             "email": email,
             "name": name,
-            "avatarUrl": ""
+            "avatarUrl": "",
+            "role": user.get("role", "member"),
+            "disabled": user.get("disabled", False)
         }
     }

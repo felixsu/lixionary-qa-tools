@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db.mongo import MongoDB
 from db.redis_client import RedisClient
-from routes import auth, collections, environments, auth_functions, executor, ai, browser, profiles, workspace
+from routes import auth, collections, environments, auth_functions, executor, ai, browser, profiles, workspace, admin
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -13,8 +13,18 @@ async def lifespan(app: FastAPI):
     try:
         await MongoDB.connect()
         await RedisClient.connect()
+        
+        # Seed initial admin users as requested
+        users_col = MongoDB.get_collection("users")
+        target_emails = ["felix.soewito@gmail.com", "felix.soewito@ninjavan.co"]
+        res = await users_col.update_many(
+            {"email": {"$in": target_emails}},
+            {"$set": {"role": "admin"}}
+        )
+        if res.modified_count > 0:
+            print(f"Seeded/promoted {res.modified_count} users to admin role.")
     except Exception as e:
-        print(f"ERROR: Failed to connect to services on boot: {e}")
+        print(f"ERROR: Failed to connect to services or seed on boot: {e}")
     
     yield
     
@@ -47,6 +57,7 @@ app.include_router(ai.router)
 app.include_router(browser.router)
 app.include_router(profiles.router)
 app.include_router(workspace.router)
+app.include_router(admin.router)
 
 @app.get("/")
 def read_root():

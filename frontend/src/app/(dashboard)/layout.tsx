@@ -3,7 +3,7 @@
 import React, { useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Cpu, Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Cpu, Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import Dropdown from "../components/Dropdown";
 
@@ -84,6 +84,10 @@ export default function DashboardLayout({
         return "Variable environments";
       case "/auth-functions":
         return "Self-refreshing auth functions";
+      case "/admin-console":
+        return "Admin console";
+      case "/user-management":
+        return "User management";
       default:
         return "Lixionary Workspace";
     }
@@ -91,6 +95,15 @@ export default function DashboardLayout({
 
   const showEnvPill = pathname === "/api-explorer" || pathname === "/web-explorer";
   const userInitial = (user?.name || user?.email || "D").charAt(0).toUpperCase();
+
+  const sidebarNavItems = [...NAV];
+  if (user?.role === "admin") {
+    sidebarNavItems.push(
+      { type: "section", label: "Administration" },
+      { type: "item", href: "/admin-console", icon: Shield, label: "Admin console" },
+      { type: "item", href: "/user-management", icon: Users, label: "User management" }
+    );
+  }
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-cream text-ink font-sans">
@@ -115,7 +128,7 @@ export default function DashboardLayout({
 
         {/* Nav */}
         <nav className="flex-1 px-1.5 py-3 flex flex-col gap-0.5 overflow-y-auto overflow-x-hidden">
-          {NAV.map((entry, i) => {
+          {sidebarNavItems.map((entry, i) => {
             if (entry.type === "section") {
               if (collapsed) return null;
               return (
