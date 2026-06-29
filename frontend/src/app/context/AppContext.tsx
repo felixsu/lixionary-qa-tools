@@ -149,10 +149,12 @@ interface AppContextType {
   // API Explorer Response State
   apiResponse: any;
   setApiResponse: (res: any) => void;
+  lastApiResponse: any;
+  setLastApiResponse: (res: any) => void;
   isExecutingApi: boolean;
   setIsExecutingApi: (executing: boolean) => void;
-  responseTab: "pretty" | "headers" | "raw" | "extracted";
-  setResponseTab: (tab: "pretty" | "headers" | "raw" | "extracted") => void;
+  responseTab: "pretty" | "headers" | "raw" | "extracted" | "last";
+  setResponseTab: (tab: "pretty" | "headers" | "raw" | "extracted" | "last") => void;
   showAiModal: boolean;
   setShowAiModal: (show: boolean) => void;
   aiPrompt: string;
@@ -235,6 +237,18 @@ interface AppContextType {
   handleExecuteRequest: () => Promise<void>;
   handleSaveRequest: () => Promise<void>;
   handleCreateRequest: (name: string) => Promise<void>;
+  handleSaveNetworkRequestToCollection: (
+    collectionId: string,
+    requestName: string,
+    requestData: {
+      method: string;
+      url: string;
+      headers: { key: string; value: string }[];
+      queryParams: { key: string; value: string }[];
+      bodyType: string;
+      body: string;
+    }
+  ) => Promise<void>;
   handleCreateCollection: (name: string) => Promise<void>;
   handleImportCollection: (id: string) => Promise<void>;
   handleAddCollaborator: (email: string) => Promise<void>;
@@ -287,8 +301,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // API Explorer Response State
   const [apiResponse, setApiResponse] = useState<any>(null);
+  const [lastApiResponse, setLastApiResponseState] = useState<any>(() => {
+    try {
+      const s = localStorage.getItem("nv_last_api_response");
+      return s ? JSON.parse(s) : null;
+    } catch { return null; }
+  });
+  const setLastApiResponse = (res: any) => {
+    setLastApiResponseState(res);
+    try { localStorage.setItem("nv_last_api_response", JSON.stringify(res)); } catch {}
+  };
   const [isExecutingApi, setIsExecutingApi] = useState(false);
-  const [responseTab, setResponseTab] = useState<"pretty" | "headers" | "raw" | "extracted">("pretty");
+  const [responseTab, setResponseTab] = useState<"pretty" | "headers" | "raw" | "extracted" | "last">("pretty");
   const [showAiModal, setShowAiModal] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [isGeneratingAiParser, setIsGeneratingAiParser] = useState(false);
@@ -831,6 +855,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
 
       setApiResponse(result);
+      if (result.status < 400) {
+        setLastApiResponse(result);
+      }
       fetchEnvironments();
     } catch (e: any) {
       setApiResponse({
@@ -924,6 +951,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } catch (e: any) {
       throw new Error(`Failed to add request: ${e.message}`);
     }
+  };
+
+  const handleSaveNetworkRequestToCollection = async (
+    collectionId: string,
+    requestName: string,
+    requestData: {
+      method: string;
+      url: string;
+      headers: { key: string; value: string }[];
+      queryParams: { key: string; value: string }[];
+      bodyType: string;
+      body: string;
+    }
+  ) => {
+    const col = collections.find(c => c.id === collectionId);
+    if (!col) throw new Error("Collection not found.");
+    const newRequest: RequestItem = {
+      id: `req_${Math.random().toString(36).substring(2, 9)}`,
+      name: requestName,
+      method: requestData.method,
+      url: requestData.url,
+      headers: requestData.headers,
+      queryParams: requestData.queryParams,
+      bodyType: requestData.bodyType,
+      body: requestData.body,
+      authType: "NONE",
+      authConfig: {}
+    };
+    const updatedRequests = [...col.requests, newRequest];
+    await apiCall(`/api/collections/${collectionId}`, {
+      method: "PUT",
+      body: JSON.stringify({ requests: updatedRequests })
+    });
+    await fetchCollections();
   };
 
   const handleCreateCollection = async (name: string) => {
@@ -1106,6 +1167,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         apiResponse,
         setApiResponse,
+        lastApiResponse,
+        setLastApiResponse,
         isExecutingApi,
         setIsExecutingApi,
         responseTab,
@@ -1187,6 +1250,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         handleExecuteRequest,
         handleSaveRequest,
         handleCreateRequest,
+        handleSaveNetworkRequestToCollection,
         handleCreateCollection,
         handleImportCollection,
         handleAddCollaborator,

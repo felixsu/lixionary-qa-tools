@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
+import type { NetworkLog, NetworkDetails } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
 
 const methodStyle = (m: string): React.CSSProperties => {
@@ -65,6 +66,9 @@ export default function WebExplorerPage() {
     setSelectedLogsForClient,
     clientBaseUrl,
 
+    collections,
+    handleSaveNetworkRequestToCollection,
+
     profiles,
     selectedProfileId,
     setSelectedProfileId,
@@ -106,6 +110,16 @@ export default function WebExplorerPage() {
   const [saveToWorkspaceFilename, setSaveToWorkspaceFilename] = useState<string>("");
   const [showSessionsDropdown, setShowSessionsDropdown] = useState<boolean>(false);
   const [isConsoleMinimized, setIsConsoleMinimized] = useState<boolean>(false);
+
+  // Save network log to API Explorer collection
+  const [showSaveToCollectionModal, setShowSaveToCollectionModal] = useState(false);
+  const [pendingSaveLog, setPendingSaveLog] = useState<NetworkLog | null>(null);
+  const [pendingSaveDetails, setPendingSaveDetails] = useState<NetworkDetails | null>(null);
+  const [saveCollectionId, setSaveCollectionId] = useState("");
+  const [saveRequestName, setSaveRequestName] = useState("");
+  const [saveDuplicates, setSaveDuplicates] = useState<{ collectionName: string; requestName: string }[]>([]);
+  const [saveShowDuplicateWarning, setSaveShowDuplicateWarning] = useState(false);
+  const [isSavingToCollection, setIsSavingToCollection] = useState(false);
 
   const pageMethodsRef = useRef<{ name: string; args: string; doc: string }[]>([]);
   const clientMethodsRef = useRef<{ name: string; args: string; doc: string }[]>([]);
@@ -611,6 +625,91 @@ export default function WebExplorerPage() {
       log.method.toLowerCase().includes(networkFilter.toLowerCase())
   );
 
+  // Save network log to collection helpers
+  const logBaseUrl = (url: string) => url.split("?")[0];
+
+  const parseLogQueryParams = (url: string): { key: string; value: string }[] => {
+    try {
+      return Array.from(new URL(url).searchParams.entries()).map(([key, value]) => ({ key, value }));
+    } catch { return []; }
+  };
+
+  const suggestRequestName = (url: string): string => {
+    try {
+      const segments = new URL(url).pathname.split("/").filter(Boolean);
+      return segments[segments.length - 1] || "API Request";
+    } catch { return "API Request"; }
+  };
+
+  const findCollectionDuplicates = (method: string, url: string): { collectionName: string; requestName: string }[] => {
+    const base = logBaseUrl(url);
+    return collections.flatMap(col =>
+      col.requests
+        .filter(req => req.method === method && logBaseUrl(req.url) === base)
+        .map(req => ({ collectionName: col.name, requestName: req.name }))
+    );
+  };
+
+  const handleOpenSaveModal = async (log: NetworkLog, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPendingSaveLog(log);
+    setPendingSaveDetails(null);
+    setSaveRequestName(suggestRequestName(log.url));
+    setSaveCollectionId(collections[0]?.id || "");
+    setSaveDuplicates([]);
+    setSaveShowDuplicateWarning(false);
+    setShowSaveToCollectionModal(true);
+    try {
+      const data = await apiCall(`/api/browser/network/${sessionId}/details/${log.id}`);
+      setPendingSaveDetails(data);
+    } catch { /* non-fatal — save with basic NetworkLog info */ }
+  };
+
+  const handleConfirmSaveToCollection = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingSaveLog || !saveCollectionId || !saveRequestName) return;
+
+    if (!saveShowDuplicateWarning) {
+      const dupes = findCollectionDuplicates(pendingSaveLog.method, pendingSaveLog.url);
+      if (dupes.length) {
+        setSaveDuplicates(dupes);
+        setSaveShowDuplicateWarning(true);
+        return;
+      }
+    }
+
+    const req = pendingSaveDetails?.request;
+    const rawHeaders = req?.headers ?? pendingSaveLog.headers;
+    const headers = Object.entries(rawHeaders || {}).map(([key, value]) => ({ key, value }));
+    const postData = req?.postData || "";
+    let bodyType = "NONE";
+    let body = "";
+    if (postData) {
+      try { JSON.parse(postData); bodyType = "JSON"; } catch { bodyType = "TEXT"; }
+      body = postData;
+    }
+    const fullUrl = req?.url ?? pendingSaveLog.url;
+    const queryParams = parseLogQueryParams(fullUrl);
+    const urlWithoutQuery = logBaseUrl(fullUrl);
+
+    setIsSavingToCollection(true);
+    try {
+      await handleSaveNetworkRequestToCollection(saveCollectionId, saveRequestName, {
+        method: pendingSaveLog.method,
+        url: urlWithoutQuery,
+        headers,
+        queryParams,
+        bodyType,
+        body,
+      });
+      setShowSaveToCollectionModal(false);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setIsSavingToCollection(false);
+    }
+  };
+
   const sectionLabel = "text-[11px] font-semibold uppercase tracking-[0.08em] text-stone flex items-center gap-2";
   const fieldCls = "h-[34px] bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay";
   const iconBtn = "h-6 w-6 rounded-md border border-line flex items-center justify-center hover:bg-panel transition-colors";
@@ -803,6 +902,13 @@ export default function WebExplorerPage() {
                       {log.status === null ? "Pending" : log.status}
                     </span>
                     <span className="font-mono text-[11px] text-graphite flex-1 truncate">{log.url}</span>
+                    <button
+                      onClick={(e) => handleOpenSaveModal(log, e)}
+                      title="Save to API Explorer collection"
+                      className="h-5 w-5 rounded flex items-center justify-center text-stone hover:text-clay hover:bg-line transition-colors flex-shrink-0"
+                    >
+                      <Save className="h-3 w-3" />
+                    </button>
                   </div>
                 </div>
               );
@@ -1267,6 +1373,73 @@ export default function WebExplorerPage() {
             <Play className="h-4 w-4" /> Connect VNC browser
           </button>
         </div>
+      )}
+
+      {/* Save network log to collection modal */}
+      {showSaveToCollectionModal && pendingSaveLog && (
+        <ModalShell
+          title="Save to collection"
+          onClose={() => setShowSaveToCollectionModal(false)}
+          width={460}
+        >
+          <form onSubmit={handleConfirmSaveToCollection} className="flex flex-col gap-5">
+            {saveShowDuplicateWarning && saveDuplicates.length > 0 && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 flex flex-col gap-1">
+                <span className="text-[12px] font-semibold text-amber-800">Duplicate request detected</span>
+                <ul className="text-[12px] text-amber-700 list-disc pl-4">
+                  {saveDuplicates.map((d, i) => (
+                    <li key={i}>
+                      <span className="font-mono">{d.requestName}</span>{" "}
+                      in <span className="font-medium">{d.collectionName}</span>
+                    </li>
+                  ))}
+                </ul>
+                <span className="text-[12px] text-amber-700 mt-0.5">Submit again to save anyway.</span>
+              </div>
+            )}
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[13px] font-medium text-graphite">Collection</label>
+              <select
+                value={saveCollectionId}
+                onChange={(e) => setSaveCollectionId(e.target.value)}
+                required
+                className="h-10 bg-cream border border-line rounded-lg px-3 text-sm text-ink outline-none focus:border-clay"
+              >
+                {collections.length === 0 && (
+                  <option value="" disabled>No collections — create one in API Explorer first</option>
+                )}
+                {collections.map(col => (
+                  <option key={col.id} value={col.id}>{col.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[13px] font-medium text-graphite">Request name</label>
+              <input
+                type="text"
+                value={saveRequestName}
+                onChange={(e) => setSaveRequestName(e.target.value)}
+                autoFocus
+                required
+                className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
+              />
+            </div>
+
+            <div className="flex items-center gap-2 px-3 py-2 bg-panel rounded-lg border border-line">
+              <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded flex-shrink-0" style={methodStyle(pendingSaveLog.method)}>
+                {pendingSaveLog.method}
+              </span>
+              <span className="font-mono text-[11px] text-graphite truncate">{logBaseUrl(pendingSaveLog.url)}</span>
+            </div>
+
+            <FooterButtons
+              onCancel={() => setShowSaveToCollectionModal(false)}
+              submitLabel={isSavingToCollection ? "Saving…" : saveShowDuplicateWarning ? "Save anyway" : "Save"}
+            />
+          </form>
+        </ModalShell>
       )}
 
       {/* New class modal */}

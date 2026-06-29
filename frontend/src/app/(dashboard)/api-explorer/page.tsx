@@ -161,6 +161,7 @@ export default function ApiExplorerPage() {
     setReqParserScript,
 
     apiResponse,
+    lastApiResponse,
     isExecutingApi,
     responseTab,
     setResponseTab,
@@ -194,6 +195,8 @@ export default function ApiExplorerPage() {
   const [bodyCopied, setBodyCopied] = useState(false);
   const [responseCopied, setResponseCopied] = useState(false);
   const [curlCopied, setCurlCopied] = useState(false);
+  const [pythonCopied, setPythonCopied] = useState(false);
+  const [showPythonModal, setShowPythonModal] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [configHeight, setConfigHeight] = useState(250);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -327,6 +330,12 @@ export default function ApiExplorerPage() {
   };
 
   const getResponseText = (): string => {
+    if (responseTab === "last") {
+      if (!lastApiResponse) return "";
+      return typeof lastApiResponse.body === "object"
+        ? JSON.stringify(lastApiResponse.body, null, 2)
+        : String(lastApiResponse.body ?? "");
+    }
     if (!apiResponse) return "";
     if (responseTab === "headers") return JSON.stringify(apiResponse.headers || {}, null, 2);
     if (responseTab === "raw") return JSON.stringify(apiResponse, null, 2);
@@ -359,6 +368,108 @@ export default function ApiExplorerPage() {
     showToast("cURL command copied");
   };
 
+  const buildPython = (): string => {
+    const pyType = (v: any): string =>
+      v === null ? "Optional[Any]"
+      : typeof v === "boolean" ? "bool"
+      : typeof v === "number" ? (Number.isInteger(v) ? "int" : "float")
+      : typeof v === "string" ? "str"
+      : Array.isArray(v) ? "List[Any]"
+      : "Dict[str, Any]";
+
+    const modelFields = (obj: Record<string, any>): string =>
+      Object.entries(obj).map(([k, v]) => `    ${k}: ${pyType(v)}`).join("\n");
+
+    const q = reqQueryParams.filter((p) => p.key !== "");
+    let url = reqUrl;
+    if (q.length) {
+      const qs = q.map((p) => `${encodeURIComponent(p.key)}=${encodeURIComponent(p.value)}`).join("&");
+      url += (url.includes("?") ? "&" : "?") + qs;
+    }
+
+    let requestBodyObj: Record<string, any> | null = null;
+    if (reqBodyType === "JSON" && reqBody) {
+      try { requestBodyObj = JSON.parse(reqBody); } catch { /* ignore */ }
+    }
+    const hasRequestModel = requestBodyObj && typeof requestBodyObj === "object" && !Array.isArray(requestBodyObj);
+
+    const responseBodyObj = lastApiResponse?.body;
+    const hasResponseModel = responseBodyObj && typeof responseBodyObj === "object" && !Array.isArray(responseBodyObj);
+
+    const lines: string[] = [];
+    lines.push("from __future__ import annotations");
+    lines.push("import requests");
+    lines.push("from pydantic import BaseModel");
+    lines.push("from typing import Any, Dict, List, Optional");
+    lines.push("");
+
+    if (hasRequestModel) {
+      lines.push("");
+      lines.push("class RequestBody(BaseModel):");
+      lines.push(modelFields(requestBodyObj!));
+    }
+
+    if (hasResponseModel) {
+      lines.push("");
+      lines.push("class ResponseBody(BaseModel):");
+      lines.push(modelFields(responseBodyObj));
+    }
+
+    const returnType = hasResponseModel ? "ResponseBody" : "dict";
+    lines.push("");
+    lines.push("");
+    lines.push(`def call_api() -> ${returnType}:`);
+    lines.push(`    url = "${url}"`);
+
+    const filteredHeaders = reqHeaders.filter((h) => h.key !== "");
+    if (filteredHeaders.length) {
+      lines.push("    headers = {");
+      filteredHeaders.forEach((h) => {
+        lines.push(`        "${h.key}": "${h.value}",`);
+      });
+      lines.push("    }");
+    } else {
+      lines.push("    headers = {}");
+    }
+
+    if (hasRequestModel) {
+      const fieldInits = Object.entries(requestBodyObj!).map(([k, v]) => {
+        const val = typeof v === "string" ? `"${v}"` : JSON.stringify(v);
+        return `        ${k}=${val},`;
+      }).join("\n");
+      lines.push("    payload = RequestBody(");
+      lines.push(fieldInits);
+      lines.push("    )");
+    }
+
+    const method = reqMethod.toLowerCase();
+    const hasBody = hasRequestModel || (reqBodyType !== "NONE" && reqBody);
+    if (hasBody) {
+      lines.push(`    response = requests.${method}(`);
+      lines.push("        url,");
+      lines.push("        headers=headers,");
+      if (hasRequestModel) {
+        lines.push("        json=payload.model_dump(),");
+      } else {
+        lines.push(`        data=${JSON.stringify(reqBody)},`);
+      }
+      lines.push("    )");
+    } else {
+      lines.push(`    response = requests.${method}(url, headers=headers)`);
+    }
+
+    lines.push("    response.raise_for_status()");
+    if (hasResponseModel) {
+      lines.push("    return ResponseBody(**response.json())");
+    } else {
+      lines.push("    return response.json()");
+    }
+
+    return lines.join("\n");
+  };
+
+  const handleShowPython = () => setShowPythonModal(true);
+
   const handleSplitDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
     const startY = e.clientY;
@@ -385,8 +496,8 @@ export default function ApiExplorerPage() {
     { id: "body", label: "Body" },
   ];
 
-  const responseTabs: ("pretty" | "headers" | "raw" | "extracted")[] = [
-    "pretty", "headers", "raw", "extracted",
+  const responseTabs: ("pretty" | "headers" | "raw" | "extracted" | "last")[] = [
+    "pretty", "headers", "raw", "extracted", "last",
   ];
 
   const inputCls =
@@ -575,6 +686,15 @@ export default function ApiExplorerPage() {
               >
                 {curlCopied ? <Check className="h-3.5 w-3.5 text-sage" /> : <Copy className="h-3.5 w-3.5" />}
                 cURL
+              </button>
+
+              <button
+                onClick={handleShowPython}
+                title="Show Python client code (requests + Pydantic)"
+                className="h-[38px] px-3 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors flex items-center gap-1.5 flex-shrink-0"
+              >
+                <Code2 className="h-3.5 w-3.5" />
+                Show Python
               </button>
 
               <button
@@ -900,36 +1020,48 @@ export default function ApiExplorerPage() {
                         fontWeight: on ? 500 : 400,
                       }}
                     >
-                      {tab}
+                      {tab === "last" ? "Last Response" : tab}
                     </button>
                   );
                 })}
                 <div className="flex-1" />
-                {apiResponse && (
-                  <div className="flex items-center gap-2 px-4">
-                    <span
-                      className="font-mono text-xs font-medium px-2.5 py-0.5 rounded-full"
-                      style={
-                        apiResponse.status < 400
-                          ? { background: "#e3f5e9", color: "#276749" }
-                          : { background: "#fde8e8", color: "#c64545" }
-                      }
-                    >
-                      {apiResponse.status} {apiResponse.statusText}
-                    </span>
-                    <span className="font-mono text-xs text-stone">{apiResponse.executionTimeMs} ms</span>
-                    <button
-                      onClick={() => copyToClipboard(getResponseText(), setResponseCopied)}
-                      title="Copy response"
-                      className="h-7 px-2.5 flex items-center gap-1.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors"
-                    >
-                      {responseCopied ? <Check className="h-3.5 w-3.5 text-sage" /> : <Copy className="h-3.5 w-3.5" />} Copy
-                    </button>
-                  </div>
-                )}
+                {(() => {
+                  const d = responseTab === "last" ? lastApiResponse : apiResponse;
+                  if (!d) return null;
+                  return (
+                    <div className="flex items-center gap-2 px-4">
+                      <span
+                        className="font-mono text-xs font-medium px-2.5 py-0.5 rounded-full"
+                        style={
+                          d.status < 400
+                            ? { background: "#e3f5e9", color: "#276749" }
+                            : { background: "#fde8e8", color: "#c64545" }
+                        }
+                      >
+                        {d.status} {d.statusText}
+                      </span>
+                      <span className="font-mono text-xs text-stone">{d.executionTimeMs} ms</span>
+                      <button
+                        onClick={() => copyToClipboard(getResponseText(), setResponseCopied)}
+                        title="Copy response"
+                        className="h-7 px-2.5 flex items-center gap-1.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors"
+                      >
+                        {responseCopied ? <Check className="h-3.5 w-3.5 text-sage" /> : <Copy className="h-3.5 w-3.5" />} Copy
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
 
-              {!apiResponse ? (
+              {responseTab === "last" ? (
+                <pre className="flex-1 m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap">
+                  {lastApiResponse
+                    ? (typeof lastApiResponse.body === "object"
+                        ? JSON.stringify(lastApiResponse.body, null, 2)
+                        : String(lastApiResponse.body))
+                    : "No successful response recorded yet."}
+                </pre>
+              ) : !apiResponse ? (
                 <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6">
                   <Send className="h-7 w-7 text-mute" />
                   <div className="text-sm font-medium text-mute">Send a request to see the response</div>
@@ -1070,6 +1202,42 @@ export default function ApiExplorerPage() {
           </form>
         </Modal>
       )}
+
+      {showPythonModal && (() => {
+        const code = buildPython();
+        return (
+          <Modal title="Python client" onClose={() => { setShowPythonModal(false); setPythonCopied(false); }} width={680}>
+            <div className="flex flex-col gap-4">
+              <p className="text-[13px] text-stone leading-relaxed">
+                Generated from the current request and last successful response. Uses{" "}
+                <code className="font-mono text-[12px] bg-panel px-1 py-0.5 rounded">requests</code> and{" "}
+                <code className="font-mono text-[12px] bg-panel px-1 py-0.5 rounded">pydantic</code>.
+              </p>
+              <div className="relative">
+                <pre className="m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre rounded-xl max-h-[420px]">
+                  {code}
+                </pre>
+                <button
+                  onClick={() => { copyToClipboard(code, setPythonCopied); showToast("Python code copied"); }}
+                  title="Copy code"
+                  className="absolute top-3 right-3 h-7 px-2.5 flex items-center gap-1.5 bg-ink-800/80 border border-white/10 rounded-md text-xs font-medium text-cream/70 hover:text-cream hover:bg-ink-700 transition-colors"
+                >
+                  {pythonCopied ? <Check className="h-3.5 w-3.5 text-sage" /> : <Copy className="h-3.5 w-3.5" />}
+                  {pythonCopied ? "Copied" : "Copy"}
+                </button>
+              </div>
+              <div className="flex justify-end pt-1 border-t border-line">
+                <button
+                  onClick={() => { setShowPythonModal(false); setPythonCopied(false); }}
+                  className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
 
       {showAiModal && (
         <Modal title="AI agent parser" onClose={() => setShowAiModal(false)} width={560}>
