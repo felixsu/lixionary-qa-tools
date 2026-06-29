@@ -481,6 +481,7 @@ export default function WebExplorerPage() {
   const [profileAuthInjectionType, setProfileAuthInjectionType] = useState<"cookie" | "localStorage">("cookie");
   const [profileAuthInjectionKey, setProfileAuthInjectionKey] = useState("");
   const [profileAuthInjectionDomainOrOrigin, setProfileAuthInjectionDomainOrOrigin] = useState("");
+  const [profileDefaultUrl, setProfileDefaultUrl] = useState("");
   const [showNewClassModal, setShowNewClassModal] = useState(false);
   const [newClassName, setNewClassName] = useState("");
 
@@ -539,11 +540,23 @@ export default function WebExplorerPage() {
     if (profileLocalStorage) {
       try { JSON.parse(profileLocalStorage); } catch { alert("LocalStorage must be a valid JSON object or empty."); return; }
     }
+    if (profileDefaultUrl) {
+      if (!profileDefaultUrl.startsWith("http://") && !profileDefaultUrl.startsWith("https://")) {
+        alert("Default URL must start with http:// or https://");
+        return;
+      }
+      try {
+        new URL(profileDefaultUrl);
+      } catch {
+        alert("Default URL must be a valid URL format.");
+        return;
+      }
+    }
     try {
       const authInjectionVal = profileAuthFunctionId
         ? { type: profileAuthInjectionType, key: profileAuthInjectionKey, domainOrOrigin: profileAuthInjectionDomainOrOrigin }
         : null;
-      await handleSaveProfile(profileName, profileCookies, profileLocalStorage, profileAuthFunctionId || null, authInjectionVal, editingProfileId);
+      await handleSaveProfile(profileName, profileCookies, profileLocalStorage, profileAuthFunctionId || null, authInjectionVal, profileDefaultUrl, editingProfileId);
       handleClearProfileForm();
       alert("Browser profile saved successfully!");
     } catch (err: any) {
@@ -557,6 +570,7 @@ export default function WebExplorerPage() {
     setProfileCookies(profile.cookies || "");
     setProfileLocalStorage(profile.localStorage || "");
     setProfileAuthFunctionId(profile.authFunctionId || "");
+    setProfileDefaultUrl(profile.defaultUrl || "");
     if (profile.authInjection) {
       setProfileAuthInjectionType(profile.authInjection.type || "cookie");
       setProfileAuthInjectionKey(profile.authInjection.key || "");
@@ -574,6 +588,7 @@ export default function WebExplorerPage() {
     setProfileCookies("");
     setProfileLocalStorage("");
     setProfileAuthFunctionId("");
+    setProfileDefaultUrl("");
     setProfileAuthInjectionType("cookie");
     setProfileAuthInjectionKey("");
     setProfileAuthInjectionDomainOrOrigin("");
@@ -913,8 +928,12 @@ export default function WebExplorerPage() {
             type="text"
             value={browserUrl}
             onChange={(e) => setBrowserUrl(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && isBrowserConnected) {
+                handleBrowserNavigate();
+              }
+            }}
             placeholder="https://example.com"
-            disabled={!isBrowserConnected}
             className="flex-1 bg-transparent font-mono text-xs text-ink outline-none disabled:text-stone"
           />
         </div>
@@ -1396,6 +1415,17 @@ export default function WebExplorerPage() {
                       value={profileName}
                       onChange={(e) => setProfileName(e.target.value)}
                       required
+                      className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[13px] font-medium text-graphite">Default URL</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. https://admin.ninjavan.co/orders"
+                      value={profileDefaultUrl}
+                      onChange={(e) => setProfileDefaultUrl(e.target.value)}
                       className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay"
                     />
                   </div>

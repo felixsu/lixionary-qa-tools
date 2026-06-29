@@ -90,6 +90,7 @@ export interface BrowserProfile {
   localStorage: string;
   authFunctionId?: string;
   authInjection?: { type: string; key: string; domainOrOrigin: string };
+  defaultUrl?: string;
   createdAt: string;
 }
 
@@ -242,13 +243,13 @@ interface AppContextType {
   handleSaveAuthFunc: (name: string, description: string, script: string, expires_in: number | null, id: string | null) => Promise<void>;
   handleDeleteAuthFunc: (id: string) => Promise<void>;
 
-  // Profile operations
   handleSaveProfile: (
     name: string,
     cookies: string,
     localStorage: string,
     authFunctionId: string | null,
     authInjection: { type: string; key: string; domainOrOrigin: string } | null,
+    defaultUrl: string,
     id: string | null
   ) => Promise<void>;
   handleDeleteProfile: (id: string) => Promise<void>;
@@ -662,6 +663,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const handleStartBrowser = async (profileId?: string) => {
     try {
+      // Find the profile defaultUrl
+      let targetUrl = "about:blank";
+      if (profileId) {
+        const prof = profiles.find((p) => p.id === profileId);
+        if (prof && prof.defaultUrl) {
+          targetUrl = prof.defaultUrl;
+        }
+      }
+      setBrowserUrl(targetUrl);
+
       const { session_id: sessId } = await apiCall("/api/browser/sessions", { method: "POST" });
       setSessionId(sessId);
       setNetworkLogs([]);
@@ -705,6 +716,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const handleBrowserNavigate = () => {
+    if (!browserUrl) {
+      alert("Please enter a URL.");
+      return;
+    }
+    // Allow about:blank
+    if (browserUrl !== "about:blank") {
+      if (!browserUrl.startsWith("http://") && !browserUrl.startsWith("https://")) {
+        alert("URL must start with http:// or https://");
+        return;
+      }
+      try {
+        new URL(browserUrl);
+      } catch {
+        alert("Please enter a valid URL format.");
+        return;
+      }
+    }
+
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         action: "navigate",
@@ -1000,18 +1029,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     localStorage: string,
     authFunctionId: string | null,
     authInjection: { type: string; key: string; domainOrOrigin: string } | null,
+    defaultUrl: string,
     id: string | null
   ) => {
     try {
       if (id) {
         await apiCall(`/api/profiles/${id}`, {
           method: "PUT",
-          body: JSON.stringify({ name, cookies, localStorage, authFunctionId, authInjection })
+          body: JSON.stringify({ name, cookies, localStorage, authFunctionId, authInjection, defaultUrl })
         });
       } else {
         await apiCall("/api/profiles", {
           method: "POST",
-          body: JSON.stringify({ name, cookies, localStorage, authFunctionId, authInjection })
+          body: JSON.stringify({ name, cookies, localStorage, authFunctionId, authInjection, defaultUrl })
         });
       }
       await fetchProfiles();

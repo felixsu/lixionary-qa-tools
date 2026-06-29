@@ -20,6 +20,7 @@ class ProfileCreate(BaseModel):
     localStorage: Optional[str] = ""
     authFunctionId: Optional[str] = None
     authInjection: Optional[AuthInjection] = None
+    defaultUrl: Optional[str] = ""
 
 class ProfileUpdate(BaseModel):
     name: Optional[str] = None
@@ -27,6 +28,7 @@ class ProfileUpdate(BaseModel):
     localStorage: Optional[str] = None
     authFunctionId: Optional[str] = None
     authInjection: Optional[AuthInjection] = None
+    defaultUrl: Optional[str] = None
 
 def serialize_doc(doc) -> dict:
     if not doc:
@@ -46,6 +48,19 @@ async def get_profiles(current_user: dict = Depends(get_current_user)):
     docs = await cursor.to_list(length=100)
     return [serialize_doc(d) for d in docs]
 
+def validate_url(url: str):
+    if not url:
+        return
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+    try:
+        import urllib.parse
+        parsed = urllib.parse.urlparse(url)
+        if not parsed.netloc:
+            raise ValueError()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid URL format")
+
 @router.post("")
 async def create_profile(payload: ProfileCreate, current_user: dict = Depends(get_current_user)):
     col = MongoDB.get_collection("browser_profiles")
@@ -55,6 +70,8 @@ async def create_profile(payload: ProfileCreate, current_user: dict = Depends(ge
     if existing:
         raise HTTPException(status_code=400, detail="Profile with this name already exists")
 
+    validate_url(payload.defaultUrl)
+
     doc = {
         "ownerId": ObjectId(current_user["id"]),
         "name": payload.name,
@@ -62,6 +79,7 @@ async def create_profile(payload: ProfileCreate, current_user: dict = Depends(ge
         "localStorage": payload.localStorage,
         "authFunctionId": ObjectId(payload.authFunctionId) if payload.authFunctionId else None,
         "authInjection": payload.authInjection.dict() if payload.authInjection else None,
+        "defaultUrl": payload.defaultUrl,
         "createdAt": datetime.now(timezone.utc)
     }
     
@@ -87,6 +105,9 @@ async def update_profile(id: str, payload: ProfileUpdate, current_user: dict = D
         update_fields["authFunctionId"] = ObjectId(payload.authFunctionId) if payload.authFunctionId else None
     if payload.authInjection is not None:
         update_fields["authInjection"] = payload.authInjection.dict() if payload.authInjection else None
+    if payload.defaultUrl is not None:
+        validate_url(payload.defaultUrl)
+        update_fields["defaultUrl"] = payload.defaultUrl
 
     if update_fields:
         await col.update_one({"_id": ObjectId(id)}, {"$set": update_fields})

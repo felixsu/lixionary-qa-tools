@@ -11,7 +11,7 @@ class BrowserSessionManager:
     _sessions = {}
 
     @classmethod
-    async def get_or_create_session(cls, session_id: str, ws_send_callback=None, cookies=None, local_storage=None, user_id=None) -> Page:
+    async def get_or_create_session(cls, session_id: str, ws_send_callback=None, cookies=None, local_storage=None, user_id=None, default_url=None) -> Page:
         """
         Retrieves or creates a Playwright CDP session connecting to the VNC browser.
         Exposes page event listeners to record network traffic and DOM mutations.
@@ -162,6 +162,14 @@ class BrowserSessionManager:
 
         # New context always starts empty — create the first page
         page = await context.new_page()
+
+        # Handle startup navigation
+        url_to_open = default_url if default_url else "about:blank"
+        if url_to_open.startswith("http://") or url_to_open.startswith("https://"):
+            try:
+                await page.goto(url_to_open)
+            except Exception as e:
+                print(f"Failed to navigate to default URL on startup: {e}")
 
         cls._sessions[session_id] = {
             "playwright_mgr": playwright_mgr,

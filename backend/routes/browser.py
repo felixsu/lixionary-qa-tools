@@ -280,6 +280,7 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
     cookies = None
     local_storage = None
     ws_user_id: Optional[str] = None
+    default_url: Optional[str] = None
 
     if token:
         try:
@@ -293,6 +294,7 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
                 profiles_col = MongoDB.get_collection("browser_profiles")
                 profile = await profiles_col.find_one({"_id": ObjectId(profile_id), "ownerId": ObjectId(ws_user_id)})
                 if profile:
+                    default_url = profile.get("defaultUrl")
                     if profile.get("cookies"):
                         try:
                             cookies = json.loads(profile["cookies"])
@@ -357,7 +359,8 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
             send_to_client,
             cookies=cookies,
             local_storage=local_storage,
-            user_id=ws_user_id
+            user_id=ws_user_id,
+            default_url=default_url
         )
         await send_to_client({"type": "status", "data": {"connected": True, "url": page.url}})
 
