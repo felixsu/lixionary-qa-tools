@@ -64,6 +64,7 @@ export interface NetworkDetails {
     method: string;
     headers: Record<string, string>;
     resourceType: string;
+    postData?: string;
   };
   response: {
     url: string;

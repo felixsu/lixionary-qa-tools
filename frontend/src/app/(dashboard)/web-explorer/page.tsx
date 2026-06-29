@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Globe, Terminal, Eye, Crosshair, Download, Trash2, Plus, FileCode, Play,
   Save, File, Folder, XCircle, Rows, Lock, X, Layers, Code2, Clipboard, Activity,
-  ChevronDown,
+  ChevronDown, ChevronUp, RotateCcw,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
@@ -90,7 +90,7 @@ export default function WebExplorerPage() {
   } = useAppContext();
 
   const [workspaceFiles, setWorkspaceFiles] = useState<{ name: string; size: number; updatedAt: string }[]>([]);
-  const [viewMode, setViewMode] = useState<"browser" | "split" | "workspace">("split");
+  const [viewMode, setViewMode] = useState<"browser" | "split" | "workspace" | "network">("split");
   const [explorerWidth, setExplorerWidth] = useState<number>(220);
   const [workspaceSplitPercent, setWorkspaceSplitPercent] = useState<number>(50);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -105,6 +105,21 @@ export default function WebExplorerPage() {
   const [showSaveToWorkspaceModal, setShowSaveToWorkspaceModal] = useState<boolean>(false);
   const [saveToWorkspaceFilename, setSaveToWorkspaceFilename] = useState<string>("");
   const [showSessionsDropdown, setShowSessionsDropdown] = useState<boolean>(false);
+  const [isConsoleMinimized, setIsConsoleMinimized] = useState<boolean>(false);
+
+  const pageMethodsRef = useRef<{ name: string; args: string; doc: string }[]>([]);
+  const clientMethodsRef = useRef<{ name: string; args: string; doc: string }[]>([]);
+  const completionProviderRef = useRef<any>(null);
+  const activeReaderRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (completionProviderRef.current) {
+        completionProviderRef.current.dispose();
+        completionProviderRef.current = null;
+      }
+    };
+  }, []);
 
   const toClassName = (snake: string) =>
     snake.replace(/\.py$/, "").split("_").filter(Boolean)
@@ -144,12 +159,121 @@ export default function WebExplorerPage() {
     document.addEventListener("mouseup", handleMouseUp);
   };
 
+  const parsePythonMethods = (content: string) => {
+    const methods: { name: string; args: string; doc: string }[] = [];
+    const regex = /def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\):(?:\s*\n\s*"""([^"]*)""")?/g;
+    let match;
+    while ((match = regex.exec(content)) !== null) {
+      const name = match[1];
+      if (name === "__init__") continue;
+      const args = match[2].trim();
+      const doc = match[3] ? match[3].trim() : "";
+      methods.push({ name, args, doc });
+    }
+    return methods;
+  };
+
+  const updateMethodsCache = async () => {
+    if (!sessionId) return;
+    try {
+      const pageData = await apiCall(`/api/workspace/files/inspection_code/my_page.py?session_id=${sessionId}`);
+      if (pageData && pageData.content) {
+        pageMethodsRef.current = parsePythonMethods(pageData.content);
+      }
+    } catch (e) {
+      console.error("Failed to parse my_page.py", e);
+    }
+    try {
+      const clientData = await apiCall(`/api/workspace/files/inspection_code/my_client.py?session_id=${sessionId}`);
+      if (clientData && clientData.content) {
+        clientMethodsRef.current = parsePythonMethods(clientData.content);
+      }
+    } catch (e) {
+      console.error("Failed to parse my_client.py", e);
+    }
+  };
+
+  const handleEditorDidMount = (editor: any, monaco: any) => {
+    if (!completionProviderRef.current) {
+      completionProviderRef.current = monaco.languages.registerCompletionItemProvider("python", {
+        triggerCharacters: [".", "p"],
+        provideCompletionItems: (model: any, position: any) => {
+          const lineContent = model.getLineContent(position.lineNumber);
+          const textBeforeCursor = lineContent.substring(0, position.column - 1);
+          
+          if (textBeforeCursor.endsWith("playground_page.")) {
+            return {
+              suggestions: pageMethodsRef.current.map((m) => ({
+                label: m.name,
+                kind: monaco.languages.CompletionItemKind.Method,
+                insertText: m.name + "(" + (m.args.includes("value") ? '"${1:value}"' : "") + ")",
+                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                detail: `(method) ${m.name}(${m.args})`,
+                documentation: m.doc,
+                range: {
+                  startLineNumber: position.lineNumber,
+                  endLineNumber: position.lineNumber,
+                  startColumn: position.column,
+                  endColumn: position.column
+                }
+              }))
+            };
+          }
+          
+          if (textBeforeCursor.endsWith("playground_client.")) {
+            return {
+              suggestions: clientMethodsRef.current.map((m) => ({
+                label: m.name,
+                kind: monaco.languages.CompletionItemKind.Method,
+                insertText: m.name + "(" + (m.args.includes("payload") ? "payload=${1:payload_obj}" : "") + ")",
+                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                detail: `(method) ${m.name}(${m.args})`,
+                documentation: m.doc,
+                range: {
+                  startLineNumber: position.lineNumber,
+                  endLineNumber: position.lineNumber,
+                  startColumn: position.column,
+                  endColumn: position.column
+                }
+              }))
+            };
+          }
+
+          const word = model.getWordUntilPosition(position);
+          if (!textBeforeCursor.includes(".")) {
+            const vars = [
+              { label: "playground_page", detail: "PlaygroundPage instance" },
+              { label: "playground_client", detail: "PlaygroundClient instance" }
+            ];
+            return {
+              suggestions: vars.map((v) => ({
+                label: v.label,
+                kind: monaco.languages.CompletionItemKind.Variable,
+                insertText: v.label,
+                detail: v.detail,
+                range: {
+                  startLineNumber: position.lineNumber,
+                  endLineNumber: position.lineNumber,
+                  startColumn: word.startColumn,
+                  endColumn: word.endColumn
+                }
+              }))
+            };
+          }
+
+          return { suggestions: [] };
+        }
+      });
+    }
+  };
+
   const fetchWorkspaceFiles = async () => {
     if (!sessionId) return;
     try {
       const data = await apiCall(`/api/workspace/files?session_id=${sessionId}`);
       setWorkspaceFiles(data);
       if (data.length > 0 && !selectedWorkspaceFile) setSelectedWorkspaceFile(data[0].name);
+      updateMethodsCache();
     } catch (e) {
       console.error("Failed to fetch workspace files", e);
     }
@@ -178,6 +302,26 @@ export default function WebExplorerPage() {
       fetchWorkspaceFiles();
     } catch (e: any) {
       alert(`Failed to save file: ${e.message}`);
+    }
+  };
+
+  const handleResetWorkspaceFile = async () => {
+    if (!selectedWorkspaceFile || !sessionId) return;
+    if (!confirm(`Are you sure you want to reset ${selectedWorkspaceFile} to its default boilerplate? This will overwrite all your current modifications.`)) {
+      return;
+    }
+    setIsWorkspaceLoading(true);
+    try {
+      const data = await apiCall(`/api/workspace/reset`, {
+        method: "POST",
+        body: JSON.stringify({ sessionId, filename: selectedWorkspaceFile }),
+      });
+      setWorkspaceFileContent(data.content || "");
+      alert("File successfully reset to default boilerplate!");
+    } catch (e: any) {
+      alert(`Failed to reset file: ${e.message}`);
+    } finally {
+      setIsWorkspaceLoading(false);
     }
   };
 
@@ -260,6 +404,12 @@ export default function WebExplorerPage() {
 
   const handleRunScript = async () => {
     if (!selectedWorkspaceFile || !sessionId) return;
+    
+    // Automatically turn off inspect mode if active
+    if (inspectMode) {
+      handleToggleInspect();
+    }
+
     setIsScriptRunning(true);
     setWorkspaceLogs("");
     try {
@@ -278,6 +428,7 @@ export default function WebExplorerPage() {
       });
       if (!response.body) throw new Error("No response body available");
       const reader = response.body.getReader();
+      activeReaderRef.current = reader;
       const decoder = new TextDecoder();
       while (true) {
         const { value, done } = await reader.read();
@@ -287,11 +438,20 @@ export default function WebExplorerPage() {
     } catch (err: any) {
       setWorkspaceLogs((prev) => prev + `\nExecution Error: ${err.message}\n`);
     } finally {
+      activeReaderRef.current = null;
       setIsScriptRunning(false);
     }
   };
 
   const handleStopScript = async () => {
+    if (activeReaderRef.current) {
+      try {
+        await activeReaderRef.current.cancel();
+      } catch (err) {
+        console.warn("Failed to cancel active reader", err);
+      }
+      activeReaderRef.current = null;
+    }
     try {
       await apiCall("/api/workspace/stop", { method: "POST" });
     } catch (e: any) {
@@ -324,63 +484,36 @@ export default function WebExplorerPage() {
   const [showNewClassModal, setShowNewClassModal] = useState(false);
   const [newClassName, setNewClassName] = useState("");
 
-  useEffect(() => {
-    if (isBrowserConnected && sessionId) generatePOM();
-  }, [pomElements, activePomClass, isBrowserConnected, sessionId]);
-
-  useEffect(() => {
-    if (isBrowserConnected && sessionId && selectedLogsForClient.length) generateHttpClient();
-    else setGeneratedClientCode("");
-  }, [selectedLogsForClient, clientBaseUrl, isBrowserConnected, sessionId]);
-
-  const generatePOM = async () => {
-    const classElements = pomElements[activePomClass] || [];
-    try {
-      const res = await apiCall("/api/browser/pom/generate", {
-        method: "POST",
-        body: JSON.stringify({ className: activePomClass, url: browserUrl, elements: classElements }),
-      });
-      setGeneratedPomCode(res.code);
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const generateHttpClient = async () => {
-    try {
-      const res = await apiCall("/api/browser/client/generate", {
-        method: "POST",
-        body: JSON.stringify({ baseUrl: clientBaseUrl, logIds: selectedLogsForClient, sessionId }),
-      });
-      setGeneratedClientCode(res.code);
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const handleAddElementToPOM = () => {
-    if (!selectedElement) return;
+  const handleRecordElementToPOM = async () => {
+    if (!selectedElement || !sessionId) return;
     const strategy = selectedElementLocators[0]?.strategy || "locator (CSS)";
     const selector = selectedElementLocators[0]?.selector || selectedElement.cssSelector;
-    const newEl = {
-      element_id: `el_${Math.random().toString(36).substring(2, 9)}`,
-      method_name: selectedElementMethodName || `click_${selectedElement.tagName}`,
-      strategy,
-      selector,
-      action: selectedElementAction,
-      frameLocators: selectedElement.frameLocators || [],
-    };
-    setPomElements((prev) => {
-      const currentClassEls = prev[activePomClass] || [];
-      if (currentClassEls.some((el) => el.method_name === newEl.method_name)) {
-        alert("Method name already exists in this Page Class.");
-        return prev;
+    const methodName = selectedElementMethodName || `click_${selectedElement.tagName.toLowerCase()}`;
+    
+    try {
+      await apiCall("/api/browser/pom/add", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId,
+          methodName,
+          action: selectedElementAction,
+          strategy,
+          selector,
+          frameLocators: selectedElement.frameLocators || [],
+        }),
+      });
+      
+      setSelectedElement(null);
+      setSelectedElementLocators([]);
+      setSelectedElementMethodName("");
+      
+      await fetchWorkspaceFiles();
+      if (selectedWorkspaceFile === "inspection_code/my_page.py") {
+        await fetchFileContent("inspection_code/my_page.py");
       }
-      return { ...prev, [activePomClass]: [...currentClassEls, newEl] };
-    });
-    setSelectedElement(null);
-    setSelectedElementLocators([]);
-    setSelectedElementMethodName("");
+    } catch (e: any) {
+      alert(e.message || "Failed to record element to POM class.");
+    }
   };
 
   const handleCreateClass = (e: React.FormEvent) => {
@@ -495,7 +628,7 @@ export default function WebExplorerPage() {
                   <File className={`h-3.5 w-3.5 ${active ? "text-clay" : "text-mute"}`} />
                   <span className={`truncate ${active ? "text-clay font-medium" : "text-graphite"}`}>{file.name}</span>
                 </button>
-                {file.name !== "main.py" && (
+                {file.name !== "main.py" && file.name !== "playground.py" && !file.name.startsWith("inspection_code/") && (
                   <button
                     onClick={(e) => { e.stopPropagation(); handleDeleteFile(file.name); }}
                     className="opacity-0 group-hover:opacity-100 text-mute hover:text-danger transition"
@@ -519,13 +652,30 @@ export default function WebExplorerPage() {
             {selectedWorkspaceFile || "No active file"}
           </span>
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleSaveWorkspaceFile}
-              disabled={!selectedWorkspaceFile || isWorkspaceLoading}
-              className="h-[30px] px-3 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors flex items-center gap-1.5 disabled:opacity-50"
-            >
-              <Save className="h-3.5 w-3.5" /> Save
-            </button>
+            {selectedWorkspaceFile.startsWith("inspection_code/") && (
+              <span className="h-[30px] px-3 bg-panel border border-line rounded-md text-xs font-medium text-mute flex items-center gap-1.5 select-none">
+                <Lock className="h-3.5 w-3.5" /> Read-only
+              </span>
+            )}
+            {!selectedWorkspaceFile.startsWith("inspection_code/") && (
+              <button
+                onClick={handleSaveWorkspaceFile}
+                disabled={!selectedWorkspaceFile || isWorkspaceLoading}
+                className="h-[30px] px-3 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Save className="h-3.5 w-3.5" /> Save
+              </button>
+            )}
+            {(selectedWorkspaceFile === "main.py" || selectedWorkspaceFile.startsWith("inspection_code/")) && (
+              <button
+                onClick={handleResetWorkspaceFile}
+                disabled={!selectedWorkspaceFile || isWorkspaceLoading}
+                className="h-[30px] px-3 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                title="Reset file content to default boilerplate"
+              >
+                <RotateCcw className="h-3.5 w-3.5" /> Reset
+              </button>
+            )}
             {isScriptRunning ? (
               <button
                 onClick={handleStopScript}
@@ -558,32 +708,198 @@ export default function WebExplorerPage() {
               theme="vs-dark"
               value={workspaceFileContent}
               onChange={(val) => setWorkspaceFileContent(val || "")}
-              options={{ minimap: { enabled: false }, fontSize: 12, lineNumbers: "on", automaticLayout: true }}
+              onMount={handleEditorDidMount}
+              options={{
+                minimap: { enabled: false },
+                fontSize: 12,
+                lineNumbers: "on",
+                automaticLayout: true,
+                readOnly: selectedWorkspaceFile.startsWith("inspection_code/"),
+              }}
             />
           )}
         </div>
 
-        <div className="h-44 border-t border-line flex flex-col flex-shrink-0">
+        <div className={`border-t border-line flex flex-col flex-shrink-0 transition-all duration-300 ${isConsoleMinimized ? "h-9" : "h-44"}`}>
           <div className="h-9 px-4 border-b border-line flex items-center justify-between bg-cream flex-shrink-0">
-            <span className={sectionLabel}>
-              <Terminal className="h-3.5 w-3.5 text-mute" /> Execution console
-            </span>
-            <button onClick={() => setWorkspaceLogs("")} className="text-[11px] text-mute hover:text-graphite">
-              Clear
+            <button
+              onClick={() => setIsConsoleMinimized(!isConsoleMinimized)}
+              className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+            >
+              <Terminal className="h-3.5 w-3.5 text-mute" />
+              <span className={sectionLabel}>Execution console</span>
+              {isConsoleMinimized ? <ChevronUp className="h-3.5 w-3.5 text-mute" /> : <ChevronDown className="h-3.5 w-3.5 text-mute" />}
             </button>
+            {!isConsoleMinimized && (
+              <button onClick={() => setWorkspaceLogs("")} className="text-[11px] text-mute hover:text-graphite">
+                Clear
+              </button>
+            )}
           </div>
-          <pre className="flex-1 m-0 p-3 bg-ink-900 font-mono text-[11px] text-sage overflow-y-auto whitespace-pre-wrap select-text">
-            {workspaceLogs || "Console output is empty. Run main.py or another script to execute."}
-          </pre>
+          {!isConsoleMinimized && (
+            <pre className="flex-1 m-0 p-3 bg-ink-900 font-mono text-[11px] text-sage overflow-y-auto whitespace-pre-wrap select-text">
+              {workspaceLogs || "Console output is empty. Run main.py or another script to execute."}
+            </pre>
+          )}
         </div>
       </div>
     </div>
   );
 
-  const viewModes: { id: "browser" | "split" | "workspace"; label: string; icon: any }[] = [
+  const renderNetworkPanel = () => {
+    return (
+      <div className="w-full h-full flex overflow-hidden bg-cream font-sans">
+        {/* Left pane: Requests list */}
+        <div className="w-1/2 h-full border-r border-line flex flex-col overflow-hidden bg-panel">
+          <div className="px-4 py-3 border-b border-line flex items-center justify-between flex-shrink-0">
+            <span className={sectionLabel}>
+              <Activity className="h-3.5 w-3.5 text-stone" /> Network requests
+            </span>
+            <div className="flex items-center gap-1.5">
+              <div className="h-1.5 w-1.5 rounded-full bg-danger animate-pulse" />
+              <span className="text-[10px] font-semibold uppercase tracking-[0.05em] text-danger">Recording</span>
+            </div>
+          </div>
+          <div className="p-3 border-b border-line flex-shrink-0">
+            <input
+              type="text"
+              placeholder="Filter by URL or method…"
+              value={networkFilter}
+              onChange={(e) => setNetworkFilter(e.target.value)}
+              className="w-full h-[32px] bg-cream border border-line rounded-lg px-3 text-xs text-graphite outline-none focus:border-clay transition-colors"
+            />
+          </div>
+          <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1">
+            {filteredLogs.map((log) => {
+              const isActive = logDetails?.request.url === log.url && logDetails?.request.method === log.method;
+              return (
+                <div
+                  key={log.id}
+                  onClick={() => handleLogClick(log.id)}
+                  className={`flex flex-col gap-1.5 p-2.5 rounded-lg border cursor-pointer transition-colors ${
+                    isActive ? "bg-cream border-clay" : "bg-cream/40 border-line hover:bg-cream"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded flex-shrink-0" style={methodStyle(log.method)}>
+                      {log.method}
+                    </span>
+                    <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded flex-shrink-0" style={statusStyle(log.status)}>
+                      {log.status === null ? "Pending" : log.status}
+                    </span>
+                    <span className="font-mono text-[11px] text-graphite flex-1 truncate">{log.url}</span>
+                  </div>
+                </div>
+              );
+            })}
+            {filteredLogs.length === 0 && (
+              <div className="flex-1 flex flex-col items-center justify-center text-mute py-12 gap-2">
+                <Activity className="h-8 w-8 text-mute/50" />
+                <p className="text-xs">No network activity captured yet.</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right pane: Selected Request details */}
+        <div className="w-1/2 h-full flex flex-col overflow-hidden bg-cream">
+          {logDetails ? (
+            <div className="flex-1 flex flex-col overflow-hidden">
+              <div className="px-4 py-3 border-b border-line flex items-center justify-between flex-shrink-0 bg-panel">
+                <span className="text-xs font-semibold text-graphite font-mono truncate max-w-[80%]">
+                  {logDetails.request.method} {logDetails.request.url}
+                </span>
+                <button
+                  onClick={() => setLogDetails(null)}
+                  className="h-6 w-6 rounded-md hover:bg-line flex items-center justify-center transition-colors"
+                >
+                  <X className="h-4 w-4 text-mute hover:text-graphite" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 font-mono text-[11px] leading-normal select-text">
+                <Field label="Request URL">
+                  <span className="text-graphite break-all">{logDetails.request.url}</span>
+                </Field>
+                <div className="flex gap-4">
+                  <Field label="Method" className="w-1/2">
+                    <span className="text-clay font-semibold">{logDetails.request.method}</span>
+                  </Field>
+                  <Field label="Status" className="w-1/2">
+                    <span className="font-semibold" style={{ color: (logDetails.response?.status ?? 0) < 400 ? "var(--color-clay)" : "var(--color-danger)" }}>
+                      {logDetails.response ? `${logDetails.response.status} ${logDetails.response.statusText}` : "Pending"}
+                    </span>
+                  </Field>
+                </div>
+                
+                {logDetails.request.postData && (
+                  <Field label="Request Payload">
+                    <pre className="mt-1 p-2 bg-panel rounded border border-line overflow-auto max-h-40 whitespace-pre-wrap font-mono text-[10px]">
+                      {(() => {
+                        try {
+                          return JSON.stringify(JSON.parse(logDetails.request.postData), null, 2);
+                        } catch {
+                          return logDetails.request.postData;
+                        }
+                      })()}
+                    </pre>
+                  </Field>
+                )}
+                
+                {logDetails.response?.body && (
+                  <Field label="Response Payload">
+                    <pre className="mt-1 p-2 bg-panel rounded border border-line overflow-auto max-h-64 whitespace-pre-wrap font-mono text-[10px]">
+                      {(() => {
+                        try {
+                          return JSON.stringify(JSON.parse(logDetails.response.body), null, 2);
+                        } catch {
+                          return logDetails.response.body;
+                        }
+                      })()}
+                    </pre>
+                  </Field>
+                )}
+
+                <Field label="Request Headers">
+                  <div className="mt-1 p-2 bg-panel rounded border border-line flex flex-col gap-1 overflow-auto max-h-40 text-[10px] font-mono">
+                    {Object.entries(logDetails.request.headers || {}).map(([k, v]) => (
+                      <div key={k} className="flex gap-2">
+                        <span className="text-mute flex-shrink-0 font-semibold">{k}:</span>
+                        <span className="text-graphite break-all">{v as string}</span>
+                      </div>
+                    ))}
+                  </div>
+                </Field>
+
+                {logDetails.response?.headers && (
+                  <Field label="Response Headers">
+                    <div className="mt-1 p-2 bg-panel rounded border border-line flex flex-col gap-1 overflow-auto max-h-40 text-[10px] font-mono">
+                      {Object.entries(logDetails.response.headers || {}).map(([k, v]) => (
+                        <div key={k} className="flex gap-2">
+                          <span className="text-mute flex-shrink-0 font-semibold">{k}:</span>
+                          <span className="text-graphite break-all">{v as string}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </Field>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center text-mute gap-2">
+              <Activity className="h-8 w-8 text-mute/30" />
+              <p className="text-xs">Select a request to inspect details.</p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const viewModes: { id: "browser" | "split" | "workspace" | "network"; label: string; icon: any }[] = [
     { id: "browser", label: "Browser", icon: Eye },
     { id: "split", label: "Split", icon: Rows },
     { id: "workspace", label: "Workspace", icon: FileCode },
+    { id: "network", label: "Network Activity", icon: Activity },
   ];
 
   return (
@@ -718,11 +1034,10 @@ export default function WebExplorerPage() {
         )}
       </div>
 
-      {/* Body */}
       {isBrowserConnected ? (
         <div className="flex-1 flex overflow-hidden">
-          {/* Left: browser / workspace */}
-          <div className="w-2/3 h-full flex flex-col overflow-hidden border-r border-line bg-ink-950">
+          {/* Main workspace area - expanded to full-width */}
+          <div className="w-full h-full flex flex-col overflow-hidden bg-ink-950">
             <div className="h-10 bg-cream border-b border-line px-4 flex items-center gap-3 flex-shrink-0">
               <span className="text-[10px] uppercase font-semibold tracking-[0.1em] text-mute">View mode</span>
               <div className="flex bg-cream border border-line rounded-lg p-0.5">
@@ -827,54 +1142,55 @@ export default function WebExplorerPage() {
                   </div>
                 </div>
               )}
-            </div>
-          </div>
 
-          {/* Right: tools panel */}
-          <div className="w-1/3 h-full flex flex-col overflow-hidden bg-cream">
-            <div className="flex-1 overflow-y-auto flex flex-col">
-              {/* Inspect selected node */}
+              {viewMode === "network" && (
+                <div className="w-full h-full flex flex-col overflow-hidden bg-cream">
+                  {renderNetworkPanel()}
+                </div>
+              )}
+
+              {/* Floating element inspector card overlay */}
               {selectedElement && (
-                <div className="border-b border-line">
-                  <div className="px-4 pt-3 pb-2 flex items-center gap-2">
-                    <span className={sectionLabel}>
-                      <Crosshair className="h-3.5 w-3.5 text-clay" /> Inspect selected node
+                <div className="absolute bottom-4 right-4 z-40 w-80 bg-cream border border-line rounded-xl shadow-[0_12px_24px_rgba(20,20,19,0.15)] flex flex-col overflow-hidden">
+                  <div className="px-4 py-3 border-b border-line flex items-center justify-between bg-panel">
+                    <span className="text-xs font-semibold uppercase tracking-[0.08em] text-ink flex items-center gap-2">
+                      <Crosshair className="h-4 w-4 text-clay animate-pulse" /> Inspect Element
                     </span>
                     <button
                       onClick={() => { setSelectedElement(null); setSelectedElementLocators([]); }}
-                      className="ml-auto text-[11px] text-mute hover:text-graphite"
+                      className="h-6 w-6 rounded-md hover:bg-line flex items-center justify-center transition-colors"
                     >
-                      Clear
+                      <X className="h-4 w-4 text-mute hover:text-graphite" />
                     </button>
                   </div>
-                  <div className="px-4 pb-3.5 flex flex-col gap-2.5">
-                    <div className="px-3 py-2.5 bg-panel rounded-lg border border-line">
-                      <div className="font-mono text-xs text-clay mb-0.5">&lt;{selectedElement.tagName}&gt;</div>
-                      <div className="text-xs text-graphite">{selectedElement.text}</div>
+                  
+                  <div className="p-4 flex flex-col gap-3">
+                    <div className="px-3 py-2 bg-panel rounded-lg border border-line font-mono text-[11px] text-graphite break-all max-h-24 overflow-y-auto">
+                      <span className="text-clay font-semibold">&lt;{selectedElement.tagName}&gt;</span> {selectedElement.text}
                       {selectedElement.frameLocators?.length > 0 && (
-                        <div className="text-[10px] text-clay font-medium mt-1">
+                        <div className="text-[10px] text-clay font-semibold mt-1">
                           Frame: {selectedElement.frameLocators.join(" → ")}
                         </div>
                       )}
                     </div>
 
                     <div className="flex flex-col gap-1">
-                      <label className="text-xs font-medium text-stone">Method code name</label>
+                      <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">Method name</label>
                       <input
                         type="text"
                         value={selectedElementMethodName}
                         onChange={(e) => setSelectedElementMethodName(e.target.value)}
-                        placeholder="e.g. click_submit_btn"
-                        className={`${fieldCls} font-mono`}
+                        placeholder={`e.g. click_${selectedElement.tagName.toLowerCase()}`}
+                        className="h-8 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay font-mono"
                       />
                     </div>
 
                     <div className="flex flex-col gap-1">
-                      <label className="text-xs font-medium text-stone">Action type</label>
+                      <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">Action</label>
                       <Dropdown
                         value={selectedElementAction}
                         onChange={setSelectedElementAction}
-                        className="h-[34px] px-2.5 rounded-md text-xs text-ink"
+                        className="h-8 px-2.5 rounded-md text-xs text-ink bg-cream"
                         options={[
                           { value: "click", label: "Click" },
                           { value: "fill", label: "Fill / Type" },
@@ -885,7 +1201,7 @@ export default function WebExplorerPage() {
                     </div>
 
                     <div className="flex flex-col gap-1">
-                      <label className="text-xs font-medium text-stone">Best strategy locator</label>
+                      <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">Locator strategy</label>
                       <Dropdown
                         value="0"
                         onChange={(v) => {
@@ -896,220 +1212,24 @@ export default function WebExplorerPage() {
                           }
                         }}
                         widthClass="w-full"
-                        className="h-[34px] px-2.5 rounded-md text-xs text-ink font-mono"
+                        className="h-8 px-2.5 rounded-md text-xs text-ink font-mono bg-cream"
                         options={selectedElementLocators.map((loc, idx) => {
                           const uniqueness =
-                            loc.unique === true ? " ✅ (Unique)" : loc.unique === false ? ` ⚠️ (Matches: ${loc.count})` : "";
+                            loc.unique === true ? " ✅ (Unique)" : loc.unique === false ? ` ⚠️ (${loc.count} matches)` : "";
                           return { value: String(idx), label: `${loc.strategy}${uniqueness}` };
                         })}
                       />
                     </div>
 
                     <button
-                      onClick={handleAddElementToPOM}
-                      className="h-9 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors"
+                      onClick={handleRecordElementToPOM}
+                      className="mt-1 h-9 bg-clay hover:bg-clay-dark rounded-lg text-xs font-semibold text-white transition-colors shadow-sm flex items-center justify-center gap-1.5"
                     >
-                      Record to page object class
+                      <Save className="h-4 w-4" /> Record to page class
                     </button>
                   </div>
                 </div>
               )}
-
-              {/* Page objects */}
-              <div className="border-b border-line">
-                <div className="px-4 pt-3 pb-2 flex items-center justify-between">
-                  <span className={sectionLabel}>
-                    <Layers className="h-3.5 w-3.5 text-stone" /> Page objects (POM)
-                  </span>
-                  <button onClick={() => setShowNewClassModal(true)} className={iconBtn} title="Create page class">
-                    <Plus className="h-3.5 w-3.5 text-graphite" />
-                  </button>
-                </div>
-                <div className="px-4 pb-2.5">
-                  <Dropdown
-                    value={activePomClass}
-                    onChange={setActivePomClass}
-                    widthClass="w-full"
-                    className="h-[34px] px-2.5 rounded-md text-xs text-ink"
-                    options={pomClasses.map((cls) => ({ value: cls, label: cls }))}
-                  />
-                </div>
-                <div className="px-4 pb-3 flex flex-col gap-0.5">
-                  {(pomElements[activePomClass] || []).length ? (
-                    (pomElements[activePomClass] || []).map((el) => (
-                      <div key={el.element_id} className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-panel">
-                        <Code2 className="h-3.5 w-3.5 text-stone flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <div className="font-mono text-[11px] text-graphite">{el.method_name}()</div>
-                          <div className="font-mono text-[10px] text-mute truncate">{el.strategy}: {el.selector}</div>
-                        </div>
-                        <button
-                          onClick={() =>
-                            setPomElements((prev) => ({
-                              ...prev,
-                              [activePomClass]: prev[activePomClass].filter((item) => item.element_id !== el.element_id),
-                            }))
-                          }
-                          className="h-5 w-5 rounded flex items-center justify-center hover:bg-danger-soft text-mute hover:text-danger transition-colors flex-shrink-0"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </button>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-[11px] text-mute text-center py-2">
-                      No elements recorded. Toggle inspect and click elements in the canvas.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* Code output */}
-              <div className="border-b border-line">
-                <div className="px-4 pt-3 pb-2 flex items-center justify-between">
-                  <span className={sectionLabel}>
-                    <Terminal className="h-3.5 w-3.5 text-stone" /> Code output
-                  </span>
-                  <button
-                    onClick={() => {
-                      const code = activeGenCodeTab === "pom" ? generatedPomCode : generatedClientCode;
-                      const filename = activeGenCodeTab === "pom" ? `${activePomClass}.py` : "http_client.py";
-                      if (code) downloadFile(code, filename);
-                    }}
-                    disabled={activeGenCodeTab === "pom" ? !generatedPomCode : !generatedClientCode}
-                    className="h-[26px] px-2.5 bg-cream border border-line rounded-md text-[11px] font-medium text-graphite hover:bg-panel transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                  >
-                    <Download className="h-3.5 w-3.5" /> Download
-                  </button>
-                </div>
-                <div className="flex border-b border-line mx-4">
-                  {(["pom", "client"] as const).map((t) => {
-                    const on = activeGenCodeTab === t;
-                    return (
-                      <button
-                        key={t}
-                        onClick={() => setActiveGenCodeTab(t)}
-                        className="px-3.5 py-1.5 text-xs transition-colors"
-                        style={{
-                          borderBottom: `2px solid ${on ? "var(--color-clay)" : "transparent"}`,
-                          color: on ? "var(--color-ink)" : "var(--color-stone)",
-                          fontWeight: on ? 500 : 400,
-                        }}
-                      >
-                        {t === "pom" ? "POM class" : "HTTP client"}
-                      </button>
-                    );
-                  })}
-                  <button
-                    onClick={() => {
-                      const defaultName = activeGenCodeTab === "pom" ? `${activePomClass.toLowerCase()}_page.py` : "http_client.py";
-                      setSaveToWorkspaceFilename(defaultName);
-                      setShowSaveToWorkspaceModal(true);
-                    }}
-                    disabled={activeGenCodeTab === "pom" ? !generatedPomCode : !generatedClientCode}
-                    className="ml-auto text-[11px] font-medium text-clay hover:text-clay-dark transition-colors disabled:opacity-50"
-                  >
-                    Save to workspace
-                  </button>
-                </div>
-                <div className="px-4 py-3">
-                  <pre className="m-0 p-3.5 bg-ink-900 text-cream rounded-lg font-mono text-[11px] leading-relaxed overflow-auto max-h-[180px]">
-                    {(activeGenCodeTab === "pom" ? generatedPomCode : generatedClientCode) ||
-                      "// Generated code appears here as you record elements or select network logs."}
-                  </pre>
-                </div>
-              </div>
-
-              {/* Quick paste */}
-              <div className="border-b border-line px-4 py-3">
-                <div className="mb-2">
-                  <span className={sectionLabel}>
-                    <Clipboard className="h-3.5 w-3.5 text-stone" /> Quick paste
-                  </span>
-                </div>
-                <div className="flex gap-1.5">
-                  <input
-                    type="text"
-                    id="lixionary-quick-paste-input"
-                    placeholder="Type or paste value into focused element…"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        const input = e.currentTarget;
-                        if (input.value) { handlePasteText(input.value); input.value = ""; }
-                      }
-                    }}
-                    className="flex-1 h-8 bg-cream border border-line rounded-md px-2.5 text-xs text-graphite outline-none focus:border-clay"
-                  />
-                  <button
-                    onClick={() => {
-                      const input = document.getElementById("lixionary-quick-paste-input") as HTMLInputElement;
-                      if (input?.value) { handlePasteText(input.value); input.value = ""; }
-                    }}
-                    className="h-8 px-3 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors"
-                  >
-                    Send
-                  </button>
-                </div>
-                <p className="text-[10px] text-mute leading-relaxed mt-2">
-                  Send text into the focused element, or focus the canvas and press Ctrl+V / Cmd+V.
-                </p>
-              </div>
-
-              {/* Network logs */}
-              <div className="px-4 py-3 flex flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <span className={sectionLabel}>
-                    <Activity className="h-3.5 w-3.5 text-stone" /> Network logs
-                  </span>
-                  <div className="flex items-center gap-1.5">
-                    <div className="h-1.5 w-1.5 rounded-full bg-danger" />
-                    <span className="text-[10px] font-medium text-danger">Recording</span>
-                  </div>
-                </div>
-                <input
-                  type="text"
-                  placeholder="Filter by URL or method…"
-                  value={networkFilter}
-                  onChange={(e) => setNetworkFilter(e.target.value)}
-                  className="h-[30px] bg-cream border border-line rounded-md px-2.5 text-xs text-graphite outline-none focus:border-clay"
-                />
-                <div className="flex flex-col gap-0.5">
-                  {filteredLogs.map((log) => (
-                    <div key={log.id} className="flex flex-col gap-1 px-2 py-1.5 rounded-md hover:bg-panel transition-colors">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-[10px] font-medium px-1.5 py-0.5 rounded flex-shrink-0" style={methodStyle(log.method)}>
-                          {log.method}
-                        </span>
-                        <span className="font-mono text-[10px] font-medium px-1.5 py-0.5 rounded flex-shrink-0" style={statusStyle(log.status)}>
-                          {log.status === null ? "Pending" : `${log.status} ${log.statusText}`}
-                        </span>
-                        <span className="font-mono text-[10px] text-stone flex-1 truncate">{log.url}</span>
-                      </div>
-                      <div className="flex items-center justify-between pl-0.5">
-                        <button onClick={() => handleLogClick(log.id)} className="text-[10px] font-medium text-clay hover:text-clay-dark">
-                          Inspect details
-                        </button>
-                        <label className="flex items-center gap-1 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={selectedLogsForClient.includes(log.id)}
-                            onChange={(e) => {
-                              if (e.target.checked) setSelectedLogsForClient([...selectedLogsForClient, log.id]);
-                              else setSelectedLogsForClient(selectedLogsForClient.filter((id) => id !== log.id));
-                            }}
-                            className="h-3 w-3 cursor-pointer"
-                            style={{ accentColor: "#cc785c" }}
-                          />
-                          <span className="text-[10px] text-mute font-medium uppercase">Client</span>
-                        </label>
-                      </div>
-                    </div>
-                  ))}
-                  {filteredLogs.length === 0 && (
-                    <p className="text-[11px] text-mute text-center py-3">No network activity captured yet.</p>
-                  )}
-                </div>
-              </div>
             </div>
           </div>
         </div>
@@ -1127,54 +1247,6 @@ export default function WebExplorerPage() {
           >
             <Play className="h-4 w-4" /> Connect VNC browser
           </button>
-        </div>
-      )}
-
-      {/* Network details drawer */}
-      {logDetails && (
-        <div className="fixed inset-y-0 right-0 z-50 w-[500px] border-l border-line bg-cream shadow-[0_24px_48px_-12px_rgba(20,20,19,0.18)] flex flex-col overflow-hidden">
-          <div className="px-5 py-4 border-b border-line flex items-center justify-between flex-shrink-0">
-            <span className="font-serif text-lg font-medium text-ink">Network details</span>
-            <button
-              onClick={() => setLogDetails(null)}
-              className="h-8 w-8 rounded-lg border border-line flex items-center justify-center hover:bg-panel transition-colors"
-            >
-              <X className="h-4 w-4 text-graphite" />
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-5 text-xs font-mono select-text">
-            <Field label="Request URL"><span className="text-graphite break-all">{logDetails.request.url}</span></Field>
-            <div className="flex gap-4">
-              <Field label="Method" className="w-1/2"><span className="text-clay font-medium">{logDetails.request.method}</span></Field>
-              <Field label="Type" className="w-1/2"><span className="text-graphite">{logDetails.request.resourceType}</span></Field>
-            </div>
-            <Field label="Request headers">
-              <div className="flex flex-col gap-1">
-                {Object.entries(logDetails.request.headers).map(([k, v]) => (
-                  <div key={k} className="flex gap-2">
-                    <span className="text-mute w-36 truncate flex-shrink-0">{k}:</span>
-                    <span className="text-graphite break-all">{v}</span>
-                  </div>
-                ))}
-              </div>
-            </Field>
-            {logDetails.response ? (
-              <>
-                <Field label="Response status">
-                  <span style={{ color: logDetails.response.status < 400 ? "#276749" : "#c64545" }} className="font-medium">
-                    {logDetails.response.status} {logDetails.response.statusText}
-                  </span>
-                </Field>
-                <Field label="Response body">
-                  <pre className="m-0 p-3 bg-ink-900 text-sage rounded-lg whitespace-pre-wrap max-h-64 overflow-y-auto">
-                    {logDetails.response.body}
-                  </pre>
-                </Field>
-              </>
-            ) : (
-              <p className="text-mute text-center italic py-4">Response pending or omitted.</p>
-            )}
-          </div>
         </div>
       )}
 

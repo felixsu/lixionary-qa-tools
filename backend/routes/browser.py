@@ -147,6 +147,111 @@ async def generate_client(payload: GenerateClientPayload, current_user: dict = D
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Client generation failed: {str(e)}")
 
+class AddPOMMethodPayload(BaseModel):
+    sessionId: str
+    methodName: str
+    action: str
+    strategy: str
+    selector: str
+    frameLocators: Optional[List[str]] = []
+
+def add_pom_method_to_file(session_id: str, my_page_path: str, method_name: str, method_body: str):
+    import os
+    from services.browser import get_session_lock
+    lock = get_session_lock(session_id)
+    with lock:
+        if not os.path.exists(my_page_path):
+            os.makedirs(os.path.dirname(my_page_path), exist_ok=True)
+            with open(my_page_path, "w") as f:
+                f.write("from playwright.sync_api import Page\n\nclass MyPage:\n    def __init__(self, page: Page):\n        self.page = page\n")
+
+        with open(my_page_path, "r") as f:
+            content = f.read()
+
+        if f"def {method_name}(" in content:
+            raise ValueError(f"Method '{method_name}' already exists in MyPage class")
+
+        if not content.endswith("\n"):
+            content += "\n"
+        if not content.endswith("\n\n"):
+            content += "\n"
+
+        new_content = content + method_body
+        with open(my_page_path, "w") as f:
+            f.write(new_content)
+
+
+@router.post("/pom/add")
+async def add_pom_method(payload: AddPOMMethodPayload, current_user: dict = Depends(get_current_user)):
+    import os
+    import re
+    import asyncio
+    from routes.workspace import get_workspace_dir, validate_session_owner
+
+    user_id = str(current_user["id"])
+    await validate_session_owner(payload.sessionId, user_id)
+    workspace_dir = get_workspace_dir(user_id, payload.sessionId)
+    my_page_path = os.path.join(workspace_dir, "inspection_code", "my_page.py")
+
+    # Clean and check method name
+    method_name = re.sub(r"[^a-zA-Z0-9_]", "", payload.methodName.lower())
+    if not method_name or method_name[0].isdigit():
+        method_name = f"action_{method_name}"
+
+    # Format the strategy and args
+    strategy = payload.strategy
+    if strategy.startswith("locator"):
+        strategy = "locator"
+    
+    strategy_args = ""
+    if strategy == "get_by_role":
+        match = re.match(r'([^\[]+)\[name="([^"]+)"\]', payload.selector)
+        if match:
+            role_type = match.group(1)
+            role_name = match.group(2).replace('"', '\\"')
+            strategy_args = f'"{role_type}", name="{role_name}"'
+        else:
+            escaped_selector = payload.selector.replace('"', '\\"')
+            strategy_args = f'"{escaped_selector}"'
+    else:
+        escaped_selector = payload.selector.replace('"', '\\"')
+        strategy_args = f'"{escaped_selector}"'
+
+    frame_chain = ""
+    if payload.frameLocators:
+        for fl in payload.frameLocators:
+            frame_chain += f".frame_locator('{fl}')"
+
+    docstring = f"Perform {payload.action} on {strategy}: {payload.selector}"
+    if payload.frameLocators:
+        docstring += f" (inside iframe: {' -> '.join(payload.frameLocators)})"
+
+    # Construct the method signature and body
+    sig_args = "self"
+    if payload.action == "fill":
+        sig_args += ", value: str"
+
+    method_body = f"    def {method_name}({sig_args}) -> None:\n"
+    method_body += f'        """{docstring}"""\n'
+    
+    target = "self.page"
+    call_args = 'value' if payload.action == 'fill' else ''
+    method_body += f'        {target}{frame_chain}.{strategy}({strategy_args}).{payload.action}({call_args})\n'
+
+    try:
+        await asyncio.to_thread(
+            add_pom_method_to_file,
+            payload.sessionId,
+            my_page_path,
+            method_name,
+            method_body
+        )
+        return {"message": f"Method {method_name} added to MyPage successfully"}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write to my_page.py: {str(e)}")
+
 # ---------------------------------------------------------------------------
 # WebSocket browser session
 # ---------------------------------------------------------------------------
@@ -251,7 +356,8 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
             session_id,
             send_to_client,
             cookies=cookies,
-            local_storage=local_storage
+            local_storage=local_storage,
+            user_id=ws_user_id
         )
         await send_to_client({"type": "status", "data": {"connected": True, "url": page.url}})
 
