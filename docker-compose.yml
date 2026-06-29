@@ -4,8 +4,10 @@ services:
   mongodb:
     image: mongo:6.0
     container_name: lixionary-mongodb
+    # Host port 8483 (host) -> 27017 (container). Picked to avoid collision with
+    # other stacks already on the box (reportportal :27017).
     ports:
-      - "27017:27017"
+      - "8483:27017"
     volumes:
       - mongodb_data:/data/db
     networks:
@@ -14,8 +16,10 @@ services:
   redis:
     image: redis:7.0-alpine
     container_name: lixionary-redis
+    # Host port 8482 (host) -> 6379 (container). Picked to avoid collision with
+    # other stacks already on the box (nvqa-redis :6379).
     ports:
-      - "6379:6379"
+      - "8482:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -38,8 +42,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: lixionary-backend
+    # Host port 8480 (host) -> 8000 (container). Picked to avoid collision with
+    # other stacks already on the box (reportportal :8000).
     ports:
-      - "8000:8000"
+      - "8480:8000"
     environment:
       - MONGODB_URI=mongodb://mongodb:27017/lixionary
       - REDIS_URL=redis://redis:6379/0
@@ -63,8 +69,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: lixionary-frontend
+    # Host port 8481 (host) -> 3000 (container). Picked to avoid collision with
+    # other stacks already on the box (testsaurus :3000).
     ports:
-      - "3000:3000"
+      - "8481:3000"
     environment:
       - BACKEND_URL=http://backend:8000
       - NEXT_PUBLIC_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
