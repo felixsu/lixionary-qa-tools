@@ -64,6 +64,7 @@ export interface NetworkDetails {
     method: string;
     headers: Record<string, string>;
     resourceType: string;
+    postData?: string;
   };
   response: {
     url: string;
@@ -89,6 +90,7 @@ export interface BrowserProfile {
   localStorage: string;
   authFunctionId?: string;
   authInjection?: { type: string; key: string; domainOrOrigin: string };
+  defaultUrl?: string;
   createdAt: string;
 }
 
@@ -147,10 +149,12 @@ interface AppContextType {
   // API Explorer Response State
   apiResponse: any;
   setApiResponse: (res: any) => void;
+  lastApiResponse: any;
+  setLastApiResponse: (res: any) => void;
   isExecutingApi: boolean;
   setIsExecutingApi: (executing: boolean) => void;
-  responseTab: "pretty" | "headers" | "raw" | "extracted";
-  setResponseTab: (tab: "pretty" | "headers" | "raw" | "extracted") => void;
+  responseTab: "pretty" | "headers" | "raw" | "extracted" | "last";
+  setResponseTab: (tab: "pretty" | "headers" | "raw" | "extracted" | "last") => void;
   showAiModal: boolean;
   setShowAiModal: (show: boolean) => void;
   aiPrompt: string;
@@ -233,6 +237,18 @@ interface AppContextType {
   handleExecuteRequest: () => Promise<void>;
   handleSaveRequest: () => Promise<void>;
   handleCreateRequest: (name: string) => Promise<void>;
+  handleSaveNetworkRequestToCollection: (
+    collectionId: string,
+    requestName: string,
+    requestData: {
+      method: string;
+      url: string;
+      headers: { key: string; value: string }[];
+      queryParams: { key: string; value: string }[];
+      bodyType: string;
+      body: string;
+    }
+  ) => Promise<void>;
   handleCreateCollection: (name: string) => Promise<void>;
   handleImportCollection: (id: string) => Promise<void>;
   handleAddCollaborator: (email: string) => Promise<void>;
@@ -241,13 +257,13 @@ interface AppContextType {
   handleSaveAuthFunc: (name: string, description: string, script: string, expires_in: number | null, id: string | null) => Promise<void>;
   handleDeleteAuthFunc: (id: string) => Promise<void>;
 
-  // Profile operations
   handleSaveProfile: (
     name: string,
     cookies: string,
     localStorage: string,
     authFunctionId: string | null,
     authInjection: { type: string; key: string; domainOrOrigin: string } | null,
+    defaultUrl: string,
     id: string | null
   ) => Promise<void>;
   handleDeleteProfile: (id: string) => Promise<void>;
@@ -285,8 +301,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // API Explorer Response State
   const [apiResponse, setApiResponse] = useState<any>(null);
+  const [lastApiResponse, setLastApiResponseState] = useState<any>(() => {
+    try {
+      const s = localStorage.getItem("nv_last_api_response");
+      return s ? JSON.parse(s) : null;
+    } catch { return null; }
+  });
+  const setLastApiResponse = (res: any) => {
+    setLastApiResponseState(res);
+    try { localStorage.setItem("nv_last_api_response", JSON.stringify(res)); } catch {}
+  };
   const [isExecutingApi, setIsExecutingApi] = useState(false);
-  const [responseTab, setResponseTab] = useState<"pretty" | "headers" | "raw" | "extracted">("pretty");
+  const [responseTab, setResponseTab] = useState<"pretty" | "headers" | "raw" | "extracted" | "last">("pretty");
   const [showAiModal, setShowAiModal] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [isGeneratingAiParser, setIsGeneratingAiParser] = useState(false);
@@ -661,6 +687,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const handleStartBrowser = async (profileId?: string) => {
     try {
+      // Find the profile defaultUrl
+      let targetUrl = "about:blank";
+      if (profileId) {
+        const prof = profiles.find((p) => p.id === profileId);
+        if (prof && prof.defaultUrl) {
+          targetUrl = prof.defaultUrl;
+        }
+      }
+      setBrowserUrl(targetUrl);
+
       const { session_id: sessId } = await apiCall("/api/browser/sessions", { method: "POST" });
       setSessionId(sessId);
       setNetworkLogs([]);
@@ -704,6 +740,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const handleBrowserNavigate = () => {
+    if (!browserUrl) {
+      alert("Please enter a URL.");
+      return;
+    }
+    // Allow about:blank
+    if (browserUrl !== "about:blank") {
+      if (!browserUrl.startsWith("http://") && !browserUrl.startsWith("https://")) {
+        alert("URL must start with http:// or https://");
+        return;
+      }
+      try {
+        new URL(browserUrl);
+      } catch {
+        alert("Please enter a valid URL format.");
+        return;
+      }
+    }
+
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         action: "navigate",
@@ -801,6 +855,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
 
       setApiResponse(result);
+      if (result.status < 400) {
+        setLastApiResponse(result);
+      }
       fetchEnvironments();
     } catch (e: any) {
       setApiResponse({
@@ -894,6 +951,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } catch (e: any) {
       throw new Error(`Failed to add request: ${e.message}`);
     }
+  };
+
+  const handleSaveNetworkRequestToCollection = async (
+    collectionId: string,
+    requestName: string,
+    requestData: {
+      method: string;
+      url: string;
+      headers: { key: string; value: string }[];
+      queryParams: { key: string; value: string }[];
+      bodyType: string;
+      body: string;
+    }
+  ) => {
+    const col = collections.find(c => c.id === collectionId);
+    if (!col) throw new Error("Collection not found.");
+    const newRequest: RequestItem = {
+      id: `req_${Math.random().toString(36).substring(2, 9)}`,
+      name: requestName,
+      method: requestData.method,
+      url: requestData.url,
+      headers: requestData.headers,
+      queryParams: requestData.queryParams,
+      bodyType: requestData.bodyType,
+      body: requestData.body,
+      authType: "NONE",
+      authConfig: {}
+    };
+    const updatedRequests = [...col.requests, newRequest];
+    await apiCall(`/api/collections/${collectionId}`, {
+      method: "PUT",
+      body: JSON.stringify({ requests: updatedRequests })
+    });
+    await fetchCollections();
   };
 
   const handleCreateCollection = async (name: string) => {
@@ -999,18 +1090,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     localStorage: string,
     authFunctionId: string | null,
     authInjection: { type: string; key: string; domainOrOrigin: string } | null,
+    defaultUrl: string,
     id: string | null
   ) => {
     try {
       if (id) {
         await apiCall(`/api/profiles/${id}`, {
           method: "PUT",
-          body: JSON.stringify({ name, cookies, localStorage, authFunctionId, authInjection })
+          body: JSON.stringify({ name, cookies, localStorage, authFunctionId, authInjection, defaultUrl })
         });
       } else {
         await apiCall("/api/profiles", {
           method: "POST",
-          body: JSON.stringify({ name, cookies, localStorage, authFunctionId, authInjection })
+          body: JSON.stringify({ name, cookies, localStorage, authFunctionId, authInjection, defaultUrl })
         });
       }
       await fetchProfiles();
@@ -1075,6 +1167,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         apiResponse,
         setApiResponse,
+        lastApiResponse,
+        setLastApiResponse,
         isExecutingApi,
         setIsExecutingApi,
         responseTab,
@@ -1156,6 +1250,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         handleExecuteRequest,
         handleSaveRequest,
         handleCreateRequest,
+        handleSaveNetworkRequestToCollection,
         handleCreateCollection,
         handleImportCollection,
         handleAddCollaborator,

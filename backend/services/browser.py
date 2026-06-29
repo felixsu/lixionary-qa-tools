@@ -11,7 +11,7 @@ class BrowserSessionManager:
     _sessions = {}
 
     @classmethod
-    async def get_or_create_session(cls, session_id: str, ws_send_callback=None, cookies=None, local_storage=None) -> Page:
+    async def get_or_create_session(cls, session_id: str, ws_send_callback=None, cookies=None, local_storage=None, user_id=None, default_url=None) -> Page:
         """
         Retrieves or creates a Playwright CDP session connecting to the VNC browser.
         Exposes page event listeners to record network traffic and DOM mutations.
@@ -22,6 +22,8 @@ class BrowserSessionManager:
             if session["browser"].is_connected():
                 if ws_send_callback:
                     session["callback"] = ws_send_callback
+                if user_id:
+                    session["user_id"] = user_id
                 return cls._active_page(session)
             else:
                 await cls.close_session(session_id)
@@ -161,6 +163,14 @@ class BrowserSessionManager:
         # New context always starts empty — create the first page
         page = await context.new_page()
 
+        # Handle startup navigation
+        url_to_open = default_url if default_url else "about:blank"
+        if url_to_open.startswith("http://") or url_to_open.startswith("https://"):
+            try:
+                await page.goto(url_to_open)
+            except Exception as e:
+                print(f"Failed to navigate to default URL on startup: {e}")
+
         cls._sessions[session_id] = {
             "playwright_mgr": playwright_mgr,
             "browser": browser,
@@ -169,6 +179,7 @@ class BrowserSessionManager:
             "active_page_index": 0,
             "callback": ws_send_callback,
             "inspect_enabled": False,
+            "user_id": user_id,
         }
 
         # Setup event listeners on the first page
@@ -323,6 +334,19 @@ class BrowserSessionManager:
                         "statusText": res_data["statusText"]
                     }
                 })
+
+            if session.get("user_id") and res.status < 400 and req.resource_type in ["fetch", "xhr"]:
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        try_dump_api_call,
+                        session["user_id"],
+                        session_id,
+                        res.url,
+                        req.method,
+                        req.post_data,
+                        resp_body
+                    )
+                )
 
         page.on("request", handle_request)
         page.on("response", handle_response)
@@ -778,3 +802,157 @@ def rank_locators(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
     # Sort locators descending by score
     locators.sort(key=lambda x: x["score"], reverse=True)
     return locators
+
+
+import threading
+
+_file_locks = {}
+_file_locks_lock = threading.Lock()
+
+def get_session_lock(session_id: str) -> threading.Lock:
+    with _file_locks_lock:
+        if session_id not in _file_locks:
+            _file_locks[session_id] = threading.Lock()
+        return _file_locks[session_id]
+
+
+def try_dump_api_call(user_id: str, session_id: str, url: str, method: str, post_data: Optional[str], response_body: Optional[str]):
+    import os
+    import urllib.parse
+    import re
+    from routes.workspace import get_workspace_dir
+    from services.generator import json_to_pydantic_code
+
+    try:
+        parsed = urllib.parse.urlparse(url)
+        hostname = parsed.hostname or ""
+        # 1. Match host: *.ninjavan.co or *.ninjavan.dev
+        if not (hostname.endswith(".ninjavan.co") or hostname.endswith(".ninjavan.dev")):
+            return
+
+        # 2. Parse path segments
+        path_parts = [p for p in parsed.path.split("/") if p]
+        if not path_parts:
+            return
+
+        # Check for 2-digit system id (country code) like sg, id, my, ph
+        has_country_code = len(path_parts[0]) == 2 and path_parts[0].isalpha()
+        
+        # 3. Determine method name
+        verb = method.lower().capitalize()  # Get, Post, Put, Patch, Delete
+        service_idx = 1 if has_country_code else 0
+        if len(path_parts) <= service_idx:
+            return
+            
+        service_name = path_parts[service_idx]
+        service_clean = "".join(p.capitalize() for p in re.split(r"[^a-zA-Z0-9]", service_name) if p)
+        
+        rest_parts = path_parts[service_idx+1:]
+        rest_clean_parts = []
+        for part in rest_parts:
+            # Skip numeric segments or hex/UUIDs or curly placeholders
+            if part.isdigit() or re.match(r"^[0-9a-fA-F\-]{32,36}$", part) or part.startswith("{"):
+                continue
+            clean = "".join(p.capitalize() for p in re.split(r"[^a-zA-Z0-9]", part) if p)
+            rest_clean_parts.append(clean)
+            
+        method_name = f"{verb}{service_clean}{''.join(rest_clean_parts)}"
+        
+        # 4. Read existing file and perform schema edits inside session lock
+        workspace_dir = get_workspace_dir(user_id, session_id)
+        my_client_path = os.path.join(workspace_dir, "inspection_code", "my_client.py")
+        
+        os.makedirs(os.path.dirname(my_client_path), exist_ok=True)
+        
+        lock = get_session_lock(session_id)
+        with lock:
+            if not os.path.exists(my_client_path):
+                with open(my_client_path, "w") as f:
+                    f.write('from __future__ import annotations\nimport httpx\nfrom pydantic import BaseModel, Field\nfrom typing import List, Optional, Any\n\n# --- Pydantic Models ---\n\nclass MyClient:\n    def __init__(self, base_url: str = "https://api-qa.ninjavan.co", token: str = None):\n        self.client = httpx.Client(base_url=base_url)\n        if token:\n            self.client.headers.update({"Authorization": f"Bearer {token}"})\n')
+
+            with open(my_client_path, "r") as f:
+                content = f.read()
+
+            # If method already exists in MyClient, skip to avoid duplicates
+            if f"def {method_name}(" in content:
+                return
+
+            # 5. Generate Pydantic Models for request and response
+            models_code_map = {}
+            req_payload_class = None
+            if post_data and method.upper() in ["POST", "PUT", "PATCH"]:
+                try:
+                    body_json = json.loads(post_data) if isinstance(post_data, str) else post_data
+                    model_name = f"{method_name}Request"
+                    req_payload_class, _ = json_to_pydantic_code(model_name, body_json, models_code_map)
+                except Exception:
+                    pass
+
+            resp_payload_class = None
+            if response_body:
+                try:
+                    body_json = json.loads(response_body) if isinstance(response_body, str) else response_body
+                    model_name = f"{method_name}Response"
+                    resp_payload_class, _ = json_to_pydantic_code(model_name, body_json, models_code_map)
+                except Exception:
+                    pass
+
+            # 6. Format models code block
+            models_code = ""
+            for m_name, m_code in models_code_map.items():
+                if f"class {m_name}(" not in content:
+                    models_code += m_code + "\n"
+
+            # 7. Format method code block with optional params
+            params = ["self"]
+            if req_payload_class:
+                params.append(f"payload: {req_payload_class}")
+            params.append("params: dict = None")
+            params_str = ", ".join(params)
+            
+            return_type = resp_payload_class if resp_payload_class else "Any"
+            path_url = parsed.path
+            
+            method_body = f"    def {method_name}({params_str}) -> {return_type}:\n"
+            method_body += f'        """{method.upper()} {path_url}"""\n'
+            
+            # HTTP call with params
+            caller_args = [f'"{path_url}"']
+            if req_payload_class:
+                caller_args.append("json=payload.model_dump()")
+            caller_args.append("params=params")
+            caller_args_str = ", ".join(caller_args)
+            
+            method_body += f'        response = self.client.{method.lower()}({caller_args_str})\n'
+            method_body += "        response.raise_for_status()\n"
+            
+            if resp_payload_class:
+                if resp_payload_class.startswith("List["):
+                    item_model = resp_payload_class[5:-1]
+                    method_body += f'        return [{item_model}.model_validate(item) for item in response.json()]\n'
+                else:
+                    method_body += f'        return {resp_payload_class}.model_validate(response.json())\n'
+            else:
+                method_body += "        return response.json()\n"
+
+            # 8. Insert Pydantic models before MyClient class
+            pydantic_marker = "# --- Pydantic Models ---"
+            if pydantic_marker in content:
+                parts = content.split(pydantic_marker, 1)
+                content = parts[0] + pydantic_marker + "\n\n" + models_code + parts[1]
+            elif "class MyClient" in content:
+                parts = content.split("class MyClient", 1)
+                content = parts[0] + models_code + "\nclass MyClient" + parts[1]
+
+            # 9. Append the client method to the end of the file
+            if not content.endswith("\n"):
+                content += "\n"
+            if not content.endswith("\n\n"):
+                content += "\n"
+            content += method_body
+
+            with open(my_client_path, "w") as f:
+                f.write(content)
+
+    except Exception as e:
+        print(f"Error auto-dumping API call to client: {e}")

@@ -93,6 +93,8 @@ def json_to_pydantic_code(schema_name: str, json_data: Any, generated_models: Di
     Recursively analyzes a JSON payload and generates Pydantic model definitions.
     Returns (root_model_class_name, dictionary_of_all_pydantic_classes_code).
     """
+    import keyword
+
     if generated_models is None:
         generated_models = {}
 
@@ -107,26 +109,45 @@ def json_to_pydantic_code(schema_name: str, json_data: Any, generated_models: Di
             if not field_name or field_name[0].isdigit():
                 field_name = f"field_{field_name}"
 
+            # Check for python keywords
+            is_keyword = keyword.iskeyword(field_name)
+            python_field_name = f"{field_name}_" if is_keyword else field_name
+
             # Compute field type
             if isinstance(val, dict):
                 sub_model_name = "".join(x.capitalize() for x in key.split("_")) + "Model"
                 sub_type, _ = json_to_pydantic_code(sub_model_name, val, generated_models)
-                fields.append(f"    {field_name}: Optional[{sub_type}] = None")
+                if is_keyword:
+                    fields.append(f"    {python_field_name}: Optional[{sub_type}] = Field(None, alias=\"{key}\")")
+                else:
+                    fields.append(f"    {python_field_name}: Optional[{sub_type}] = None")
             elif isinstance(val, list):
                 if val:
                     first_item = val[0]
                     if isinstance(first_item, dict):
                         sub_model_name = "".join(x.capitalize() for x in key.split("_")) + "Item"
                         sub_type, _ = json_to_pydantic_code(sub_model_name, first_item, generated_models)
-                        fields.append(f"    {field_name}: List[{sub_type}] = []")
+                        if is_keyword:
+                            fields.append(f"    {python_field_name}: List[{sub_type}] = Field([], alias=\"{key}\")")
+                        else:
+                            fields.append(f"    {python_field_name}: List[{sub_type}] = []")
                     else:
                         py_type = type(first_item).__name__
-                        fields.append(f"    {field_name}: List[{py_type}] = []")
+                        if is_keyword:
+                            fields.append(f"    {python_field_name}: List[{py_type}] = Field([], alias=\"{key}\")")
+                        else:
+                            fields.append(f"    {python_field_name}: List[{py_type}] = []")
                 else:
-                    fields.append(f"    {field_name}: List[Any] = []")
+                    if is_keyword:
+                        fields.append(f"    {python_field_name}: List[Any] = Field([], alias=\"{key}\")")
+                    else:
+                        fields.append(f"    {python_field_name}: List[Any] = []")
             else:
                 py_type = type(val).__name__ if val is not None else "Any"
-                fields.append(f"    {field_name}: Optional[{py_type}] = None")
+                if is_keyword:
+                    fields.append(f"    {python_field_name}: Optional[{py_type}] = Field(None, alias=\"{key}\")")
+                else:
+                    fields.append(f"    {python_field_name}: Optional[{py_type}] = None")
 
         fields_code = "\n".join(fields) if fields else "    pass"
         model_code = f"class {schema_name}(BaseModel):\n{fields_code}\n"
@@ -157,8 +178,9 @@ def generate_http_client(base_url: str, requests_logs: List[Dict[str, Any]]) -> 
     
     # Imports
     code_lines = [
+        "from __future__ import annotations",
         "import httpx",
-        "from pydantic import BaseModel",
+        "from pydantic import BaseModel, Field",
         "from typing import List, Optional, Any",
         ""
     ]
