@@ -11,4 +11,9 @@ class Settings:
     GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
     DEV_MODE: bool = os.getenv("DEV_MODE", "true").lower() == "true"
 
+    # Lixionary IAM OAuth configuration
+    IAM_CLIENT_ID: str = os.getenv("IAM_CLIENT_ID", "ca4d16ef-9a5c-43df-811c-ea9cda47b19a")
+    IAM_CLIENT_SECRET: str = os.getenv("IAM_CLIENT_SECRET", "automation_explorer_secret_key_123")
+    IAM_URL: str = os.getenv("IAM_URL", "http://host.docker.internal:8080")
+
 settings = Settings()

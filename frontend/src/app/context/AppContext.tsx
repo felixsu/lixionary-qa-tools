@@ -276,6 +276,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Authentication State
   const [token, setToken] = useState<string | null>(null);
+  const [refreshToken, setRefreshToken] = useState<string | null>(null);
   const [user, setUser] = useState<any>(null);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
 
@@ -358,9 +359,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const savedToken = localStorage.getItem("lixionary_token");
     const savedUser = localStorage.getItem("lixionary_user");
+    const savedRefreshToken = localStorage.getItem("lixionary_refresh_token");
     if (savedToken && savedUser) {
       setToken(savedToken);
       setUser(JSON.parse(savedUser));
+    }
+    if (savedRefreshToken) {
+      setRefreshToken(savedRefreshToken);
     }
     setIsLoadingAuth(false);
   }, []);
@@ -460,12 +465,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // REST API helpers
   const apiCall = async (path: string, options: RequestInit = {}) => {
-    const headers = {
-      "Content-Type": "application/json",
-      ...(token ? { "Authorization": `Bearer ${token}` } : {}),
-      ...(options.headers || {})
+    let currentToken = token;
+    const makeRequest = async (tok: string | null) => {
+      const headers = {
+        "Content-Type": "application/json",
+        ...(tok ? { "Authorization": `Bearer ${tok}` } : {}),
+        ...(options.headers || {})
+      };
+      return await fetch(path, { ...options, headers });
     };
-    const response = await fetch(path, { ...options, headers });
+
+    let response = await makeRequest(currentToken);
+
+    if (response.status === 401 && refreshToken && path !== "/api/auth/refresh" && path !== "/api/auth/oauth-token") {
+      try {
+        const refreshRes = await fetch("/api/auth/refresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: refreshToken })
+        });
+        if (refreshRes.ok) {
+          const refreshData = await refreshRes.json();
+          const newAccessToken = refreshData.access_token;
+          setToken(newAccessToken);
+          localStorage.setItem("lixionary_token", newAccessToken);
+          
+          // Retry the request with the new access token
+          response = await makeRequest(newAccessToken);
+        } else {
+          handleLogout();
+        }
+      } catch (e) {
+        console.error("Token refresh failed:", e);
+        handleLogout();
+      }
+    }
+
     if (!response.ok) {
       const err = await response.json().catch(() => ({ detail: "Unknown error occurred" }));
       throw new Error(err.detail || `Server responded with ${response.status}`);
@@ -473,15 +508,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return response.json();
   };
 
-  const handleLogin = async (email: string) => {
+  const handleLogin = async (code: string) => {
     try {
-      const data = await apiCall("/api/auth/google", {
+      const data = await apiCall("/api/auth/oauth-token", {
         method: "POST",
-        body: JSON.stringify({ idToken: email })
+        body: JSON.stringify({ code, redirect_uri: process.env.NEXT_PUBLIC_REDIRECT_URI || "http://localhost:8481/callback" })
       });
-      setToken(data.token);
+      setToken(data.access_token);
+      setRefreshToken(data.refresh_token);
       setUser(data.user);
-      localStorage.setItem("lixionary_token", data.token);
+      localStorage.setItem("lixionary_token", data.access_token);
+      localStorage.setItem("lixionary_refresh_token", data.refresh_token);
       localStorage.setItem("lixionary_user", JSON.stringify(data.user));
       router.push("/api-explorer");
     } catch (e: any) {
@@ -505,9 +542,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const handleLogout = () => {
+    if (refreshToken) {
+      // Non-blocking fire and forget revoke call
+      apiCall("/api/auth/revoke", {
+        method: "POST",
+        body: JSON.stringify({ refresh_token: refreshToken })
+      }).catch((e) => console.error("Failed to revoke token on server:", e));
+    }
     setToken(null);
+    setRefreshToken(null);
     setUser(null);
     localStorage.removeItem("lixionary_token");
+    localStorage.removeItem("lixionary_refresh_token");
     localStorage.removeItem("lixionary_user");
     handleDisconnectBrowser();
     router.push("/");

@@ -54,6 +54,11 @@ services:
       - JWT_SECRET=${JWT_SECRET:-supersecretjwttokenkey12345}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - DEV_MODE=${DEV_MODE:-true}
+      - IAM_CLIENT_ID=${IAM_CLIENT_ID:-ca4d16ef-9a5c-43df-811c-ea9cda47b19a}
+      - IAM_CLIENT_SECRET=${IAM_CLIENT_SECRET:-automation_explorer_secret_key_123}
+      - IAM_URL=${IAM_URL:-http://host.docker.internal:8080}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./backend:/app
       - ./workspaces:/workspaces
@@ -76,6 +81,11 @@ services:
     environment:
       - BACKEND_URL=http://backend:8000
       - NEXT_PUBLIC_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - NEXT_PUBLIC_IAM_CLIENT_ID=${IAM_CLIENT_ID:-ca4d16ef-9a5c-43df-811c-ea9cda47b19a}
+      - NEXT_PUBLIC_IAM_FRONTEND_URL=${IAM_FRONTEND_URL:-http://localhost:8081}
+      - NEXT_PUBLIC_REDIRECT_URI=${REDIRECT_URI:-http://localhost:8481/callback}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./frontend:/app
       - /app/node_modules
