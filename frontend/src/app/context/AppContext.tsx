@@ -325,6 +325,11 @@ interface AppContextType {
   handleSwitchTab: (index: number) => void;
   handleCloseTab: (index: number) => void;
 
+  // Anchor element for relative XPath generation
+  anchorElement: { tagName: string; id: string; text: string } | null;
+  handleSetAnchor: () => void;
+  handleClearAnchor: () => void;
+
   // Common operations
   apiCall: (path: string, options?: RequestInit) => Promise<any>;
   handleBrowserNavigate: () => void;
@@ -441,6 +446,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [selectedElementLocators, setSelectedElementLocators] = useState<any[]>([]);
   const [selectedElementAction, setSelectedElementAction] = useState("click");
   const [selectedElementMethodName, setSelectedElementMethodName] = useState("");
+  const [anchorElement, setAnchorElement] = useState<{ tagName: string; id: string; text: string } | null>(null);
   const [activeGenCodeTab, setActiveGenCodeTab] = useState<"pom" | "client">("pom");
   const [generatedPomCode, setGeneratedPomCode] = useState("");
   const [generatedClientCode, setGeneratedClientCode] = useState("");
@@ -822,6 +828,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             setSelectedElementMethodName(`click_${msg.data.element.tagName}_${msg.data.locators[0].strategy}`);
           }
           break;
+        case "anchor_set":
+          setAnchorElement(msg.data.anchorInfo);
+          break;
+        case "anchor_cleared":
+          setAnchorElement(null);
+          break;
         case "error":
           alert(`Browser session error: ${msg.message}`);
           setIsBrowserConnected(false);
@@ -965,6 +977,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const nextMode = !inspectMode;
     console.log(`[Lixionary] Toggling Inspect Mode: ${inspectMode} -> ${nextMode}`);
     setInspectMode(nextMode);
+    if (!nextMode) {
+      setAnchorElement(null);
+    }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       console.log(`[Lixionary] Sending toggle-inspect: ${nextMode} to WebSocket`);
       wsRef.current.send(JSON.stringify({
@@ -973,6 +988,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }));
     } else {
       console.warn("[Lixionary] WebSocket not open, cannot toggle inspect mode on backend");
+    }
+  };
+
+  const handleSetAnchor = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action: "set-anchor" }));
+    }
+  };
+
+  const handleClearAnchor = () => {
+    setAnchorElement(null);
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action: "clear-anchor" }));
     }
   };
 
@@ -1703,6 +1731,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         activeTabIndex,
         handleSwitchTab,
         handleCloseTab,
+
+        anchorElement,
+        handleSetAnchor,
+        handleClearAnchor,
 
         apiCall,
         handleBrowserNavigate,

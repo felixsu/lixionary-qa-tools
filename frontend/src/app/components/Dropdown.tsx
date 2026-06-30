@@ -19,6 +19,7 @@ interface DropdownProps {
   widthClass?: string;
   align?: "left" | "right";
   disabled?: boolean;
+  openUpward?: boolean;
   renderTrigger?: (selected: DropdownOption | undefined, open: boolean) => React.ReactNode;
 }
 
@@ -37,11 +38,12 @@ export default function Dropdown({
   widthClass,
   align = "left",
   disabled,
+  openUpward,
   renderTrigger,
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(-1);
-  const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [coords, setCoords] = useState<{ top?: number; bottom?: number; left: number; width: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const listboxId = useId();
@@ -52,7 +54,11 @@ export default function Dropdown({
     const el = triggerRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    setCoords({ top: r.bottom + 4, left: r.left, width: r.width });
+    if (openUpward) {
+      setCoords({ bottom: window.innerHeight - r.top + 4, left: r.left, width: r.width });
+    } else {
+      setCoords({ top: r.bottom + 4, left: r.left, width: r.width });
+    }
   };
 
   useLayoutEffect(() => {
@@ -176,7 +182,8 @@ export default function Dropdown({
             tabIndex={-1}
             style={{
               position: "fixed",
-              top: coords.top,
+              top: openUpward ? undefined : coords.top,
+              bottom: openUpward ? coords.bottom : undefined,
               left: align === "right" ? undefined : coords.left,
               right: align === "right" ? window.innerWidth - (coords.left + coords.width) : undefined,
               minWidth: coords.width,

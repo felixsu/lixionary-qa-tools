@@ -449,6 +449,15 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
             elif action == "toggle-inspect":
                 enabled = cmd.get("enabled", False)
                 await BrowserSessionManager.set_inspect_mode(session_id, enabled)
+                if not enabled:
+                    await page.evaluate("if (window.__clearLixionaryAnchor) window.__clearLixionaryAnchor()")
+                    await send_to_client({"type": "anchor_cleared"})
+            elif action == "set-anchor":
+                anchor_info = await page.evaluate("window.__setLixionaryAnchorFromLast ? window.__setLixionaryAnchorFromLast() : null")
+                await send_to_client({"type": "anchor_set", "data": {"anchorInfo": anchor_info}})
+            elif action == "clear-anchor":
+                await page.evaluate("if (window.__clearLixionaryAnchor) window.__clearLixionaryAnchor()")
+                await send_to_client({"type": "anchor_cleared"})
             elif action == "click":
                 selector = cmd.get("selector")
                 if selector:

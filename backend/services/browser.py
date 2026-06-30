@@ -547,6 +547,32 @@ class BrowserSessionManager:
 
             let inspectMode = false;
             let hoverOverlay = null;
+            let lixionaryAnchor = null;
+            let lixionaryLastClickedEl = null;
+
+            window.__setLixionaryAnchorFromLast = function() {
+                if (lixionaryAnchor) {
+                    lixionaryAnchor.style.outline = lixionaryAnchor._prevOutline || '';
+                }
+                lixionaryAnchor = lixionaryLastClickedEl;
+                if (lixionaryAnchor) {
+                    lixionaryAnchor._prevOutline = lixionaryAnchor.style.outline;
+                    lixionaryAnchor.style.outline = '3px solid #22c55e';
+                }
+                return lixionaryAnchor ? {
+                    tagName: lixionaryAnchor.tagName.toLowerCase(),
+                    id: lixionaryAnchor.id || '',
+                    text: lixionaryAnchor.innerText ? lixionaryAnchor.innerText.trim().substring(0, 50) : ''
+                } : null;
+            };
+
+            window.__clearLixionaryAnchor = function() {
+                if (lixionaryAnchor) {
+                    lixionaryAnchor.style.outline = lixionaryAnchor._prevOutline || '';
+                    lixionaryAnchor._prevOutline = undefined;
+                }
+                lixionaryAnchor = null;
+            };
 
             // Create canvas hover border outline
             function createHoverOverlay() {
@@ -679,6 +705,50 @@ class BrowserSessionManager:
                 return '';
             }
 
+            function getAnchorXPathExpr(anchor) {
+                if (anchor.id) return '//' + anchor.tagName.toLowerCase() + '[@id="' + anchor.id + '"]';
+                const text = anchor.innerText ? anchor.innerText.trim().substring(0, 50) : '';
+                if (text && text.indexOf('\\n') === -1 && text.length < 50) {
+                    return '//' + anchor.tagName.toLowerCase() + '[contains(text(), "' + text.replace(/"/g, '\\"') + '")]';
+                }
+                const classes = Array.from(anchor.classList).slice(0, 2);
+                if (classes.length > 0) {
+                    return '//' + anchor.tagName.toLowerCase() + '[contains(@class, "' + classes[0].replace(/"/g, '\\"') + '")]';
+                }
+                return null;
+            }
+
+            function getUserAnchoredXPath(anchor, target) {
+                try {
+                    if (!anchor || anchor === target || !anchor.contains(target)) return null;
+                    const anchorExpr = getAnchorXPathExpr(anchor);
+                    if (!anchorExpr) return null;
+                    let parts = [];
+                    let el = target;
+                    while (el && el !== anchor) {
+                        const tag = el.tagName.toLowerCase();
+                        if (el.id) {
+                            parts.unshift(tag + '[@id="' + el.id + '"]');
+                            break;
+                        }
+                        const parent = el.parentElement;
+                        if (!parent) break;
+                        const siblings = Array.from(parent.children).filter(function(c) { return c.tagName === el.tagName; });
+                        if (siblings.length > 1) {
+                            parts.unshift(tag + '[' + (siblings.indexOf(el) + 1) + ']');
+                        } else {
+                            parts.unshift(tag);
+                        }
+                        el = parent;
+                    }
+                    if (parts.length === 0) return null;
+                    return anchorExpr + '//' + parts.join('/');
+                } catch (e) {
+                    console.error('Error generating user-anchored xpath:', e);
+                    return null;
+                }
+            }
+
             // Gather element metadata
             function getElementMetadata(el) {
                 const rect = el.getBoundingClientRect();
@@ -737,6 +807,7 @@ class BrowserSessionManager:
                     cssSelector: getCssPath(el),
                     xpath: getXPath(el),
                     anchoredXpath: getAnchoredXPath(el),
+                    userAnchoredXpath: getUserAnchoredXPath(lixionaryAnchor, el) || '',
                     classes: el.className || '',
                     rect: {
                         top: rect.top + window.scrollY,
@@ -779,6 +850,9 @@ class BrowserSessionManager:
 
                 e.preventDefault();
                 e.stopPropagation();
+
+                // Store last clicked element for anchor-setting
+                lixionaryLastClickedEl = el;
 
                 // Build metadata and send to python backend
                 const metadata = getElementMetadata(el);
@@ -904,6 +978,18 @@ def rank_locators(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
         locators.append({
             "strategy": "locator (Anchored XPath)",
             "selector": anchored_xpath,
+            "statement": expr,
+            "score": score
+        })
+
+    # 8. User-selected anchor XPath (highest priority — user explicitly chose the anchor)
+    user_anchored_xpath = metadata.get("userAnchoredXpath", "")
+    if user_anchored_xpath:
+        expr = f'page.locator("xpath={user_anchored_xpath}")'
+        score = 120 - len(expr)
+        locators.append({
+            "strategy": "locator (User Anchor XPath)",
+            "selector": user_anchored_xpath,
             "statement": expr,
             "score": score
         })
