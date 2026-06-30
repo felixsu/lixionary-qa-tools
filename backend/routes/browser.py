@@ -383,7 +383,12 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
             user_id=ws_user_id,
             default_url=default_url
         )
-        await send_to_client({"type": "status", "data": {"connected": True, "url": page.url}})
+        if session_id in BrowserSessionManager._sessions:
+            BrowserSessionManager._sessions[session_id]["disconnected_at"] = None
+
+        session_info = BrowserSessionManager._sessions.get(session_id, {})
+        vnc_port = session_info.get("vnc_port", 8080)
+        await send_to_client({"type": "status", "data": {"connected": True, "url": page.url, "vnc_port": vnc_port}})
 
         while True:
             data_str = await websocket.receive_text()
@@ -432,6 +437,8 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
     except WebSocketDisconnect:
         print(f"WebSocket disconnected for session: {session_id}")
         # Keep browser session alive — user may reconnect.
+        if session_id in BrowserSessionManager._sessions:
+            BrowserSessionManager._sessions[session_id]["disconnected_at"] = datetime.now(timezone.utc)
         if ws_user_id:
             await _upsert_session_status(session_id, ws_user_id, "disconnected")
     except Exception as e:

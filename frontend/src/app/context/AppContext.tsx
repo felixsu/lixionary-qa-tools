@@ -771,6 +771,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setBrowserUrl(msg.data.url);
           setBrowserTabs([{ index: 0, url: msg.data.url }]);
           setActiveTabIndex(0);
+          
+          // Dynamically compute the VNC iframe URL using the port returned by the backend
+          const vncPort = msg.data.vnc_port || 8080;
+          setVncUrl(`http://${window.location.hostname}:${vncPort}/vnc.html?autoconnect=true&resize=scale&password=`);
           break;
         case "navigation":
           const navUrl = msg.data?.url || msg.url;
@@ -863,7 +867,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelectedElementLocators([]);
     setBrowserTabs([]);
     setActiveTabIndex(0);
-    setVncUrl(`http://localhost:8080/vnc.html?autoconnect=true&resize=scale&password=`);
+    setVncUrl(""); // Empty initially; will be populated dynamically by the WebSocket status message
     connectBrowserSession(sessId, profileId);
   };
 
@@ -886,7 +890,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setSelectedElementLocators([]);
       setBrowserTabs([]);
       setActiveTabIndex(0);
-      setVncUrl(`http://localhost:8080/vnc.html?autoconnect=true&resize=scale&password=`);
+      setVncUrl(""); // Empty initially; will be populated dynamically by the WebSocket status message
       connectBrowserSession(sessId, profileId);
       await fetchUserSessions();
     } catch (e: any) {
