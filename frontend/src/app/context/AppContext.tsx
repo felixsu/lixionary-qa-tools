@@ -720,7 +720,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    let wsUrl = `ws://localhost:8000/api/browser/ws/browser-session/${sessId}?token=${token}`;
+    
+    // Determine the base WebSocket host dynamically to handle both local development (Docker / non-Docker)
+    // and production/QA deployment reverse proxy routing.
+    let wsHost = "";
+    if (process.env.NEXT_PUBLIC_WS_URL) {
+      wsHost = process.env.NEXT_PUBLIC_WS_URL;
+      if (!wsHost.startsWith("ws://") && !wsHost.startsWith("wss://")) {
+        wsHost = `${protocol}//${wsHost}`;
+      }
+    } else {
+      const hostname = window.location.hostname;
+      const port = window.location.port;
+      
+      if (hostname === "localhost" || hostname === "127.0.0.1") {
+        if (port === "8481") {
+          // Frontend runs on host port 8481, backend runs on host port 8480 in docker-compose.
+          wsHost = `${protocol}//localhost:8480`;
+        } else if (port === "3000") {
+          // Frontend runs on port 3000 (local Node dev server), backend runs on port 8000.
+          wsHost = `${protocol}//localhost:8000`;
+        } else {
+          wsHost = `${protocol}//${window.location.host}`;
+        }
+      } else {
+        // Standard production/QA reverse proxy setup where /api routes directly to backend
+        wsHost = `${protocol}//${window.location.host}`;
+      }
+    }
+
+    let wsUrl = `${wsHost}/api/browser/ws/browser-session/${sessId}?token=${token}`;
     if (profileId) {
       wsUrl += `&profileId=${profileId}`;
     }
@@ -744,10 +773,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setActiveTabIndex(0);
           break;
         case "navigation":
-          setBrowserUrl(msg.data.url);
+          const navUrl = msg.data?.url || msg.url;
+          setBrowserUrl(navUrl);
           fetchNetworkLogs(sessId);
           setActiveTabIndex((ai) => {
-            setBrowserTabs((prev) => prev.map((t, i) => i === ai ? { ...t, url: msg.data.url } : t));
+            setBrowserTabs((prev) => prev.map((t, i) => i === ai ? { ...t, url: navUrl } : t));
             return ai;
           });
           break;

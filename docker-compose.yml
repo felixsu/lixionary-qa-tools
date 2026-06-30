@@ -84,6 +84,7 @@ services:
       - NEXT_PUBLIC_IAM_CLIENT_ID=${IAM_CLIENT_ID:-ca4d16ef-9a5c-43df-811c-ea9cda47b19a}
       - NEXT_PUBLIC_IAM_FRONTEND_URL=${IAM_FRONTEND_URL:-http://localhost:8081}
       - NEXT_PUBLIC_REDIRECT_URI=${REDIRECT_URI:-http://localhost:8481/callback}
+      - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

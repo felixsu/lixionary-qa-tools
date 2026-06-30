@@ -284,15 +284,36 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
 
     if token:
         try:
-            import jwt
-            from config import settings
+            from routes.auth import decode_iam_token
+            from bson.errors import InvalidId
 
-            payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
-            ws_user_id = payload.get("sub")
+            payload = await decode_iam_token(token)
+            
+            # Resolve the local MongoDB user_id using the email claim if available
+            email = payload.get("email")
+            if email:
+                users_col = MongoDB.get_collection("users")
+                user = await users_col.find_one({"email": email})
+                if user:
+                    ws_user_id = str(user["_id"])
+            
+            if not ws_user_id:
+                ws_user_id = payload.get("sub")
 
             if ws_user_id and profile_id and profile_id != "undefined":
-                profiles_col = MongoDB.get_collection("browser_profiles")
-                profile = await profiles_col.find_one({"_id": ObjectId(profile_id), "ownerId": ObjectId(ws_user_id)})
+                try:
+                    owner_id_obj = ObjectId(ws_user_id)
+                except InvalidId:
+                    owner_id_obj = None
+                
+                try:
+                    profile_id_obj = ObjectId(profile_id)
+                except InvalidId:
+                    profile_id_obj = None
+
+                if owner_id_obj and profile_id_obj:
+                    profiles_col = MongoDB.get_collection("browser_profiles")
+                    profile = await profiles_col.find_one({"_id": profile_id_obj, "ownerId": owner_id_obj})
                 if profile:
                     default_url = profile.get("defaultUrl")
                     if profile.get("cookies"):
