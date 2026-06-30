@@ -129,8 +129,9 @@ class BrowserSessionManager:
         # Connect over CDP to dynamic VNC browser container
         browser = await playwright_mgr.chromium.connect_over_cdp(cdp_url)
         
-        # Always create a fresh isolated context — never reuse an existing one
-        context = await browser.new_context(viewport={"width": 1280, "height": 720})
+        # Use the default visible browser context so that Chrome window is visible on the VNC desktop.
+        # Since each session has its own dedicated Docker container, container-level isolation is sufficient.
+        context = browser.contexts[0] if browser.contexts else await browser.new_context(viewport={"width": 1280, "height": 720})
 
         if cookies:
             try:
@@ -253,8 +254,11 @@ class BrowserSessionManager:
         except Exception as e:
             print(f"Error adding inspector init script to context: {e}")
 
-        # New context always starts empty — create the first page
-        page = await context.new_page()
+        # Reuse the existing visible tab if available, otherwise create a new one
+        if context.pages:
+            page = context.pages[0]
+        else:
+            page = await context.new_page()
 
         # Handle startup navigation
         url_to_open = default_url if default_url else "about:blank"

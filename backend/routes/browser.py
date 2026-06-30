@@ -540,12 +540,27 @@ async def vnc_http_proxy(session_id: str, path: str, request: Request):
 
 @router.websocket("/vnc-ws/{session_id}")
 async def vnc_ws_proxy(websocket: WebSocket, session_id: str):
-    await websocket.accept()
+    # Negotiate subprotocol with client
+    client_protocols = websocket.headers.get("sec-websocket-protocol", "").split(",")
+    selected_subprotocol = None
+    for p in client_protocols:
+        p = p.strip()
+        if p in ["binary", "base64"]:
+            selected_subprotocol = p
+            break
+
+    print(f"Incoming VNC WS connection for session {session_id}, subprotocols requested: {client_protocols}, selected: {selected_subprotocol}", flush=True)
+    await websocket.accept(subprotocol=selected_subprotocol)
+    print(f"Accepted VNC WS connection for session {session_id}", flush=True)
     
     target_ws_url = f"ws://lixionary-vnc-browser-{session_id}:8080/websockify"
+    target_subprotocols = [selected_subprotocol] if selected_subprotocol else ["binary"]
     
     try:
-        async with websockets.connect(target_ws_url, subprotocols=["binary"]) as target_ws:
+        print(f"Connecting VNC WS proxy to target: {target_ws_url} with subprotocols {target_subprotocols}", flush=True)
+        async with websockets.connect(target_ws_url, subprotocols=target_subprotocols) as target_ws:
+            print(f"Connected VNC WS proxy to target for session {session_id}", flush=True)
+            
             async def forward_to_target():
                 try:
                     while True:
@@ -554,8 +569,8 @@ async def vnc_ws_proxy(websocket: WebSocket, session_id: str):
                             await target_ws.send(msg["bytes"])
                         elif "text" in msg:
                             await target_ws.send(msg["text"])
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"Exception in VNC WS proxy forward_to_target: {e}", flush=True)
                     
             async def forward_to_client():
                 try:
@@ -565,13 +580,15 @@ async def vnc_ws_proxy(websocket: WebSocket, session_id: str):
                             await websocket.send_bytes(data)
                         else:
                             await websocket.send_text(data)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"Exception in VNC WS proxy forward_to_client: {e}", flush=True)
                     
             await asyncio.gather(forward_to_target(), forward_to_client())
     except Exception as e:
-        print(f"VNC WebSocket proxy error for session {session_id}: {e}")
+        print(f"VNC WebSocket proxy error for session {session_id}: {e}", flush=True)
         try:
             await websocket.close(code=1011, reason=str(e))
         except Exception:
             pass
+    finally:
+        print(f"Finished VNC WS proxy for session {session_id}", flush=True)
