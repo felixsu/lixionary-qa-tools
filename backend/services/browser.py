@@ -28,13 +28,106 @@ class BrowserSessionManager:
             else:
                 await cls.close_session(session_id)
 
-        print(f"Creating new Playwright CDP session: {session_id} to {settings.BROWSER_CDP_URL}")
+        # Resolve/spawn dynamic browser container using DockerClient
+        from services.docker_client import DockerClient, DockerException
+        docker_client = DockerClient()
+        container_name = f"lixionary-vnc-browser-{session_id}"
+        
+        # Check if container already exists and is running
+        container_info = await docker_client.inspect_container(container_name)
+        assigned_port = 8080
+        
+        if container_info and container_info.get("State", {}).get("Running"):
+            print(f"Reusing existing dynamic browser container: {container_name}")
+            # Retrieve the host port mapped to 8080/tcp
+            ports = container_info.get("NetworkSettings", {}).get("Ports", {})
+            vnc_ports = ports.get("8080/tcp")
+            if vnc_ports and len(vnc_ports) > 0:
+                host_port_str = vnc_ports[0].get("HostPort")
+                if host_port_str:
+                    assigned_port = int(host_port_str)
+        else:
+            # If container exists but stopped, remove it first
+            if container_info:
+                try:
+                    await docker_client.remove_container(container_name, force=True)
+                except Exception:
+                    pass
+
+            print(f"Spawning new dynamic VNC-browser container: {container_name}")
+            
+            # Inspect template container 'lixionary-vnc-browser' to clone config
+            template_info = await docker_client.inspect_container("lixionary-vnc-browser")
+            if not template_info:
+                raise Exception("Template container 'lixionary-vnc-browser' not found. Cannot clone configuration.")
+            
+            image = template_info.get("Config", {}).get("Image") or template_info.get("Image")
+            env = template_info.get("Config", {}).get("Env", [])
+            networks = template_info.get("NetworkSettings", {}).get("Networks", {})
+            
+            # Copy template environment variables and inject the container name
+            env_vars = list(env) if env else []
+            env_vars.append(f"CONTAINER_NAME={container_name}")
+            
+            container_config = {
+                "Image": image,
+                "Env": env_vars,
+                "HostConfig": {
+                    "PortBindings": {
+                        "8080/tcp": [{"HostPort": ""}] # Auto-assign free port
+                    },
+                    "ShmSize": 2147483648 # 2GB SHM size to prevent Chrome crashes
+                }
+            }
+            
+            await docker_client.create_container(container_name, container_config)
+            
+            # Connect the new container to the same network(s) as the template container
+            for net_name in networks.keys():
+                await docker_client.connect_network(net_name, container_name)
+                
+            # Start the container
+            await docker_client.start_container(container_name)
+            
+            # Wait for container port mapping to resolve
+            for _ in range(20):
+                info = await docker_client.inspect_container(container_name)
+                ports = info.get("NetworkSettings", {}).get("Ports", {})
+                vnc_ports = ports.get("8080/tcp")
+                if vnc_ports and len(vnc_ports) > 0:
+                    host_port_str = vnc_ports[0].get("HostPort")
+                    if host_port_str:
+                        assigned_port = int(host_port_str)
+                        break
+                await asyncio.sleep(0.2)
+
+        cdp_url = f"http://{container_name}:9222"
+        
+        # Wait for the VNC-browser container's CDP endpoint/forwarder to be fully initialized and listening
+        import httpx
+        cdp_ready = False
+        print(f"Waiting for CDP endpoint at {cdp_url} to respond...")
+        for _ in range(30): # Wait up to 15 seconds
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(f"{cdp_url}/json/version", timeout=1.0)
+                    if resp.status_code == 200:
+                        cdp_ready = True
+                        break
+            except Exception:
+                pass
+            await asyncio.sleep(0.5)
+
+        if not cdp_ready:
+            print(f"WARNING: CDP endpoint at {cdp_url} did not respond within timeout. Attempting connection anyway.")
+
+        print(f"Creating new Playwright CDP session: {session_id} to dynamic container {cdp_url}")
         
         # Start playwright
         playwright_mgr = await async_playwright().start()
         
-        # Connect over CDP to VNC browser
-        browser = await playwright_mgr.chromium.connect_over_cdp(settings.BROWSER_CDP_URL)
+        # Connect over CDP to dynamic VNC browser container
+        browser = await playwright_mgr.chromium.connect_over_cdp(cdp_url)
         
         # Always create a fresh isolated context — never reuse an existing one
         context = await browser.new_context(viewport={"width": 1280, "height": 720})
@@ -180,6 +273,7 @@ class BrowserSessionManager:
             "callback": ws_send_callback,
             "inspect_enabled": False,
             "user_id": user_id,
+            "vnc_port": assigned_port,
         }
 
         # Setup event listeners on the first page
@@ -236,6 +330,17 @@ class BrowserSessionManager:
             except Exception as e:
                 print(f"Error stopping playwright for session {session_id}: {e}")
             del cls._sessions[session_id]
+
+        # Stop and remove the dynamic container
+        try:
+            from services.docker_client import DockerClient
+            docker_client = DockerClient()
+            container_name = f"lixionary-vnc-browser-{session_id}"
+            print(f"Stopping and removing dynamic browser container: {container_name}")
+            await docker_client.stop_container(container_name, timeout=5)
+            await docker_client.remove_container(container_name)
+        except Exception as e:
+            print(f"Error stopping/removing dynamic container {session_id}: {e}")
 
     @classmethod
     async def _count_locator_matches(cls, frame, strategy: str, selector: str) -> int:

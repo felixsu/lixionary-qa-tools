@@ -609,7 +609,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({ detail: "Unknown error occurred" }));
-      throw new Error(err.detail || `Server responded with ${response.status}`);
+      const errorMsg = typeof err.detail === "string"
+        ? err.detail
+        : (err.detail?.message || `Server responded with ${response.status}`);
+      const error = new Error(errorMsg);
+      (error as any).status = response.status;
+      (error as any).detail = err.detail;
+      throw error;
     }
     return response.json();
   };
@@ -720,7 +726,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    let wsUrl = `ws://localhost:8000/api/browser/ws/browser-session/${sessId}?token=${token}`;
+    
+    // Determine the base WebSocket host dynamically to handle both local development (Docker / non-Docker)
+    // and production/QA deployment reverse proxy routing.
+    let wsHost = "";
+    if (process.env.NEXT_PUBLIC_WS_URL) {
+      wsHost = process.env.NEXT_PUBLIC_WS_URL;
+      if (!wsHost.startsWith("ws://") && !wsHost.startsWith("wss://")) {
+        wsHost = `${protocol}//${wsHost}`;
+      }
+    } else {
+      const hostname = window.location.hostname;
+      const port = window.location.port;
+      
+      if (hostname === "localhost" || hostname === "127.0.0.1") {
+        if (port === "8481") {
+          // Frontend runs on host port 8481, backend runs on host port 8480 in docker-compose.
+          wsHost = `${protocol}//localhost:8480`;
+        } else if (port === "3000") {
+          // Frontend runs on port 3000 (local Node dev server), backend runs on port 8000.
+          wsHost = `${protocol}//localhost:8000`;
+        } else {
+          wsHost = `${protocol}//${window.location.host}`;
+        }
+      } else {
+        // Standard production/QA reverse proxy setup where /api routes directly to backend
+        wsHost = `${protocol}//${window.location.host}`;
+      }
+    }
+
+    let wsUrl = `${wsHost}/api/browser/ws/browser-session/${sessId}?token=${token}`;
     if (profileId) {
       wsUrl += `&profileId=${profileId}`;
     }
@@ -742,12 +777,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setBrowserUrl(msg.data.url);
           setBrowserTabs([{ index: 0, url: msg.data.url }]);
           setActiveTabIndex(0);
+          
+          // Dynamically compute the VNC iframe URL using the port returned by the backend
+          const vncPort = msg.data.vnc_port || 8080;
+          setVncUrl(`http://${window.location.hostname}:${vncPort}/vnc.html?autoconnect=true&resize=scale&password=`);
           break;
         case "navigation":
-          setBrowserUrl(msg.data.url);
+          const navUrl = msg.data?.url || msg.url;
+          setBrowserUrl(navUrl);
           fetchNetworkLogs(sessId);
           setActiveTabIndex((ai) => {
-            setBrowserTabs((prev) => prev.map((t, i) => i === ai ? { ...t, url: msg.data.url } : t));
+            setBrowserTabs((prev) => prev.map((t, i) => i === ai ? { ...t, url: navUrl } : t));
             return ai;
           });
           break;
@@ -833,7 +873,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelectedElementLocators([]);
     setBrowserTabs([]);
     setActiveTabIndex(0);
-    setVncUrl(`http://localhost:8080/vnc.html?autoconnect=true&resize=scale&password=`);
+    setVncUrl(""); // Empty initially; will be populated dynamically by the WebSocket status message
     connectBrowserSession(sessId, profileId);
   };
 
@@ -856,11 +896,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setSelectedElementLocators([]);
       setBrowserTabs([]);
       setActiveTabIndex(0);
-      setVncUrl(`http://localhost:8080/vnc.html?autoconnect=true&resize=scale&password=`);
+      setVncUrl(""); // Empty initially; will be populated dynamically by the WebSocket status message
       connectBrowserSession(sessId, profileId);
       await fetchUserSessions();
     } catch (e: any) {
       console.error("Failed to create browser session:", e.message);
+      throw e;
     }
   };
 
