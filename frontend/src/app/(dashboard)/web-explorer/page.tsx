@@ -694,7 +694,7 @@ export default function WebExplorerPage() {
 
     setIsSavingToCollection(true);
     try {
-      await handleSaveNetworkRequestToCollection(saveCollectionId, saveRequestName, {
+      await handleSaveNetworkRequestToCollection(saveCollectionId, saveCollectionId, saveRequestName, {
         method: pendingSaveLog.method,
         url: urlWithoutQuery,
         headers,

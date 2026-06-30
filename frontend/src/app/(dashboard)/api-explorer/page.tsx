@@ -4,10 +4,10 @@ import React, { useState, useRef } from "react";
 import {
   Send, Plus, Trash2, Share2, ChevronDown, ChevronRight,
   Sparkles, Code2, Copy, Check, X, CheckCircle2, AlignLeft, Minimize2,
-  PanelLeftClose, PanelLeftOpen,
+  PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
-import { useAppContext } from "../../context/AppContext";
+import { useAppContext, findRequestInTree } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
 
 type ConfigTab = "headers" | "params" | "auth" | "variables" | "body";
@@ -132,6 +132,387 @@ const methodStyle = (m: string): React.CSSProperties => {
   return { background: s.bg, color: s.c };
 };
 
+const countRequestsInTree = (node: any): number => {
+  let count = node.requests?.length || 0;
+  if (node.children) {
+    for (const child of node.children) {
+      count += countRequestsInTree(child);
+    }
+  }
+  return count;
+};
+
+interface CollectionNodeProps {
+  node: any;
+  depth: number;
+  selectedCollectionId: string;
+  selectedRequestId: string;
+  setSelectedCollectionId: (id: string) => void;
+  setSelectedRequestId: (id: string) => void;
+  setTargetAddColId: (id: string | null) => void;
+  setShowNewReqModal: (show: boolean) => void;
+  setShowNewSubColModal: (show: boolean) => void;
+  handleMoveNode: (nodeId: string, nodeType: "request" | "collection", targetColId: string) => Promise<void>;
+  handleDeleteNode: (nodeId: string, nodeType: "request" | "collection") => Promise<void>;
+  handleRenameNode: (nodeId: string, nodeType: "request" | "collection", newName: string) => Promise<void>;
+  handleCopyId: (id: string) => void;
+  copiedId: string | null;
+  methodStyle: (method: string) => React.CSSProperties;
+  expandedFolders: Record<string, boolean>;
+  toggleFolder: (id: string) => void;
+  editingNodeId: string | null;
+  setEditingNodeId: (id: string | null) => void;
+  editingName: string;
+  setEditingName: (name: string) => void;
+}
+
+const CollectionNode: React.FC<CollectionNodeProps> = ({
+  node,
+  depth,
+  selectedCollectionId,
+  selectedRequestId,
+  setSelectedCollectionId,
+  setSelectedRequestId,
+  setTargetAddColId,
+  setShowNewReqModal,
+  setShowNewSubColModal,
+  handleMoveNode,
+  handleDeleteNode,
+  handleRenameNode,
+  handleCopyId,
+  copiedId,
+  methodStyle,
+  expandedFolders,
+  toggleFolder,
+  editingNodeId,
+  setEditingNodeId,
+  editingName,
+  setEditingName,
+}) => {
+  const [isDragOver, setIsDragOver] = useState(false);
+  const isFolderExpanded = expandedFolders[node.id] ?? (depth === 1);
+
+  const handleDragStart = (e: React.DragEvent, id: string, type: "request" | "collection") => {
+    e.dataTransfer.setData("text/plain", id);
+    e.dataTransfer.setData("item-type", type);
+    e.stopPropagation();
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragOver(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    const nodeId = e.dataTransfer.getData("text/plain");
+    const nodeType = e.dataTransfer.getData("item-type") as "request" | "collection";
+    
+    if (!nodeId || !nodeType) return;
+    try {
+      await handleMoveNode(nodeId, nodeType, node.id);
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  return (
+    <div className="mb-1 select-none">
+      {/* Folder Header */}
+      <div
+        draggable={depth > 1}
+        onDragStart={(e) => handleDragStart(e, node.id, "collection")}
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onClick={() => {
+          toggleFolder(node.id);
+          if (depth === 1) {
+            setSelectedCollectionId(node.id);
+            if (node.requests && node.requests.length > 0) {
+              setSelectedRequestId(node.requests[0].id);
+            }
+          }
+        }}
+        className="group flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer hover:bg-hover transition-colors"
+        style={{
+          background: isDragOver
+            ? "rgba(204, 120, 92, 0.15)"
+            : selectedCollectionId === node.id && depth === 1
+            ? "var(--color-hover)"
+            : "transparent",
+          border: isDragOver ? "1px dashed var(--color-clay)" : "1px solid transparent",
+          paddingLeft: `${depth * 8}px`,
+        }}
+      >
+        {isFolderExpanded ? (
+          <ChevronDown className="h-3.5 w-3.5 text-stone flex-shrink-0" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 text-stone flex-shrink-0" />
+        )}
+        <Folder className="h-4 w-4 text-stone/80 flex-shrink-0" />
+        {editingNodeId === node.id ? (
+          <input
+            type="text"
+            value={editingName}
+            onChange={(e) => setEditingName(e.target.value)}
+            onKeyDown={async (e) => {
+              if (e.key === "Enter") {
+                e.stopPropagation();
+                if (editingName.trim()) {
+                  try {
+                    await handleRenameNode(node.id, "collection", editingName.trim());
+                  } catch (err: any) {
+                    alert(err.message);
+                  }
+                }
+                setEditingNodeId(null);
+              } else if (e.key === "Escape") {
+                setEditingNodeId(null);
+              }
+            }}
+            onBlur={async () => {
+              if (editingName.trim() && editingName.trim() !== node.name) {
+                try {
+                  await handleRenameNode(node.id, "collection", editingName.trim());
+                } catch (err: any) {
+                  alert(err.message);
+                }
+              }
+              setEditingNodeId(null);
+            }}
+            autoFocus
+            onClick={(e) => e.stopPropagation()}
+            className="flex-1 h-[24px] bg-cream border border-clay rounded px-2 text-xs text-graphite outline-none focus:border-clay"
+          />
+        ) : (
+          <span className="flex-1 text-[13px] font-medium text-ink truncate">{node.name}</span>
+        )}
+        
+        {editingNodeId !== node.id && (
+          <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            {depth === 1 && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCopyId(node.id);
+                }}
+                title="Copy collection ID"
+                className="text-stone hover:text-clay transition"
+              >
+                {copiedId === node.id ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              </button>
+            )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditingNodeId(node.id);
+                setEditingName(node.name);
+              }}
+              title="Rename collection"
+              className="text-stone hover:text-clay transition"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={async (e) => {
+                e.stopPropagation();
+                const count = countRequestsInTree(node);
+                if (count > 0) {
+                  const yes = window.confirm(`This collection contains ${count} request(s). Are you sure you want to delete it and all its contents?`);
+                  if (!yes) return;
+                } else {
+                  const yes = window.confirm(`Are you sure you want to delete the collection "${node.name}"?`);
+                  if (!yes) return;
+                }
+                try {
+                  await handleDeleteNode(node.id, "collection");
+                } catch (err: any) {
+                  alert(err.message);
+                }
+              }}
+              title="Delete collection"
+              className="text-stone hover:text-danger transition"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Expanded Folder Contents */}
+      {isFolderExpanded && (
+        <div className="flex flex-col gap-px mt-0.5">
+          {/* Render children collections recursively */}
+          {node.children && node.children.map((child: any) => (
+            <CollectionNode
+              key={child.id}
+              node={child}
+              depth={depth + 1}
+              selectedCollectionId={selectedCollectionId}
+              selectedRequestId={selectedRequestId}
+              setSelectedCollectionId={setSelectedCollectionId}
+              setSelectedRequestId={setSelectedRequestId}
+              setTargetAddColId={setTargetAddColId}
+              setShowNewReqModal={setShowNewReqModal}
+              setShowNewSubColModal={setShowNewSubColModal}
+              handleMoveNode={handleMoveNode}
+              handleDeleteNode={handleDeleteNode}
+              handleRenameNode={handleRenameNode}
+              handleCopyId={handleCopyId}
+              copiedId={copiedId}
+              methodStyle={methodStyle}
+              expandedFolders={expandedFolders}
+              toggleFolder={toggleFolder}
+              editingNodeId={editingNodeId}
+              setEditingNodeId={setEditingNodeId}
+              editingName={editingName}
+              setEditingName={setEditingName}
+            />
+          ))}
+
+          {/* Render request items */}
+          {node.requests && node.requests.map((req: any) => {
+            const active = req.id === selectedRequestId;
+            return (
+              <div
+                key={req.id}
+                draggable
+                onDragStart={(e) => handleDragStart(e, req.id, "request")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedRequestId(req.id);
+                }}
+                className="group/req flex items-center gap-2 px-2 py-1 rounded-md cursor-pointer hover:bg-cream transition-colors"
+                style={{
+                  marginLeft: `${(depth + 1) * 8}px`,
+                  background: active ? "var(--color-cream)" : "transparent",
+                  borderLeft: `3px solid ${active ? "var(--color-clay)" : "transparent"}`,
+                }}
+              >
+                <span
+                  className="font-mono text-[9px] font-medium px-1.5 py-0.5 rounded flex-shrink-0"
+                  style={methodStyle(req.method)}
+                >
+                  {req.method}
+                </span>
+                {editingNodeId === req.id ? (
+                  <input
+                    type="text"
+                    value={editingName}
+                    onChange={(e) => setEditingName(e.target.value)}
+                    onKeyDown={async (e) => {
+                      if (e.key === "Enter") {
+                        e.stopPropagation();
+                        if (editingName.trim()) {
+                          try {
+                            await handleRenameNode(req.id, "request", editingName.trim());
+                          } catch (err: any) {
+                            alert(err.message);
+                          }
+                        }
+                        setEditingNodeId(null);
+                      } else if (e.key === "Escape") {
+                        setEditingNodeId(null);
+                      }
+                    }}
+                    onBlur={async () => {
+                      if (editingName.trim() && editingName.trim() !== req.name) {
+                        try {
+                          await handleRenameNode(req.id, "request", editingName.trim());
+                        } catch (err: any) {
+                          alert(err.message);
+                        }
+                      }
+                      setEditingNodeId(null);
+                    }}
+                    autoFocus
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex-1 h-[24px] bg-cream border border-clay rounded px-2 text-xs text-graphite outline-none focus:border-clay"
+                  />
+                ) : (
+                  <>
+                    <span className="text-xs text-graphite truncate flex-1">{req.name}</span>
+                    <div className="flex items-center gap-1 opacity-0 group-hover/req:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingNodeId(req.id);
+                          setEditingName(req.name);
+                        }}
+                        title="Rename request"
+                        className="text-stone hover:text-clay transition flex-shrink-0"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          const yes = window.confirm(`Are you sure you want to delete the request "${req.name}"?`);
+                          if (!yes) return;
+                          try {
+                            await handleDeleteNode(req.id, "request");
+                          } catch (err: any) {
+                            alert(err.message);
+                          }
+                        }}
+                        title="Delete request"
+                        className="text-stone hover:text-danger transition flex-shrink-0"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Add actions buttons */}
+          <div
+            className="flex gap-1.5 mt-1 mb-1.5"
+            style={{ marginLeft: `${(depth + 1) * 8}px` }}
+          >
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setTargetAddColId(node.id);
+                setShowNewReqModal(true);
+              }}
+              className="flex-1 flex items-center justify-center gap-1 py-1 px-1.5 border border-dashed border-line rounded-md text-[10px] text-mute hover:border-clay hover:text-clay transition-colors"
+            >
+              <Plus className="h-3 w-3" /> Request
+            </button>
+            {depth < 5 && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setTargetAddColId(node.id);
+                  setShowNewSubColModal(true);
+                }}
+                className="flex-1 flex items-center justify-center gap-1 py-1 px-1.5 border border-dashed border-line rounded-md text-[10px] text-mute hover:border-clay hover:text-clay transition-colors"
+              >
+                <Plus className="h-3 w-3" /> Collection
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function ApiExplorerPage() {
   const {
     authFunctions,
@@ -176,6 +557,10 @@ export default function ApiExplorerPage() {
     handleExecuteRequest,
     handleSaveRequest,
     handleCreateRequest,
+    handleCreateSubCollection,
+    handleMoveNode,
+    handleDeleteNode,
+    handleRenameNode,
     handleCreateCollection,
     handleImportCollection,
     handleAddCollaborator,
@@ -191,6 +576,13 @@ export default function ApiExplorerPage() {
   const [newColName, setNewColName] = useState("");
   const [showNewReqModal, setShowNewReqModal] = useState(false);
   const [newReqName, setNewReqName] = useState("");
+  const [showNewSubColModal, setShowNewSubColModal] = useState(false);
+  const [newSubColName, setNewSubColName] = useState("");
+  const [targetAddColId, setTargetAddColId] = useState<string | null>(null);
+  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+
   const [toast, setToast] = useState<string | null>(null);
   const [bodyCopied, setBodyCopied] = useState(false);
   const [responseCopied, setResponseCopied] = useState(false);
@@ -202,7 +594,14 @@ export default function ApiExplorerPage() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const activeCollection = collections.find((c) => c.id === selectedCollectionId);
-  const activeRequest = activeCollection?.requests.find((r) => r.id === selectedRequestId);
+  const activeRequest = activeCollection ? findRequestInTree(activeCollection, selectedRequestId) : undefined;
+
+  const toggleFolder = (id: string) => {
+    setExpandedFolders(prev => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -234,9 +633,24 @@ export default function ApiExplorerPage() {
   const onCreateRequestSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await handleCreateRequest(newReqName || "New Request");
+      await handleCreateRequest(newReqName || "New Request", targetAddColId || undefined);
       setNewReqName("");
       setShowNewReqModal(false);
+      setTargetAddColId(null);
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const onCreateSubCollectionSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!targetAddColId) return;
+    try {
+      await handleCreateSubCollection(newSubColName || "New Sub-collection", targetAddColId);
+      setNewSubColName("");
+      setShowNewSubColModal(false);
+      setTargetAddColId(null);
+      showToast("Sub-collection created");
     } catch (err: any) {
       alert(err.message);
     }
@@ -566,71 +980,32 @@ export default function ApiExplorerPage() {
 
         {/* Collections list */}
         <div className="flex-1 overflow-y-auto p-2" style={{ display: sidebarCollapsed ? "none" : undefined }}>
-          {collections.map((col) => {
-            const isExpanded = col.id === selectedCollectionId;
-            return (
-              <div key={col.id} className="mb-1">
-                <div
-                  onClick={() => {
-                    setSelectedCollectionId(col.id);
-                    setSelectedRequestId(col.requests.length ? col.requests[0].id : "");
-                  }}
-                  className="group flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer hover:bg-hover transition-colors"
-                  style={{ background: isExpanded ? "var(--color-hover)" : "transparent" }}
-                >
-                  {isExpanded ? (
-                    <ChevronDown className="h-3 w-3 text-stone flex-shrink-0" />
-                  ) : (
-                    <ChevronRight className="h-3 w-3 text-stone flex-shrink-0" />
-                  )}
-                  <span className="flex-1 text-[13px] font-medium text-ink truncate">{col.name}</span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleCopyId(col.id);
-                    }}
-                    title="Copy collection ID"
-                    className="opacity-0 group-hover:opacity-100 text-stone hover:text-clay transition"
-                  >
-                    {copiedId === col.id ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                  </button>
-                </div>
-
-                {isExpanded && (
-                  <div className="pl-2 py-0.5 flex flex-col gap-px">
-                    {col.requests.map((req) => {
-                      const active = req.id === selectedRequestId;
-                      return (
-                        <div
-                          key={req.id}
-                          onClick={() => setSelectedRequestId(req.id)}
-                          className="flex items-center gap-2 px-2.5 py-1.5 rounded-md cursor-pointer hover:bg-cream transition-colors"
-                          style={{
-                            background: active ? "var(--color-cream)" : "transparent",
-                            borderLeft: `3px solid ${active ? "var(--color-clay)" : "transparent"}`,
-                          }}
-                        >
-                          <span
-                            className="font-mono text-[10px] font-medium px-1.5 py-0.5 rounded flex-shrink-0"
-                            style={methodStyle(req.method)}
-                          >
-                            {req.method}
-                          </span>
-                          <span className="text-xs text-graphite truncate">{req.name}</span>
-                        </div>
-                      );
-                    })}
-                    <button
-                      onClick={() => setShowNewReqModal(true)}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 mt-1 w-full border border-dashed border-line rounded-md text-[11px] text-mute hover:border-clay hover:text-clay transition-colors"
-                    >
-                      <Plus className="h-3 w-3" /> Add request
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          {collections.map((col) => (
+            <CollectionNode
+              key={col.id}
+              node={col}
+              depth={1}
+              selectedCollectionId={selectedCollectionId}
+              selectedRequestId={selectedRequestId}
+              setSelectedCollectionId={setSelectedCollectionId}
+              setSelectedRequestId={setSelectedRequestId}
+              setTargetAddColId={setTargetAddColId}
+              setShowNewReqModal={setShowNewReqModal}
+              setShowNewSubColModal={setShowNewSubColModal}
+              handleMoveNode={handleMoveNode}
+              handleDeleteNode={handleDeleteNode}
+              handleRenameNode={handleRenameNode}
+              handleCopyId={handleCopyId}
+              copiedId={copiedId}
+              methodStyle={methodStyle}
+              expandedFolders={expandedFolders}
+              toggleFolder={toggleFolder}
+              editingNodeId={editingNodeId}
+              setEditingNodeId={setEditingNodeId}
+              editingName={editingName}
+              setEditingName={setEditingName}
+            />
+          ))}
           {collections.length === 0 && (
             <p className="text-xs text-mute text-center px-4 py-8 leading-relaxed">
               No collections yet. Create one with the + button above.
@@ -1176,6 +1551,26 @@ export default function ApiExplorerPage() {
               />
             </div>
             <ModalFooter onCancel={() => setShowNewReqModal(false)} submitLabel="Create" />
+          </form>
+        </Modal>
+      )}
+
+      {showNewSubColModal && (
+        <Modal title="Create sub-collection" onClose={() => setShowNewSubColModal(false)}>
+          <form onSubmit={onCreateSubCollectionSubmit} className="flex flex-col gap-5">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[13px] font-medium text-graphite">Name</label>
+              <input
+                type="text"
+                placeholder="e.g. Users folder"
+                value={newSubColName}
+                onChange={(e) => setNewSubColName(e.target.value)}
+                autoFocus
+                required
+                className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
+              />
+            </div>
+            <ModalFooter onCancel={() => setShowNewSubColModal(false)} submitLabel="Create" />
           </form>
         </Modal>
       )}

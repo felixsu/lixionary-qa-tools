@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel
 from bson import ObjectId
@@ -37,6 +37,16 @@ def serialize_user(doc) -> dict:
         doc_copy["updatedAt"] = doc_copy["updatedAt"].isoformat()
     return doc_copy
 
+def serialize_collection_node(node: Dict[str, Any]) -> Dict[str, Any]:
+    for req in node.get("requests", []):
+        if req.get("authConfig") and req["authConfig"].get("authFunctionId"):
+            req["authConfig"]["authFunctionId"] = str(req["authConfig"]["authFunctionId"])
+            
+    if "children" in node:
+        node["children"] = [serialize_collection_node(dict(c)) for c in node["children"]]
+        
+    return node
+
 def serialize_collection(doc) -> dict:
     if not doc:
         return doc
@@ -48,11 +58,7 @@ def serialize_collection(doc) -> dict:
     if "collaboratorIds" in doc_copy:
         doc_copy["collaboratorIds"] = [str(uid) for uid in doc_copy["collaboratorIds"]]
         
-    for req in doc_copy.get("requests", []):
-        if req.get("authConfig") and req["authConfig"].get("authFunctionId"):
-            req["authConfig"]["authFunctionId"] = str(req["authConfig"]["authFunctionId"])
-            
-    return doc_copy
+    return serialize_collection_node(doc_copy)
 
 
 # --- BROWSER SESSIONS MANAGEMENT ---

@@ -42,11 +42,112 @@ export interface RequestItem {
 export interface Collection {
   id: string;
   name: string;
-  description: string;
-  ownerId: string;
-  collaboratorIds: string[];
+  description?: string;
+  ownerId?: string;
+  collaboratorIds?: string[];
   requests: RequestItem[];
+  children?: Collection[];
 }
+
+// Tree helper functions
+export const findRequestInTree = (collection: Collection, requestId: string): RequestItem | null => {
+  const found = collection.requests?.find(r => r.id === requestId);
+  if (found) return found;
+  if (collection.children) {
+    for (const child of collection.children) {
+      const res = findRequestInTree(child, requestId);
+      if (res) return res;
+    }
+  }
+  return null;
+};
+
+export const updateRequestInTree = (collection: Collection, requestId: string, updatedRequest: RequestItem): Collection => {
+  const requests = collection.requests?.map(r => r.id === requestId ? updatedRequest : r) || [];
+  const children = collection.children?.map(child => updateRequestInTree(child, requestId, updatedRequest)) || [];
+  return { ...collection, requests, children };
+};
+
+export const deleteRequestInTree = (collection: Collection, requestId: string): Collection => {
+  const requests = collection.requests?.filter(r => r.id !== requestId) || [];
+  const children = collection.children?.map(child => deleteRequestInTree(child, requestId)) || [];
+  return { ...collection, requests, children };
+};
+
+export const findParentNodeInTree = (collection: Collection, targetId: string): Collection | null => {
+  if (collection.requests?.some(r => r.id === targetId)) {
+    return collection;
+  }
+  if (collection.children?.some(c => c.id === targetId)) {
+    return collection;
+  }
+  if (collection.children) {
+    for (const child of collection.children) {
+      const res = findParentNodeInTree(child, targetId);
+      if (res) return res;
+    }
+  }
+  return null;
+};
+
+export const findNodeDepthInTree = (collection: Collection, targetId: string, currentDepth: number = 1): number | null => {
+  if (collection.id === targetId) {
+    return currentDepth;
+  }
+  if (collection.children) {
+    for (const child of collection.children) {
+      const res = findNodeDepthInTree(child, targetId, currentDepth + 1);
+      if (res) return res;
+    }
+  }
+  return null;
+};
+
+export const getCollectionHeight = (collection: Collection): number => {
+  if (!collection.children || collection.children.length === 0) {
+    return 1;
+  }
+  const heights = collection.children.map(c => getCollectionHeight(c));
+  return 1 + Math.max(...heights);
+};
+
+export const addRequestToNode = (collection: Collection, targetCollectionId: string, newRequest: RequestItem): Collection => {
+  if (collection.id === targetCollectionId) {
+    return { ...collection, requests: [...(collection.requests || []), newRequest] };
+  }
+  const children = collection.children?.map(child => addRequestToNode(child, targetCollectionId, newRequest)) || [];
+  return { ...collection, children };
+};
+
+export const addSubCollectionToNode = (collection: Collection, targetCollectionId: string, newSubCollection: Collection): Collection => {
+  if (collection.id === targetCollectionId) {
+    return { ...collection, children: [...(collection.children || []), newSubCollection] };
+  }
+  const children = collection.children?.map(child => addSubCollectionToNode(child, targetCollectionId, newSubCollection)) || [];
+  return { ...collection, children };
+};
+
+// Helper to remove a request or sub-collection from a node recursively
+export const removeNodeFromTree = (collection: Collection, targetId: string): Collection => {
+  const requests = collection.requests?.filter(r => r.id !== targetId) || [];
+  const filteredChildren = collection.children?.filter(c => c.id !== targetId) || [];
+  const children = filteredChildren.map(child => removeNodeFromTree(child, targetId));
+  return { ...collection, requests, children };
+};
+
+// Helper to find a specific collection node in a tree recursively
+export const findCollectionInTree = (collection: Collection, targetId: string): Collection | null => {
+  if (collection.id === targetId) {
+    return collection;
+  }
+  if (collection.children) {
+    for (const child of collection.children) {
+      const res = findCollectionInTree(child, targetId);
+      if (res) return res;
+    }
+  }
+  return null;
+};
 
 export interface NetworkLog {
   id: string;
@@ -236,9 +337,10 @@ interface AppContextType {
   handleLogClick: (logId: string) => Promise<void>;
   handleExecuteRequest: () => Promise<void>;
   handleSaveRequest: () => Promise<void>;
-  handleCreateRequest: (name: string) => Promise<void>;
+  handleCreateRequest: (name: string, targetColId?: string) => Promise<void>;
   handleSaveNetworkRequestToCollection: (
     collectionId: string,
+    targetColId: string,
     requestName: string,
     requestData: {
       method: string;
@@ -249,6 +351,10 @@ interface AppContextType {
       body: string;
     }
   ) => Promise<void>;
+  handleCreateSubCollection: (name: string, parentColId: string) => Promise<void>;
+  handleMoveNode: (nodeId: string, nodeType: "request" | "collection", targetColId: string) => Promise<void>;
+  handleDeleteNode: (nodeId: string, nodeType: "request" | "collection") => Promise<void>;
+  handleRenameNode: (nodeId: string, nodeType: "request" | "collection", newName: string) => Promise<void>;
   handleCreateCollection: (name: string) => Promise<void>;
   handleImportCollection: (id: string) => Promise<void>;
   handleAddCollaborator: (email: string) => Promise<void>;
@@ -415,7 +521,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (selectedCollectionId && selectedRequestId) {
       const col = collections.find(c => c.id === selectedCollectionId);
-      const req = col?.requests.find(r => r.id === selectedRequestId);
+      const req = col ? findRequestInTree(col, selectedRequestId) : null;
       if (req) {
         setReqName(req.name);
         setReqMethod(req.method);
@@ -920,39 +1026,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const handleSaveRequest = async () => {
-    if (!selectedCollectionId || !selectedRequestId) return;
+    if (!selectedRequestId) return;
 
     try {
-      const col = collections.find(c => c.id === selectedCollectionId);
+      const col = collections.find(c => findRequestInTree(c, selectedRequestId) !== null);
       if (!col) return;
 
-      const updatedRequests = col.requests.map(r => {
-        if (r.id === selectedRequestId) {
-          return {
-            ...r,
-            name: reqName,
-            method: reqMethod,
-            url: reqUrl,
-            headers: reqHeaders.filter(h => h.key !== ""),
-            queryParams: reqQueryParams.filter(p => p.key !== ""),
-            bodyType: reqBodyType,
-            body: reqBody,
-            authType: reqAuthType,
-            authConfig: {
-              token: reqAuthConfig.token,
-              key: reqAuthConfig.key,
-              value: reqAuthConfig.value,
-              authFunctionId: reqAuthConfig.authFunctionId || null
-            },
-            responseParserScript: reqParserScript
-          };
-        }
-        return r;
-      });
+      const req = findRequestInTree(col, selectedRequestId);
+      if (!req) return;
 
-      await apiCall(`/api/collections/${selectedCollectionId}`, {
+      const updatedRequest: RequestItem = {
+        ...req,
+        name: reqName,
+        method: reqMethod,
+        url: reqUrl,
+        headers: reqHeaders.filter(h => h.key !== ""),
+        queryParams: reqQueryParams.filter(p => p.key !== ""),
+        bodyType: reqBodyType,
+        body: reqBody,
+        authType: reqAuthType,
+        authConfig: {
+          token: reqAuthConfig.token,
+          key: reqAuthConfig.key,
+          value: reqAuthConfig.value,
+          authFunctionId: reqAuthConfig.authFunctionId || null
+        },
+        responseParserScript: reqParserScript
+      };
+
+      const updatedCol = updateRequestInTree(col, selectedRequestId, updatedRequest);
+
+      await apiCall(`/api/collections/${col.id}`, {
         method: "PUT",
-        body: JSON.stringify({ requests: updatedRequests })
+        body: JSON.stringify({
+          requests: updatedCol.requests,
+          children: updatedCol.children || []
+        })
       });
 
       // Saved state is now authoritative — drop the unsaved auth override.
@@ -964,14 +1073,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const handleCreateRequest = async (name: string) => {
-    if (!selectedCollectionId) {
-      throw new Error("Please select a collection first.");
-    }
-
+  const handleCreateRequest = async (name: string, targetColId?: string) => {
     try {
-      const col = collections.find(c => c.id === selectedCollectionId);
-      if (!col) return;
+      const actualTargetId = targetColId || selectedCollectionId;
+      if (!actualTargetId) {
+        throw new Error("Please select a collection first.");
+      }
+
+      const col = collections.find(c => findCollectionInTree(c, actualTargetId) !== null);
+      if (!col) {
+        throw new Error("Target collection not found in any collection tree.");
+      }
 
       const newRequest: RequestItem = {
         id: `req_${Math.random().toString(36).substring(2, 9)}`,
@@ -986,10 +1098,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         authConfig: {}
       };
 
-      const updatedRequests = [...col.requests, newRequest];
-      await apiCall(`/api/collections/${selectedCollectionId}`, {
+      const updatedCol = addRequestToNode(col, actualTargetId, newRequest);
+
+      await apiCall(`/api/collections/${col.id}`, {
         method: "PUT",
-        body: JSON.stringify({ requests: updatedRequests })
+        body: JSON.stringify({
+          requests: updatedCol.requests,
+          children: updatedCol.children || []
+        })
       });
 
       await fetchCollections();
@@ -1001,6 +1117,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const handleSaveNetworkRequestToCollection = async (
     collectionId: string,
+    targetColId: string,
     requestName: string,
     requestData: {
       method: string;
@@ -1013,6 +1130,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   ) => {
     const col = collections.find(c => c.id === collectionId);
     if (!col) throw new Error("Collection not found.");
+    
     const newRequest: RequestItem = {
       id: `req_${Math.random().toString(36).substring(2, 9)}`,
       name: requestName,
@@ -1025,12 +1143,271 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       authType: "NONE",
       authConfig: {}
     };
-    const updatedRequests = [...col.requests, newRequest];
+
+    const updatedCol = addRequestToNode(col, targetColId, newRequest);
+
     await apiCall(`/api/collections/${collectionId}`, {
       method: "PUT",
-      body: JSON.stringify({ requests: updatedRequests })
+      body: JSON.stringify({
+        requests: updatedCol.requests,
+        children: updatedCol.children || []
+      })
     });
     await fetchCollections();
+  };
+
+  const handleCreateSubCollection = async (name: string, parentColId: string) => {
+    try {
+      const col = collections.find(c => findCollectionInTree(c, parentColId) !== null);
+      if (!col) {
+        throw new Error("Parent collection not found in any collection tree.");
+      }
+
+      const currentDepth = findNodeDepthInTree(col, parentColId);
+      if (currentDepth === null) {
+        throw new Error("Parent collection not found in this tree.");
+      }
+      if (currentDepth >= 5) {
+        throw new Error("Cannot create collection. Maximum depth limit of 5 levels exceeded.");
+      }
+
+      const newSub: Collection = {
+        id: `col_${Math.random().toString(36).substring(2, 9)}`,
+        name: name || "New Sub-collection",
+        requests: [],
+        children: []
+      };
+
+      const updatedCol = addSubCollectionToNode(col, parentColId, newSub);
+
+      await apiCall(`/api/collections/${col.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          requests: updatedCol.requests,
+          children: updatedCol.children || []
+        })
+      });
+
+      await fetchCollections();
+    } catch (e: any) {
+      throw new Error(`Failed to create sub-collection: ${e.message}`);
+    }
+  };
+
+  const handleMoveNode = async (nodeId: string, nodeType: "request" | "collection", targetColId: string) => {
+    try {
+      // Find target root collection
+      const targetRootCol = collections.find(c => findCollectionInTree(c, targetColId) !== null);
+      if (!targetRootCol) {
+        throw new Error("Target parent collection not found.");
+      }
+
+      // Find source root collection
+      let sourceRootCol = collections.find(c => {
+        if (nodeType === "request") {
+          return findRequestInTree(c, nodeId) !== null;
+        } else {
+          return findCollectionInTree(c, nodeId) !== null;
+        }
+      });
+
+      if (!sourceRootCol) {
+        throw new Error("Source item to move not found.");
+      }
+
+      // Prevent dragging a collection into itself
+      if (nodeType === "collection" && nodeId === targetColId) {
+        throw new Error("Cannot move a collection into itself.");
+      }
+
+      // If moving a collection, check if target is a descendant of the moved collection
+      if (nodeType === "collection") {
+        const movedNode = findCollectionInTree(sourceRootCol, nodeId);
+        if (movedNode && findCollectionInTree(movedNode, targetColId)) {
+          throw new Error("Cannot move a collection into its own sub-collections.");
+        }
+      }
+
+      // Check depth limit
+      const targetDepth = findNodeDepthInTree(targetRootCol, targetColId);
+      if (targetDepth === null) {
+        throw new Error("Target parent collection not found in tree.");
+      }
+
+      let subtreeHeight = 1;
+      if (nodeType === "collection") {
+        const movedNode = findCollectionInTree(sourceRootCol, nodeId);
+        if (movedNode) {
+          subtreeHeight = getCollectionHeight(movedNode);
+        }
+      }
+
+      if (targetDepth + subtreeHeight > 5) {
+        throw new Error(`Cannot move. The nesting would exceed the maximum depth limit of 5 levels (maximum depth reached: ${targetDepth + subtreeHeight}).`);
+      }
+
+      // Find the item to move
+      let itemToMove: any = null;
+      if (nodeType === "request") {
+        itemToMove = findRequestInTree(sourceRootCol, nodeId);
+      } else {
+        itemToMove = findCollectionInTree(sourceRootCol, nodeId);
+      }
+
+      if (!itemToMove) {
+        throw new Error("Source node to move not found.");
+      }
+
+      if (sourceRootCol.id === targetRootCol.id) {
+        // Same root tree movement
+        let updatedCol = removeNodeFromTree(sourceRootCol, nodeId);
+        if (nodeType === "request") {
+          updatedCol = addRequestToNode(updatedCol, targetColId, itemToMove as RequestItem);
+        } else {
+          updatedCol = addSubCollectionToNode(updatedCol, targetColId, itemToMove as Collection);
+        }
+
+        await apiCall(`/api/collections/${sourceRootCol.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            requests: updatedCol.requests,
+            children: updatedCol.children || []
+          })
+        });
+      } else {
+        // Cross root tree movement
+        const updatedSourceCol = removeNodeFromTree(sourceRootCol, nodeId);
+        let updatedTargetCol = targetRootCol;
+        if (nodeType === "request") {
+          updatedTargetCol = addRequestToNode(targetRootCol, targetColId, itemToMove as RequestItem);
+        } else {
+          updatedTargetCol = addSubCollectionToNode(targetRootCol, targetColId, itemToMove as Collection);
+        }
+
+        // Save target first
+        await apiCall(`/api/collections/${targetRootCol.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            requests: updatedTargetCol.requests,
+            children: updatedTargetCol.children || []
+          })
+        });
+
+        // Save source second
+        await apiCall(`/api/collections/${sourceRootCol.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            requests: updatedSourceCol.requests,
+            children: updatedSourceCol.children || []
+          })
+        });
+      }
+
+      await fetchCollections();
+    } catch (e: any) {
+      throw new Error(`Failed to move item: ${e.message}`);
+    }
+  };
+
+  const handleDeleteNode = async (nodeId: string, nodeType: "request" | "collection") => {
+    try {
+      if (nodeType === "collection" && collections.some(c => c.id === nodeId)) {
+        await apiCall(`/api/collections/${nodeId}`, { method: "DELETE" });
+        if (selectedCollectionId === nodeId) {
+          setSelectedCollectionId("");
+          setSelectedRequestId("");
+        }
+        await fetchCollections();
+        return;
+      }
+
+      const col = collections.find(c => {
+        if (nodeType === "request") {
+          return findRequestInTree(c, nodeId) !== null;
+        } else {
+          return findCollectionInTree(c, nodeId) !== null;
+        }
+      });
+
+      if (!col) {
+        throw new Error("Item not found in any collection tree.");
+      }
+
+      const updatedCol = removeNodeFromTree(col, nodeId);
+
+      await apiCall(`/api/collections/${col.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          requests: updatedCol.requests,
+          children: updatedCol.children || []
+        })
+      });
+
+      if (nodeType === "request" && selectedRequestId === nodeId) {
+        setSelectedRequestId("");
+      }
+
+      await fetchCollections();
+    } catch (e: any) {
+      throw new Error(`Failed to delete item: ${e.message}`);
+    }
+  };
+
+  const handleRenameNode = async (nodeId: string, nodeType: "request" | "collection", newName: string) => {
+    try {
+      if (nodeType === "collection" && collections.some(c => c.id === nodeId)) {
+        await apiCall(`/api/collections/${nodeId}`, {
+          method: "PUT",
+          body: JSON.stringify({ name: newName })
+        });
+        await fetchCollections();
+        return;
+      }
+
+      const col = collections.find(c => {
+        if (nodeType === "request") {
+          return findRequestInTree(c, nodeId) !== null;
+        } else {
+          return findCollectionInTree(c, nodeId) !== null;
+        }
+      });
+
+      if (!col) {
+        throw new Error("Item not found in any collection tree.");
+      }
+
+      const renameInTree = (node: Collection): Collection => {
+        if (nodeType === "collection" && node.id === nodeId) {
+          return { ...node, name: newName };
+        }
+        const requests = node.requests?.map(r => {
+          if (nodeType === "request" && r.id === nodeId) {
+            return { ...r, name: newName };
+          }
+          return r;
+        }) || [];
+        const children = node.children?.map(child => renameInTree(child)) || [];
+        return { ...node, requests, children };
+      };
+
+      const updatedCol = renameInTree(col);
+
+      await apiCall(`/api/collections/${col.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          requests: updatedCol.requests,
+          children: updatedCol.children || []
+        })
+      });
+
+      if (nodeType === "request" && selectedRequestId === nodeId) {
+        setReqName(newName);
+      }
+
+      await fetchCollections();
+    } catch (e: any) {
+      throw new Error(`Failed to rename item: ${e.message}`);
+    }
   };
 
   const handleCreateCollection = async (name: string) => {
@@ -1297,6 +1674,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         handleSaveRequest,
         handleCreateRequest,
         handleSaveNetworkRequestToCollection,
+        handleCreateSubCollection,
+        handleMoveNode,
+        handleDeleteNode,
+        handleRenameNode,
         handleCreateCollection,
         handleImportCollection,
         handleAddCollaborator,

@@ -45,10 +45,41 @@ class CollectionUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     requests: Optional[List[RequestDefinitionSchema]] = None
+    children: Optional[List[Dict[str, Any]]] = None
 
 class AddCollaboratorPayload(BaseModel):
     email: Optional[str] = None
     userId: Optional[str] = None
+
+def process_collection_tree(node: Dict[str, Any], current_depth: int) -> Dict[str, Any]:
+    if current_depth > 5:
+        raise HTTPException(status_code=400, detail="Maximum collection nesting depth of 5 exceeded")
+        
+    # Process requests in this node
+    processed_requests = []
+    for req in node.get("requests", []):
+        if req.get("authConfig") and req["authConfig"].get("authFunctionId"):
+            req["authConfig"]["authFunctionId"] = ObjectId(req["authConfig"]["authFunctionId"])
+        processed_requests.append(req)
+    node["requests"] = processed_requests
+    
+    # Process children nodes recursively
+    processed_children = []
+    for child in node.get("children", []):
+        processed_children.append(process_collection_tree(child, current_depth + 1))
+    node["children"] = processed_children
+    
+    return node
+
+def serialize_collection_node(node: Dict[str, Any]) -> Dict[str, Any]:
+    for req in node.get("requests", []):
+        if req.get("authConfig") and req["authConfig"].get("authFunctionId"):
+            req["authConfig"]["authFunctionId"] = str(req["authConfig"]["authFunctionId"])
+            
+    if "children" in node:
+        node["children"] = [serialize_collection_node(c) for c in node["children"]]
+        
+    return node
 
 def serialize_doc(doc) -> dict:
     if not doc:
@@ -60,12 +91,7 @@ def serialize_doc(doc) -> dict:
     if "collaboratorIds" in doc:
         doc["collaboratorIds"] = [str(uid) for uid in doc["collaboratorIds"]]
         
-    # Serialize authConfig ObjectIds
-    for req in doc.get("requests", []):
-        if req.get("authConfig") and req["authConfig"].get("authFunctionId"):
-            req["authConfig"]["authFunctionId"] = str(req["authConfig"]["authFunctionId"])
-            
-    return doc
+    return serialize_collection_node(doc)
 
 @router.get("")
 async def get_collections(current_user: dict = Depends(get_current_user)):
@@ -90,6 +116,7 @@ async def create_collection(payload: CollectionCreate, current_user: dict = Depe
         "ownerId": ObjectId(current_user["id"]),
         "collaboratorIds": [],
         "requests": [],
+        "children": [],
         "createdAt": datetime.now(timezone.utc),
         "updatedAt": datetime.now(timezone.utc)
     }
@@ -136,6 +163,11 @@ async def update_collection(id: str, payload: CollectionUpdate, current_user: di
             serialized_requests.append(req_dict)
             
         update_fields["requests"] = serialized_requests
+    if payload.children is not None:
+        processed_children = []
+        for child in payload.children:
+            processed_children.append(process_collection_tree(child, 2))
+        update_fields["children"] = processed_children
 
     update_fields["updatedAt"] = datetime.now(timezone.utc)
     await col.update_one({"_id": ObjectId(id)}, {"$set": update_fields})
@@ -183,3 +215,17 @@ async def add_collaborator(id: str, payload: AddCollaboratorPayload, current_use
     
     updated_doc = await col.find_one({"_id": ObjectId(id)})
     return {"message": "Collaborator added successfully", "collection": serialize_doc(updated_doc)}
+
+@router.delete("/{id}")
+async def delete_collection(id: str, current_user: dict = Depends(get_current_user)):
+    col = MongoDB.get_collection("collections")
+    doc = await col.find_one({"_id": ObjectId(id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Collection not found")
+        
+    uid = ObjectId(current_user["id"])
+    if doc["ownerId"] != uid:
+        raise HTTPException(status_code=403, detail="Only the owner can delete this collection")
+        
+    await col.delete_one({"_id": ObjectId(id)})
+    return {"message": "Collection deleted successfully"}
