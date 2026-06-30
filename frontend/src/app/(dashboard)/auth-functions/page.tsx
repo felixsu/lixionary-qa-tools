@@ -1,22 +1,23 @@
 "use client";
 
 import React, { useState } from "react";
-import { Plus, Trash2, Pencil, X, Clock, CheckCircle2, Circle } from "lucide-react";
+import { Plus, Trash2, Pencil, X, Clock, CheckCircle2, Circle, RefreshCw, Play } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, AuthFunction } from "../../context/AppContext";
 
-const DEFAULT_SCRIPT = `async function getToken() {
-  const response = fetchToken("https://api.example.com/oauth/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ client_id: env.CLIENT_ID, client_secret: env.CLIENT_SECRET })
-  });
-  const data = JSON.parse(response);
-  return data.access_token;
-}`;
+const DEFAULT_SCRIPT = `// Call IAM/OAuth endpoint to get token
+const response = fetchToken("https://api.example.com/oauth/token", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ client_id: env.CLIENT_ID, client_secret: env.CLIENT_SECRET })
+});
+
+// Parse output and return token
+const data = JSON.parse(response);
+return data.access_token;`;
 
 export default function AuthFunctionsPage() {
-  const { authFunctions, handleSaveAuthFunc, handleDeleteAuthFunc } = useAppContext();
+  const { authFunctions, handleSaveAuthFunc, handleDeleteAuthFunc, apiCall, selectedEnvId } = useAppContext();
 
   const [showModal, setShowModal] = useState(false);
   const [name, setName] = useState("");
@@ -25,12 +26,17 @@ export default function AuthFunctionsPage() {
   const [expiresIn, setExpiresIn] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  // Script testing state
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; token?: string; error?: string } | null>(null);
+
   const openCreate = () => {
     setEditingId(null);
     setName("");
     setDesc("");
     setExpiresIn("");
     setScript(DEFAULT_SCRIPT);
+    setTestResult(null);
     setShowModal(true);
   };
 
@@ -40,7 +46,28 @@ export default function AuthFunctionsPage() {
     setDesc(func.description);
     setScript(func.script);
     setExpiresIn(func.expires_in ? String(func.expires_in) : "");
+    setTestResult(null);
     setShowModal(true);
+  };
+
+  const handleTestScript = async () => {
+    if (!script) return;
+    setIsTesting(true);
+    setTestResult(null);
+    try {
+      const res = await apiCall("/api/auth-functions/test", {
+        method: "POST",
+        body: JSON.stringify({
+          script,
+          environment_id: selectedEnvId || null
+        })
+      });
+      setTestResult(res);
+    } catch (err: any) {
+      setTestResult({ success: false, error: err.message || "Failed to run test call." });
+    } finally {
+      setIsTesting(false);
+    }
   };
 
   const onSaveSubmit = async (e: React.FormEvent) => {
@@ -216,20 +243,56 @@ export default function AuthFunctionsPage() {
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-1 border-t border-line">
-              <button
-                type="button"
-                onClick={() => setShowModal(false)}
-                className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="h-10 px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors"
-              >
-                Save auth function
-              </button>
+            {testResult && (
+              <div className="mt-1 p-3.5 bg-slate-950 border border-slate-800 rounded-lg text-xs leading-relaxed max-h-[150px] overflow-y-auto font-mono">
+                {testResult.success ? (
+                  <div className="text-emerald-400 break-all">
+                    <span className="font-semibold text-emerald-300">✓ Token generated successfully:</span>
+                    <div className="mt-1 text-[11px] select-all">{testResult.token}</div>
+                  </div>
+                ) : (
+                  <div className="text-rose-400 whitespace-pre-wrap">
+                    <span className="font-semibold text-rose-300">✗ Script Error:</span>
+                    <div className="mt-1 text-[11px]">{testResult.error}</div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-between items-center pt-3 border-t border-line">
+              <div>
+                <button
+                  type="button"
+                  onClick={handleTestScript}
+                  disabled={isTesting || !script}
+                  className="h-10 px-4 border border-line rounded-lg text-[13px] font-medium text-ink bg-panel hover:bg-panel-dark transition-colors disabled:opacity-50 flex items-center gap-2"
+                >
+                  {isTesting ? (
+                    <>
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" /> Testing...
+                    </>
+                  ) : (
+                    <>
+                      <Play className="h-3.5 w-3.5" /> Test script
+                    </>
+                  )}
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowModal(false)}
+                  className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="h-10 px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors"
+                >
+                  Save auth function
+                </button>
+              </div>
             </div>
           </form>
         </div>

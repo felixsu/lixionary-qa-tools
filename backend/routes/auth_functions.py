@@ -96,3 +96,39 @@ async def delete_auth_function(id: str, current_user: dict = Depends(get_current
 
     await col.delete_one({"_id": ObjectId(id)})
     return {"message": "Auth function deleted successfully"}
+
+class AuthFunctionTest(BaseModel):
+    script: str
+    environment_id: Optional[str] = None
+
+@router.post("/test")
+async def test_auth_function(payload: AuthFunctionTest, current_user: dict = Depends(get_current_user)):
+    """
+    Dry-runs the auth function script in the sandbox using the provided environment variables.
+    """
+    from services.auth_sandbox import run_unsafe_auth_script
+    
+    variables = {}
+    if payload.environment_id:
+        env_col = MongoDB.get_collection("environments")
+        env = await env_col.find_one({"_id": ObjectId(payload.environment_id)})
+        if env:
+            for var in env.get("variables", []):
+                variables[var["key"]] = var["value"]
+
+    try:
+        token_res = await run_unsafe_auth_script(payload.script, variables)
+        if token_res.startswith("ERROR:"):
+            return {
+                "success": False,
+                "error": token_res
+            }
+        return {
+            "success": True,
+            "token": token_res
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Execution failed: {str(e)}"
+        }
