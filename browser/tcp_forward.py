@@ -1,6 +1,7 @@
 import socket
 import threading
 import sys
+import os
 
 def forward_target_to_client(src, dst):
     """
@@ -21,9 +22,13 @@ def forward_target_to_client(src, dst):
                 headers = data[:body_start]
                 body = data[body_start + 4:]
                 
+                # Resolve replacement host dynamically from environment
+                container_host = os.getenv("CONTAINER_NAME", "vnc-browser").encode('utf-8')
+                replacement = container_host + b":9222"
+                
                 # Count the difference in body length after replacing
                 old_body_len = len(body)
-                body = body.replace(b"127.0.0.1:9223", b"vnc-browser:9222")
+                body = body.replace(b"127.0.0.1:9223", replacement)
                 len_diff = len(body) - old_body_len
                 
                 # If length changed, find and update Content-Length header

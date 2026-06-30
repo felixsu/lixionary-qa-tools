@@ -65,9 +65,13 @@ class BrowserSessionManager:
             env = template_info.get("Config", {}).get("Env", [])
             networks = template_info.get("NetworkSettings", {}).get("Networks", {})
             
+            # Copy template environment variables and inject the container name
+            env_vars = list(env) if env else []
+            env_vars.append(f"CONTAINER_NAME={container_name}")
+            
             container_config = {
                 "Image": image,
-                "Env": env,
+                "Env": env_vars,
                 "HostConfig": {
                     "PortBindings": {
                         "8080/tcp": [{"HostPort": ""}] # Auto-assign free port
