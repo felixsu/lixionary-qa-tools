@@ -778,9 +778,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setBrowserTabs([{ index: 0, url: msg.data.url }]);
           setActiveTabIndex(0);
           
-          // Dynamically compute the VNC iframe URL using the port returned by the backend
-          const vncPort = msg.data.vnc_port || 8080;
-          setVncUrl(`http://${window.location.hostname}:${vncPort}/vnc.html?autoconnect=true&resize=scale&password=`);
+          // Compute VNC HTTP and WebSocket URLs using the dynamic wsHost proxy endpoints
+          const httpHost = wsHost.replace(/^ws(s)?:\/\//, "http$1://");
+          // Use path query parameter in noVNC to route WebSocket connections through the backend proxy
+          const vncPath = `api/browser/vnc-ws/${sessId}`;
+          setVncUrl(`${httpHost}/api/browser/vnc/${sessId}/vnc.html?autoconnect=true&resize=scale&path=${vncPath}&password=`);
           break;
         case "navigation":
           const navUrl = msg.data?.url || msg.url;

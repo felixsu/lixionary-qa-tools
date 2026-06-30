@@ -1,7 +1,11 @@
 import json
 import uuid
+import asyncio
+import httpx
+import websockets
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import StreamingResponse
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 from bson import ObjectId
@@ -490,3 +494,75 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
         await BrowserSessionManager.close_session(session_id)
         if ws_user_id:
             await _upsert_session_status(session_id, ws_user_id, "error")
+
+# ---------------------------------------------------------------------------
+# VNC Proxying (to bypass Mixed Content HTTPS errors in production)
+# ---------------------------------------------------------------------------
+
+@router.get("/vnc/{session_id}/{path:path}")
+async def vnc_http_proxy(session_id: str, path: str, request: Request):
+    if not path:
+        path = "vnc.html"
+        
+    target_url = f"http://lixionary-vnc-browser-{session_id}:8080/{path}"
+    
+    if request.query_params:
+        target_url += f"?{request.query_params}"
+        
+    async with httpx.AsyncClient() as client:
+        try:
+            req = client.build_request("GET", target_url)
+            resp = await client.send(req, stream=True)
+            
+            # Exclude hop-by-hop headers
+            headers = {k: v for k, v in resp.headers.items() if k.lower() not in [
+                "content-length", "connection", "keep-alive", "proxy-authenticate", 
+                "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"
+            ]}
+            
+            return StreamingResponse(
+                resp.iter_raw(),
+                status_code=resp.status_code,
+                headers=headers,
+                media_type=resp.headers.get("content-type")
+            )
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"VNC proxy error: {str(e)}")
+
+@router.websocket("/vnc-ws/{session_id}")
+async def vnc_ws_proxy(websocket: WebSocket, session_id: str):
+    await websocket.accept()
+    
+    target_ws_url = f"ws://lixionary-vnc-browser-{session_id}:8080/websockify"
+    
+    try:
+        async with websockets.connect(target_ws_url, subprotocols=["binary"]) as target_ws:
+            async def forward_to_target():
+                try:
+                    while True:
+                        msg = await websocket.receive()
+                        if "bytes" in msg:
+                            await target_ws.send(msg["bytes"])
+                        elif "text" in msg:
+                            await target_ws.send(msg["text"])
+                except Exception:
+                    pass
+                    
+            async def forward_to_client():
+                try:
+                    while True:
+                        data = await target_ws.recv()
+                        if isinstance(data, bytes):
+                            await websocket.send_bytes(data)
+                        else:
+                            await websocket.send_text(data)
+                except Exception:
+                    pass
+                    
+            await asyncio.gather(forward_to_target(), forward_to_client())
+    except Exception as e:
+        print(f"VNC WebSocket proxy error for session {session_id}: {e}")
+        try:
+            await websocket.close(code=1011, reason=str(e))
+        except Exception:
+            pass
