@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Cormorant_Garamond, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { Suspense } from "react";
 import { AppProvider } from "./context/AppContext";
 
 const inter = Inter({
@@ -38,7 +39,9 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col font-sans">
         <AppProvider>
-          {children}
+          <Suspense fallback={null}>
+            {children}
+          </Suspense>
         </AppProvider>
       </body>
     </html>
