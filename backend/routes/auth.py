@@ -123,19 +123,15 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         # Check if user exists by email, and sync user role/name from token claims
         user = await users_col.find_one({"email": email})
         
-        roles = payload.get("roles", [])
-        if not isinstance(roles, list):
-            roles = [roles]
-        is_admin = "admin" in roles or "ROLE_ADMIN" in roles or payload.get("role") == "admin"
-        
         if not user:
-            # Automatically provision new user inside our MongoDB database
+            # Check if this is the first user in the database
+            is_db_empty = await users_col.count_documents({}) == 0
             user = {
                 "googleId": payload.get("sub", ""),
                 "email": email,
                 "name": payload.get("name", email.split("@")[0].capitalize()),
                 "avatarUrl": "",
-                "role": "admin" if is_admin else "member",
+                "role": "admin" if is_db_empty else "member",
                 "disabled": False,
                 "createdAt": datetime.now(timezone.utc),
                 "updatedAt": datetime.now(timezone.utc)
@@ -143,13 +139,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             res = await users_col.insert_one(user)
             user["_id"] = res.inserted_id
         else:
-            # Sync name & roles if changed
+            # Sync name if changed (do NOT sync roles — local database is the source of truth for roles)
             updates = {}
             if payload.get("name") and user.get("name") != payload.get("name"):
                 updates["name"] = payload.get("name")
-            target_role = "admin" if is_admin else "member"
-            if user.get("role") != target_role:
-                updates["role"] = target_role
                 
             if updates:
                 updates["updatedAt"] = datetime.now(timezone.utc)
@@ -337,18 +330,15 @@ async def oauth_token_exchange(payload: OAuthExchangeRequest):
             users_col = MongoDB.get_collection("users")
             user = await users_col.find_one({"email": email})
             
-            roles = claims.get("roles", [])
-            if not isinstance(roles, list):
-                roles = [roles]
-            is_admin = "admin" in roles or "ROLE_ADMIN" in roles or claims.get("role") == "admin"
-            
             if not user:
+                # Check if this is the first user in the database
+                is_db_empty = await users_col.count_documents({}) == 0
                 user = {
                     "googleId": claims.get("sub", ""),
                     "email": email,
                     "name": claims.get("name", email.split("@")[0].capitalize()),
                     "avatarUrl": "",
-                    "role": "admin" if is_admin else "member",
+                    "role": "admin" if is_db_empty else "member",
                     "disabled": False,
                     "createdAt": datetime.now(timezone.utc),
                     "updatedAt": datetime.now(timezone.utc)
@@ -357,13 +347,10 @@ async def oauth_token_exchange(payload: OAuthExchangeRequest):
                 user_id = str(insert_res.inserted_id)
             else:
                 user_id = str(user["_id"])
-                # Sync name & roles if changed
+                # Sync name if changed (do NOT sync roles — local database is the source of truth for roles)
                 updates = {}
                 if claims.get("name") and user.get("name") != claims.get("name"):
                     updates["name"] = claims.get("name")
-                target_role = "admin" if is_admin else "member"
-                if user.get("role") != target_role:
-                    updates["role"] = target_role
                 if updates:
                     updates["updatedAt"] = datetime.now(timezone.utc)
                     await users_col.update_one({"_id": user["_id"]}, {"$set": updates})
