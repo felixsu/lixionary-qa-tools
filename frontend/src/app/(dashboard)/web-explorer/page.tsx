@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Globe, Terminal, Eye, Crosshair, Download, Trash2, Plus, FileCode, Play,
   Save, File, Folder, XCircle, Rows, Lock, X, Layers, Code2, Clipboard, Activity,
-  ChevronDown, ChevronUp, RotateCcw, Copy, Mail,
+  ChevronDown, ChevronUp, RotateCcw, Copy, Mail, Anchor, Loader2,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
@@ -78,6 +78,9 @@ export default function WebExplorerPage() {
     handleBrowserNavigate,
     handleToggleInspect,
     handlePasteText,
+    anchorElement,
+    handleSetAnchor,
+    handleClearAnchor,
     handleStartBrowser,
     handleDisconnectBrowser,
     handleLogClick,
@@ -96,11 +99,27 @@ export default function WebExplorerPage() {
   const [workspaceFiles, setWorkspaceFiles] = useState<{ name: string; size: number; updatedAt: string }[]>([]);
   const [limitExceededModalOpen, setLimitExceededModalOpen] = useState(false);
   const [activeSessions, setActiveSessions] = useState<any[]>([]);
+  const [isStartingSession, setIsStartingSession] = useState(false);
+  const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
+
+  const onCloseSession = async (sessId: string) => {
+    if (closingSessionId) return;
+    setClosingSessionId(sessId);
+    try {
+      await handleCloseSession(sessId);
+    } finally {
+      setClosingSessionId(null);
+    }
+  };
 
   const onStartBrowser = async () => {
+    if (isStartingSession) return;
+    setIsStartingSession(true);
     try {
       await handleStartBrowser(selectedProfileId);
+      // Do NOT clear isStartingSession here — wait for isBrowserConnected (via useEffect below)
     } catch (e: any) {
+      setIsStartingSession(false);
       if (e.status === 429 && e.detail && e.detail.error === "resource_depleted") {
         setActiveSessions(e.detail.active_sessions || []);
         setLimitExceededModalOpen(true);
@@ -109,9 +128,18 @@ export default function WebExplorerPage() {
       }
     }
   };
+
+  // Clear loading state exactly when the browser becomes connected (WS "status" message received)
+  useEffect(() => {
+    if (isBrowserConnected) {
+      setIsStartingSession(false);
+    }
+  }, [isBrowserConnected]);
   const [viewMode, setViewMode] = useState<"browser" | "split" | "workspace" | "network">("split");
   const [explorerWidth, setExplorerWidth] = useState<number>(220);
   const [workspaceSplitPercent, setWorkspaceSplitPercent] = useState<number>(50);
+  const [isDraggingSplit, setIsDraggingSplit] = useState(false);
+  const [isDraggingSidebar, setIsDraggingSidebar] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [selectedWorkspaceFile, setSelectedWorkspaceFile] = useState<string>("");
@@ -150,21 +178,41 @@ export default function WebExplorerPage() {
     };
   }, []);
 
+  // Restore persisted layout sizes on mount
+  useEffect(() => {
+    const sp = localStorage.getItem("lixionary_split_percent");
+    const ew = localStorage.getItem("lixionary_explorer_width");
+    if (sp) setWorkspaceSplitPercent(Number(sp));
+    if (ew) setExplorerWidth(Number(ew));
+  }, []);
+
+  // Persist layout sizes when they change
+  useEffect(() => {
+    try { localStorage.setItem("lixionary_split_percent", String(workspaceSplitPercent)); } catch {}
+  }, [workspaceSplitPercent]);
+
+  useEffect(() => {
+    try { localStorage.setItem("lixionary_explorer_width", String(explorerWidth)); } catch {}
+  }, [explorerWidth]);
+
   const toClassName = (snake: string) =>
     snake.replace(/\.py$/, "").split("_").filter(Boolean)
       .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join("");
 
   const handleSplitDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
-    const startY = e.clientY;
+    const startX = e.clientX;
     const startPercent = workspaceSplitPercent;
+    setIsDraggingSplit(true);
     const handleMouseMove = (moveEvent: MouseEvent) => {
       if (!containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
-      const deltaPercent = ((moveEvent.clientY - startY) / rect.height) * 100;
-      setWorkspaceSplitPercent(Math.min(Math.max(startPercent + deltaPercent, 20), 80));
+      // Moving divider right shrinks workspace (browser expands), so subtract delta
+      const deltaPercent = ((moveEvent.clientX - startX) / rect.width) * 100;
+      setWorkspaceSplitPercent(Math.min(Math.max(startPercent - deltaPercent, 20), 80));
     };
     const handleMouseUp = () => {
+      setIsDraggingSplit(false);
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
@@ -176,11 +224,16 @@ export default function WebExplorerPage() {
     e.preventDefault();
     const startX = e.clientX;
     const startWidth = explorerWidth;
+    // In split mode the file tree is on the RIGHT, so drag direction is inverted
+    const reversed = viewMode === "split";
+    setIsDraggingSidebar(true);
     const handleMouseMove = (moveEvent: MouseEvent) => {
-      const newWidth = Math.min(Math.max(startWidth + (moveEvent.clientX - startX), 140), 400);
+      const dx = moveEvent.clientX - startX;
+      const newWidth = Math.min(Math.max(startWidth + (reversed ? -dx : dx), 140), 400);
       setExplorerWidth(newWidth);
     };
     const handleMouseUp = () => {
+      setIsDraggingSidebar(false);
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
@@ -729,9 +782,8 @@ export default function WebExplorerPage() {
   const fieldCls = "h-[34px] bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay";
   const iconBtn = "h-6 w-6 rounded-md border border-line flex items-center justify-center hover:bg-panel transition-colors";
 
-  const renderWorkspacePanel = () => (
-    <div className="h-full w-full flex overflow-hidden bg-cream">
-      {/* File list */}
+  const renderWorkspacePanel = ({ fileListOnRight = false }: { fileListOnRight?: boolean } = {}) => {
+    const fileList = (
       <div style={{ width: `${explorerWidth}px` }} className="flex-shrink-0 bg-panel flex flex-col overflow-hidden">
         <div className="px-3 py-2.5 border-b border-line flex items-center justify-between flex-shrink-0">
           <span className={sectionLabel}>
@@ -771,9 +823,11 @@ export default function WebExplorerPage() {
         </div>
       </div>
 
+    );
+    const resizer = (
       <div onMouseDown={handleSidebarDragStart} className="w-1 bg-line hover:bg-clay cursor-col-resize transition-colors flex-shrink-0 self-stretch z-10 select-none" />
-
-      {/* Editor + console */}
+    );
+    const editor = (
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="h-11 border-b border-line px-4 bg-cream flex items-center justify-between flex-shrink-0">
           <span className="text-xs font-medium text-graphite font-mono flex items-center gap-1.5">
@@ -872,8 +926,14 @@ export default function WebExplorerPage() {
           )}
         </div>
       </div>
-    </div>
-  );
+    );
+
+    return (
+      <div className="h-full w-full flex overflow-hidden bg-cream">
+        {fileListOnRight ? <>{editor}{resizer}{fileList}</> : <>{fileList}{resizer}{editor}</>}
+      </div>
+    );
+  };
 
   const renderNetworkPanel = () => {
     return (
@@ -1110,11 +1170,16 @@ export default function WebExplorerPage() {
                           >Reconnect</button>
                         )}
                         <button
-                          onClick={() => handleCloseSession(s.session_id)}
-                          className="text-mute hover:text-danger transition-colors"
+                          onClick={() => onCloseSession(s.session_id)}
+                          disabled={closingSessionId === s.session_id}
+                          className="text-mute hover:text-danger transition-colors disabled:opacity-40"
                           title="Close session"
                         >
-                          <X className="h-3.5 w-3.5" />
+                          {closingSessionId === s.session_id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <X className="h-3.5 w-3.5" />
+                          )}
                         </button>
                       </div>
                     ))}
@@ -1166,9 +1231,14 @@ export default function WebExplorerPage() {
             )}
             <button
               onClick={onStartBrowser}
-              className="h-[34px] px-4 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white flex items-center gap-1.5 transition-colors"
+              disabled={isStartingSession}
+              className="h-[34px] px-4 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white flex items-center gap-1.5 transition-colors disabled:opacity-60"
             >
-              <Play className="h-3.5 w-3.5" /> New session
+              {isStartingSession ? (
+                <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Starting…</>
+              ) : (
+                <><Play className="h-3.5 w-3.5" /> New session</>
+              )}
             </button>
           </>
         )}
@@ -1227,25 +1297,26 @@ export default function WebExplorerPage() {
                       ))}
                     </div>
                   )}
-                  {vncUrl ? (
-                    <iframe src={vncUrl} className="w-full flex-1 border-none" title="VNC Browser Frame" />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center text-cream/40 text-xs">
-                      VNC session initialized. Loading canvas…
-                    </div>
-                  )}
+                  <div className="relative flex-1 w-full overflow-hidden">
+                    {vncUrl ? (
+                      <iframe src={vncUrl} className="w-full h-full border-none" title="VNC Browser Frame" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-cream/40 text-xs">
+                        VNC session initialized. Loading canvas…
+                      </div>
+                    )}
+                    {(isDraggingSplit || isDraggingSidebar) && (
+                      <div className="absolute inset-0 z-10" />
+                    )}
+                  </div>
                 </div>
               )}
 
               {viewMode === "workspace" && <div className="w-full h-full flex flex-col overflow-hidden">{renderWorkspacePanel()}</div>}
 
               {viewMode === "split" && (
-                <div className="w-full h-full flex flex-col overflow-hidden">
-                  <div style={{ height: `${workspaceSplitPercent}%` }} className="w-full flex flex-col overflow-hidden flex-shrink-0">
-                    {renderWorkspacePanel()}
-                  </div>
-                  <div onMouseDown={handleSplitDragStart} className="h-1 bg-line hover:bg-clay cursor-row-resize transition-colors flex-shrink-0 w-full z-10 select-none" />
-                  <div style={{ height: `${100 - workspaceSplitPercent}%` }} className="w-full bg-ink-950 flex flex-col overflow-hidden flex-shrink-0">
+                <div className="w-full h-full flex flex-row overflow-hidden">
+                  <div style={{ width: `${100 - workspaceSplitPercent}%` }} className="h-full bg-ink-950 flex flex-col overflow-hidden flex-shrink-0">
                     {isBrowserConnected && browserTabs.length > 1 && (
                       <div className="flex items-center gap-0.5 px-2 py-1 bg-ink-900 border-b border-white/10 overflow-x-auto flex-shrink-0">
                         {browserTabs.map((tab, i) => (
@@ -1272,13 +1343,22 @@ export default function WebExplorerPage() {
                         ))}
                       </div>
                     )}
-                    {vncUrl ? (
-                      <iframe src={vncUrl} className="w-full flex-1 border-none" title="VNC Browser Frame" />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-cream/40 text-xs">
-                        VNC session initialized. Loading canvas…
-                      </div>
-                    )}
+                    <div className="relative flex-1 w-full overflow-hidden">
+                      {vncUrl ? (
+                        <iframe src={vncUrl} className="w-full h-full border-none" title="VNC Browser Frame" />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-cream/40 text-xs">
+                          VNC session initialized. Loading canvas…
+                        </div>
+                      )}
+                      {(isDraggingSplit || isDraggingSidebar) && (
+                        <div className="absolute inset-0 z-10" />
+                      )}
+                    </div>
+                  </div>
+                  <div onMouseDown={handleSplitDragStart} className="w-1 bg-line hover:bg-clay cursor-col-resize transition-colors flex-shrink-0 h-full z-10 select-none" />
+                  <div style={{ width: `${workspaceSplitPercent}%` }} className="h-full flex flex-col overflow-hidden flex-shrink-0">
+                    {renderWorkspacePanel({ fileListOnRight: true })}
                   </div>
                 </div>
               )}
@@ -1286,6 +1366,29 @@ export default function WebExplorerPage() {
               {viewMode === "network" && (
                 <div className="w-full h-full flex flex-col overflow-hidden bg-cream">
                   {renderNetworkPanel()}
+                </div>
+              )}
+
+              {/* Anchor status banner — shown when user has set an anchor element */}
+              {anchorElement && (
+                <div className="absolute top-4 right-4 z-50 flex items-center gap-2 px-3 py-2 bg-panel border border-green-500/50 rounded-lg shadow-md text-xs">
+                  <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse flex-shrink-0" />
+                  <span className="text-ink font-mono">
+                    Anchor:{" "}
+                    <span className="text-green-600 font-semibold">
+                      &lt;{anchorElement.tagName}{anchorElement.id ? `#${anchorElement.id}` : ""}&gt;
+                    </span>
+                    {anchorElement.text && (
+                      <span className="text-mute ml-1 truncate max-w-[80px] inline-block align-bottom">{anchorElement.text}</span>
+                    )}
+                  </span>
+                  <button
+                    onClick={handleClearAnchor}
+                    title="Clear anchor"
+                    className="ml-1 h-4 w-4 flex items-center justify-center text-mute hover:text-ink transition-colors"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
                 </div>
               )}
 
@@ -1303,7 +1406,7 @@ export default function WebExplorerPage() {
                       <X className="h-4 w-4 text-mute hover:text-graphite" />
                     </button>
                   </div>
-                  
+
                   <div className="p-4 flex flex-col gap-3">
                     <div className="px-3 py-2 bg-panel rounded-lg border border-line font-mono text-[11px] text-graphite break-all max-h-24 overflow-y-auto">
                       <span className="text-clay font-semibold">&lt;{selectedElement.tagName}&gt;</span> {selectedElement.text}
@@ -1353,6 +1456,7 @@ export default function WebExplorerPage() {
                         }}
                         widthClass="w-full"
                         className="h-8 px-2.5 rounded-md text-xs text-ink font-mono bg-cream"
+                        openUpward
                         options={selectedElementLocators.map((loc, idx) => {
                           const uniqueness =
                             loc.unique === true ? " ✅ (Unique)" : loc.unique === false ? ` ⚠️ (${loc.count} matches)` : "";
@@ -1361,12 +1465,21 @@ export default function WebExplorerPage() {
                       />
                     </div>
 
-                    <button
-                      onClick={handleRecordElementToPOM}
-                      className="mt-1 h-9 bg-clay hover:bg-clay-dark rounded-lg text-xs font-semibold text-white transition-colors shadow-sm flex items-center justify-center gap-1.5"
-                    >
-                      <Save className="h-4 w-4" /> Record to page class
-                    </button>
+                    <div className="flex gap-2 mt-1">
+                      <button
+                        onClick={handleSetAnchor}
+                        title="Set this element as XPath anchor — then click a descendant to get a relative XPath"
+                        className="flex-1 h-9 bg-panel border border-line hover:border-green-500 rounded-lg text-xs font-semibold text-ink transition-colors flex items-center justify-center gap-1.5"
+                      >
+                        <Anchor className="h-3.5 w-3.5 text-green-600" /> Set as Anchor
+                      </button>
+                      <button
+                        onClick={handleRecordElementToPOM}
+                        className="flex-1 h-9 bg-clay hover:bg-clay-dark rounded-lg text-xs font-semibold text-white transition-colors shadow-sm flex items-center justify-center gap-1.5"
+                      >
+                        <Save className="h-3.5 w-3.5" /> Record
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1383,9 +1496,14 @@ export default function WebExplorerPage() {
           </div>
           <button
             onClick={onStartBrowser}
-            className="mt-2 h-10 px-6 bg-clay hover:bg-clay-dark rounded-lg text-sm font-medium text-white flex items-center gap-2 transition-colors"
+            disabled={isStartingSession}
+            className="mt-2 h-10 px-6 bg-clay hover:bg-clay-dark rounded-lg text-sm font-medium text-white flex items-center gap-2 transition-colors disabled:opacity-60"
           >
-            <Play className="h-4 w-4" /> Connect VNC browser
+            {isStartingSession ? (
+              <><Loader2 className="h-4 w-4 animate-spin" /> Starting…</>
+            ) : (
+              <><Play className="h-4 w-4" /> Connect VNC browser</>
+            )}
           </button>
         </div>
       )}

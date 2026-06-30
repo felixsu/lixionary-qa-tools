@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from routes.auth import get_current_user
 from db.mongo import MongoDB
 from config import settings
+from services.browser import BrowserSessionManager
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
@@ -86,7 +87,7 @@ async def get_workspace_files(
     if not os.path.exists(my_playground_path):
         try:
             with open(my_playground_path, "w") as f:
-                f.write('from inspection_code.my_page import MyPage\nfrom inspection_code.my_client import MyClient\n\nclass PlaygroundPage(MyPage):\n    pass\n\nclass PlaygroundClient(MyClient):\n    pass\n')
+                f.write('from playwright.sync_api import Page\nfrom inspection_code.my_page import MyPage\n\n\nclass PlaygroundPage(MyPage):\n    def __init__(self, page: Page):\n        super().__init__(page)\n')
         except Exception as e:
             print(f"Failed to write default playground.py: {e}")
 
@@ -95,11 +96,17 @@ async def get_workspace_files(
         default_content = """import os
 import time
 from playwright.sync_api import sync_playwright
-from playground import PlaygroundPage, PlaygroundClient
+from playground import PlaygroundPage
 
 # Pre-made delay helper (ms: milliseconds)
 def delay(ms: int):
     time.sleep(ms / 1000)
+
+def run_playground(page):
+    \"\"\"Run playground tasks using the live browser page.\"\"\"
+    playground_page = PlaygroundPage(page)
+    # Add your test operations here!
+    # e.g., playground_page.click_button()
 
 # Retrieve VNC browser remote debugging URL from environment
 cdp_url = os.getenv("BROWSER_CDP_URL", "http://vnc-browser:9222")
@@ -114,15 +121,7 @@ try:
         page = context.pages[0]
 
         print(f"Current page URL: {page.url}")
-        print("Executing sample POM test tasks...")
-
-        # Instantiate Playground instances
-        playground_page = PlaygroundPage(page)
-        playground_client = PlaygroundClient()
-
-        # Add your test operations here!
-        # e.g., playground_page.click_button()
-
+        run_playground(page)
         print("Execution completed successfully!")
 except Exception as e:
     print(f"ERROR: Execution failed: {e}")
@@ -245,8 +244,20 @@ async def run_workspace_script(
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Script not found")
 
+    # Use the per-session CDP URL so subprocess connects to the correct browser container
+    browser_session = BrowserSessionManager._sessions.get(payload.session_id)
+    session_cdp_url = (
+        browser_session.get("cdp_url", settings.BROWSER_CDP_URL)
+        if browser_session else settings.BROWSER_CDP_URL
+    )
+
+    # Disable inspect mode while running — it blocks all mouse events via preventDefault/stopPropagation
+    was_inspect_enabled = browser_session.get("inspect_enabled", False) if browser_session else False
+    if was_inspect_enabled:
+        await BrowserSessionManager.set_inspect_mode(payload.session_id, False)
+
     env = os.environ.copy()
-    env["BROWSER_CDP_URL"] = settings.BROWSER_CDP_URL
+    env["BROWSER_CDP_URL"] = session_cdp_url
     env["PYTHONUNBUFFERED"] = "1"
 
     # Configurable script timeout
@@ -334,6 +345,11 @@ async def run_workspace_script(
                 except Exception:
                     pass
             _running_processes.pop(user_id, None)
+            if was_inspect_enabled:
+                try:
+                    await BrowserSessionManager.set_inspect_mode(payload.session_id, True)
+                except Exception:
+                    pass
 
     return StreamingResponse(log_streamer(), media_type="text/plain")
 
@@ -380,16 +396,22 @@ async def reset_workspace_file(
     elif safe_name == "inspection_code/my_client.py":
         default_content = 'from __future__ import annotations\nimport httpx\nfrom pydantic import BaseModel, Field\nfrom typing import List, Optional, Any\n\n# --- Pydantic Models ---\n\nclass MyClient:\n    def __init__(self, base_url: str = "https://api-qa.ninjavan.co", token: str = None):\n        self.client = httpx.Client(base_url=base_url)\n        if token:\n            self.client.headers.update({"Authorization": f"Bearer {token}"})\n'
     elif safe_name == "playground.py":
-        default_content = 'from inspection_code.my_page import MyPage\nfrom inspection_code.my_client import MyClient\n\nclass PlaygroundPage(MyPage):\n    pass\n\nclass PlaygroundClient(MyClient):\n    pass\n'
+        default_content = 'from playwright.sync_api import Page\nfrom inspection_code.my_page import MyPage\n\n\nclass PlaygroundPage(MyPage):\n    def __init__(self, page: Page):\n        super().__init__(page)\n'
     elif safe_name == "main.py":
         default_content = """import os
 import time
 from playwright.sync_api import sync_playwright
-from playground import PlaygroundPage, PlaygroundClient
+from playground import PlaygroundPage
 
 # Pre-made delay helper (ms: milliseconds)
 def delay(ms: int):
     time.sleep(ms / 1000)
+
+def run_playground(page):
+    \"\"\"Run playground tasks using the live browser page.\"\"\"
+    playground_page = PlaygroundPage(page)
+    # Add your test operations here!
+    # e.g., playground_page.click_button()
 
 # Retrieve VNC browser remote debugging URL from environment
 cdp_url = os.getenv("BROWSER_CDP_URL", "http://vnc-browser:9222")
@@ -404,15 +426,7 @@ try:
         page = context.pages[0]
 
         print(f"Current page URL: {page.url}")
-        print("Executing sample POM test tasks...")
-
-        # Instantiate Playground instances
-        playground_page = PlaygroundPage(page)
-        playground_client = PlaygroundClient()
-
-        # Add your test operations here!
-        # e.g., playground_page.click_button()
-
+        run_playground(page)
         print("Execution completed successfully!")
 except Exception as e:
     print(f"ERROR: Execution failed: {e}")

@@ -449,6 +449,41 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
             elif action == "toggle-inspect":
                 enabled = cmd.get("enabled", False)
                 await BrowserSessionManager.set_inspect_mode(session_id, enabled)
+                if not enabled:
+                    _session = BrowserSessionManager._sessions.get(session_id)
+                    _anchor_frame = _session.get("anchor_frame") if _session else None
+                    try:
+                        _eval_target = _anchor_frame if (_anchor_frame and not _anchor_frame.is_detached()) else page
+                    except Exception:
+                        _eval_target = page
+                    await _eval_target.evaluate("if (window.__clearLixionaryAnchor) window.__clearLixionaryAnchor()")
+                    if _session:
+                        _session["anchor_frame"] = None
+                    await send_to_client({"type": "anchor_cleared"})
+            elif action == "set-anchor":
+                _session = BrowserSessionManager._sessions.get(session_id)
+                _target_frame = _session.get("last_clicked_frame") if _session else None
+                try:
+                    _eval_target = _target_frame if (_target_frame and not _target_frame.is_detached()) else page
+                except Exception:
+                    _eval_target = page
+                anchor_info = await _eval_target.evaluate(
+                    "window.__setLixionaryAnchorFromLast ? window.__setLixionaryAnchorFromLast() : null"
+                )
+                if _session:
+                    _session["anchor_frame"] = _eval_target
+                await send_to_client({"type": "anchor_set", "data": {"anchorInfo": anchor_info}})
+            elif action == "clear-anchor":
+                _session = BrowserSessionManager._sessions.get(session_id)
+                _anchor_frame = _session.get("anchor_frame") if _session else None
+                try:
+                    _eval_target = _anchor_frame if (_anchor_frame and not _anchor_frame.is_detached()) else page
+                except Exception:
+                    _eval_target = page
+                await _eval_target.evaluate("if (window.__clearLixionaryAnchor) window.__clearLixionaryAnchor()")
+                if _session:
+                    _session["anchor_frame"] = None
+                await send_to_client({"type": "anchor_cleared"})
             elif action == "click":
                 selector = cmd.get("selector")
                 if selector:
