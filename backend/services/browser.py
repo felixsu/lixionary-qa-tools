@@ -24,7 +24,25 @@ class BrowserSessionManager:
                     session["callback"] = ws_send_callback
                 if user_id:
                     session["user_id"] = user_id
-                return cls._active_page(session)
+
+                # Re-inject cookies — profile auth tokens may have been refreshed since session start
+                if cookies:
+                    try:
+                        if isinstance(cookies, list) and cookies:
+                            await session["context"].add_cookies(cookies)
+                    except Exception as e:
+                        print(f"Failed to re-inject cookies on reconnect: {e}")
+
+                # Navigate to the profile's default URL to restore a known page state.
+                # The localStorage init script already registered in the context fires on this navigation.
+                page = cls._active_page(session)
+                if default_url and default_url.startswith(("http://", "https://")):
+                    try:
+                        await page.goto(default_url)
+                    except Exception as e:
+                        print(f"Failed to navigate to default URL on reconnect: {e}")
+
+                return page
             else:
                 await cls.close_session(session_id)
 
@@ -203,7 +221,10 @@ class BrowserSessionManager:
             session = cls._sessions.get(session_id)
             if not session:
                 return
-            
+
+            # Track which frame the element was clicked in (used for iframe anchor support)
+            session["last_clicked_frame"] = source["frame"]
+
             try:
                 el_info = json.loads(element_info_str)
                 
@@ -278,6 +299,7 @@ class BrowserSessionManager:
             "inspect_enabled": False,
             "user_id": user_id,
             "vnc_port": assigned_port,
+            "cdp_url": cdp_url,
         }
 
         # Setup event listeners on the first page
@@ -553,6 +575,7 @@ class BrowserSessionManager:
             window.__setLixionaryAnchorFromLast = function() {
                 if (lixionaryAnchor) {
                     lixionaryAnchor.style.outline = lixionaryAnchor._prevOutline || '';
+                    lixionaryAnchor._prevOutline = undefined;
                 }
                 lixionaryAnchor = lixionaryLastClickedEl;
                 if (lixionaryAnchor) {

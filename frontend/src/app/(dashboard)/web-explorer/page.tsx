@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Globe, Terminal, Eye, Crosshair, Download, Trash2, Plus, FileCode, Play,
   Save, File, Folder, XCircle, Rows, Lock, X, Layers, Code2, Clipboard, Activity,
-  ChevronDown, ChevronUp, RotateCcw, Copy, Mail, Anchor,
+  ChevronDown, ChevronUp, RotateCcw, Copy, Mail, Anchor, Loader2,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
@@ -99,11 +99,27 @@ export default function WebExplorerPage() {
   const [workspaceFiles, setWorkspaceFiles] = useState<{ name: string; size: number; updatedAt: string }[]>([]);
   const [limitExceededModalOpen, setLimitExceededModalOpen] = useState(false);
   const [activeSessions, setActiveSessions] = useState<any[]>([]);
+  const [isStartingSession, setIsStartingSession] = useState(false);
+  const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
+
+  const onCloseSession = async (sessId: string) => {
+    if (closingSessionId) return;
+    setClosingSessionId(sessId);
+    try {
+      await handleCloseSession(sessId);
+    } finally {
+      setClosingSessionId(null);
+    }
+  };
 
   const onStartBrowser = async () => {
+    if (isStartingSession) return;
+    setIsStartingSession(true);
     try {
       await handleStartBrowser(selectedProfileId);
+      // Do NOT clear isStartingSession here — wait for isBrowserConnected (via useEffect below)
     } catch (e: any) {
+      setIsStartingSession(false);
       if (e.status === 429 && e.detail && e.detail.error === "resource_depleted") {
         setActiveSessions(e.detail.active_sessions || []);
         setLimitExceededModalOpen(true);
@@ -112,6 +128,13 @@ export default function WebExplorerPage() {
       }
     }
   };
+
+  // Clear loading state exactly when the browser becomes connected (WS "status" message received)
+  useEffect(() => {
+    if (isBrowserConnected) {
+      setIsStartingSession(false);
+    }
+  }, [isBrowserConnected]);
   const [viewMode, setViewMode] = useState<"browser" | "split" | "workspace" | "network">("split");
   const [explorerWidth, setExplorerWidth] = useState<number>(220);
   const [workspaceSplitPercent, setWorkspaceSplitPercent] = useState<number>(50);
@@ -1147,11 +1170,16 @@ export default function WebExplorerPage() {
                           >Reconnect</button>
                         )}
                         <button
-                          onClick={() => handleCloseSession(s.session_id)}
-                          className="text-mute hover:text-danger transition-colors"
+                          onClick={() => onCloseSession(s.session_id)}
+                          disabled={closingSessionId === s.session_id}
+                          className="text-mute hover:text-danger transition-colors disabled:opacity-40"
                           title="Close session"
                         >
-                          <X className="h-3.5 w-3.5" />
+                          {closingSessionId === s.session_id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <X className="h-3.5 w-3.5" />
+                          )}
                         </button>
                       </div>
                     ))}
@@ -1203,9 +1231,14 @@ export default function WebExplorerPage() {
             )}
             <button
               onClick={onStartBrowser}
-              className="h-[34px] px-4 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white flex items-center gap-1.5 transition-colors"
+              disabled={isStartingSession}
+              className="h-[34px] px-4 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white flex items-center gap-1.5 transition-colors disabled:opacity-60"
             >
-              <Play className="h-3.5 w-3.5" /> New session
+              {isStartingSession ? (
+                <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Starting…</>
+              ) : (
+                <><Play className="h-3.5 w-3.5" /> New session</>
+              )}
             </button>
           </>
         )}
@@ -1463,9 +1496,14 @@ export default function WebExplorerPage() {
           </div>
           <button
             onClick={onStartBrowser}
-            className="mt-2 h-10 px-6 bg-clay hover:bg-clay-dark rounded-lg text-sm font-medium text-white flex items-center gap-2 transition-colors"
+            disabled={isStartingSession}
+            className="mt-2 h-10 px-6 bg-clay hover:bg-clay-dark rounded-lg text-sm font-medium text-white flex items-center gap-2 transition-colors disabled:opacity-60"
           >
-            <Play className="h-4 w-4" /> Connect VNC browser
+            {isStartingSession ? (
+              <><Loader2 className="h-4 w-4 animate-spin" /> Starting…</>
+            ) : (
+              <><Play className="h-4 w-4" /> Connect VNC browser</>
+            )}
           </button>
         </div>
       )}
