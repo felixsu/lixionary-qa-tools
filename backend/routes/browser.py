@@ -49,8 +49,47 @@ async def list_sessions(current_user: dict = Depends(get_current_user)):
 @router.post("/sessions")
 async def create_session(current_user: dict = Depends(get_current_user)):
     user_id = str(current_user["id"])
-    session_id = f"sess_{uuid.uuid4().hex[:12]}"
     sessions_col = MongoDB.get_collection("browser_sessions")
+    
+    # Check if active session count >= 12
+    active_sessions = await sessions_col.find({"status": {"$ne": "closed"}}).to_list(None)
+    if len(active_sessions) >= 12:
+        # Retrieve user details for active sessions
+        user_ids = []
+        for s in active_sessions:
+            try:
+                user_ids.append(ObjectId(s["user_id"]))
+            except Exception:
+                pass
+                
+        users_col = MongoDB.get_collection("users")
+        users = await users_col.find({"_id": {"$in": user_ids}}).to_list(None)
+        user_map = {str(u["_id"]): {
+            "name": u.get("name", "Unknown Teammate"),
+            "email": u.get("email", "Unknown Email")
+        } for u in users}
+        
+        session_details = []
+        for s in active_sessions:
+            u_info = user_map.get(s["user_id"], {"name": "Unknown Teammate", "email": "Unknown Email"})
+            session_details.append({
+                "session_id": s["session_id"],
+                "status": s["status"],
+                "owner_name": u_info["name"],
+                "owner_email": u_info["email"],
+                "created_at": s["created_at"].isoformat() if isinstance(s.get("created_at"), datetime) else s.get("created_at", "")
+            })
+            
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "resource_depleted",
+                "message": "Global limit of 12 active browser sessions reached. Please ask a teammate to close their session.",
+                "active_sessions": session_details
+            }
+        )
+
+    session_id = f"sess_{uuid.uuid4().hex[:12]}"
     await sessions_col.insert_one({
         "user_id": user_id,
         "session_id": session_id,

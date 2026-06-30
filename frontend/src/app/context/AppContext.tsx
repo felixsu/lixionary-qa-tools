@@ -609,7 +609,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({ detail: "Unknown error occurred" }));
-      throw new Error(err.detail || `Server responded with ${response.status}`);
+      const errorMsg = typeof err.detail === "string"
+        ? err.detail
+        : (err.detail?.message || `Server responded with ${response.status}`);
+      const error = new Error(errorMsg);
+      (error as any).status = response.status;
+      (error as any).detail = err.detail;
+      throw error;
     }
     return response.json();
   };
@@ -895,6 +901,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       await fetchUserSessions();
     } catch (e: any) {
       console.error("Failed to create browser session:", e.message);
+      throw e;
     }
   };
 
