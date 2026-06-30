@@ -509,25 +509,34 @@ async def vnc_http_proxy(session_id: str, path: str, request: Request):
     if request.query_params:
         target_url += f"?{request.query_params}"
         
-    async with httpx.AsyncClient() as client:
-        try:
-            req = client.build_request("GET", target_url)
-            resp = await client.send(req, stream=True)
-            
-            # Exclude hop-by-hop headers
-            headers = {k: v for k, v in resp.headers.items() if k.lower() not in [
-                "content-length", "connection", "keep-alive", "proxy-authenticate", 
-                "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"
-            ]}
-            
-            return StreamingResponse(
-                resp.iter_raw(),
-                status_code=resp.status_code,
-                headers=headers,
-                media_type=resp.headers.get("content-type")
-            )
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"VNC proxy error: {str(e)}")
+    client = httpx.AsyncClient()
+    try:
+        req = client.build_request("GET", target_url)
+        resp = await client.send(req, stream=True)
+        
+        # Exclude hop-by-hop headers
+        headers = {k: v for k, v in resp.headers.items() if k.lower() not in [
+            "content-length", "connection", "keep-alive", "proxy-authenticate", 
+            "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"
+        ]}
+        
+        async def stream_generator():
+            try:
+                async for chunk in resp.aiter_raw():
+                    yield chunk
+            finally:
+                await resp.aclose()
+                await client.aclose()
+        
+        return StreamingResponse(
+            stream_generator(),
+            status_code=resp.status_code,
+            headers=headers,
+            media_type=resp.headers.get("content-type")
+        )
+    except Exception as e:
+        await client.aclose()
+        raise HTTPException(status_code=502, detail=f"VNC proxy error: {str(e)}")
 
 @router.websocket("/vnc-ws/{session_id}")
 async def vnc_ws_proxy(websocket: WebSocket, session_id: str):
