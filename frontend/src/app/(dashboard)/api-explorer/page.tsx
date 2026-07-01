@@ -685,6 +685,7 @@ export default function ApiExplorerPage() {
     navigator.clipboard.writeText(id);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
+    showToast("Collection ID copied — ready to share");
   };
 
   const generateAiParserScript = async () => {
@@ -981,14 +982,6 @@ export default function ApiExplorerPage() {
                   className="h-7 w-7 rounded-md border border-line bg-cream flex items-center justify-center hover:bg-hover transition-colors"
                 >
                   <Plus className="h-3.5 w-3.5 text-graphite" />
-                </button>
-                <button
-                  onClick={() => setShowShareModal(true)}
-                  disabled={!selectedCollectionId}
-                  title="Share collection"
-                  className="h-7 w-7 rounded-md border border-line bg-cream flex items-center justify-center hover:bg-hover transition-colors disabled:opacity-40"
-                >
-                  <Share2 className="h-3.5 w-3.5 text-graphite" />
                 </button>
               </>
             )}
