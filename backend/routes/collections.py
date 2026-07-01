@@ -131,10 +131,6 @@ async def get_collection_by_id(id: str, current_user: dict = Depends(get_current
     if not doc:
         raise HTTPException(status_code=404, detail="Collection not found")
         
-    uid = ObjectId(current_user["id"])
-    if doc["ownerId"] != uid and uid not in doc.get("collaboratorIds", []):
-        raise HTTPException(status_code=403, detail="Access denied to this collection")
-        
     return serialize_doc(doc)
 
 @router.put("/{id}")
@@ -187,12 +183,10 @@ async def add_collaborator(id: str, payload: AddCollaboratorPayload, current_use
         raise HTTPException(status_code=404, detail="Collection not found")
 
     uid = ObjectId(current_user["id"])
-    if doc["ownerId"] != uid:
-        raise HTTPException(status_code=403, detail="Only the owner can manage sharing")
 
     users_col = MongoDB.get_collection("users")
     collab_user = None
-    
+
     if payload.email:
         collab_user = await users_col.find_one({"email": payload.email})
     elif payload.userId:
@@ -202,11 +196,17 @@ async def add_collaborator(id: str, payload: AddCollaboratorPayload, current_use
         raise HTTPException(status_code=404, detail="Target collaborator user not found")
 
     collab_uid = collab_user["_id"]
+
+    # Self-add (import flow): any authenticated user can add themselves.
+    # Adding another user: only the owner can do that.
+    if collab_uid != uid and doc["ownerId"] != uid:
+        raise HTTPException(status_code=403, detail="Only the owner can add other collaborators")
+
     if collab_uid == doc["ownerId"]:
-        raise HTTPException(status_code=400, detail="Cannot share collection with yourself (the owner)")
+        raise HTTPException(status_code=400, detail="Cannot add the owner as a collaborator")
 
     if collab_uid in doc.get("collaboratorIds", []):
-         return {"message": "User is already a collaborator", "collection": serialize_doc(doc)}
+        return {"message": "User is already a collaborator", "collection": serialize_doc(doc)}
 
     await col.update_one(
         {"_id": ObjectId(id)},

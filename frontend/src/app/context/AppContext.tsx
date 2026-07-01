@@ -1131,7 +1131,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           token: reqAuthConfig.token,
           key: reqAuthConfig.key,
           value: reqAuthConfig.value,
-          authFunctionId: reqAuthConfig.authFunctionId || null
+          // HOOK auth function is user-local — don't embed in the shared collection document
+          authFunctionId: reqAuthType === "HOOK" ? null : (reqAuthConfig.authFunctionId || null)
         },
         responseParserScript: reqParserScript
       };
@@ -1147,7 +1148,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
 
       // Saved state is now authoritative — drop the unsaved auth override.
-      try { localStorage.removeItem(`lixionary_auth_${selectedRequestId}`); } catch { /* non-fatal */ }
+      // Exception: HOOK auth is kept user-local in localStorage (not in DB), so don't clear it.
+      if (reqAuthType !== "HOOK") {
+        try { localStorage.removeItem(`lixionary_auth_${selectedRequestId}`); } catch { /* non-fatal */ }
+      }
 
       await fetchCollections();
     } catch (e: any) {
