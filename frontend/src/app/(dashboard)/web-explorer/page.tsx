@@ -29,6 +29,39 @@ const statusStyle = (status: number | null): React.CSSProperties => {
   return { background: "#fde8e8", color: "#c64545" };
 };
 
+const DEFAULT_PROFILE_COOKIES = `[
+  {
+    "name": "ninja_access_token",
+    "value": "YOUR_TOKEN",
+    "domain": ".ninjavan.co",
+    "path": "/",
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "user",
+    "value": "%7B%22thirdPartyId%...",
+    "domain": ".ninjavan.co",
+    "path": "/",
+    "secure": true,
+    "sameSite": "Lax"
+  }
+]`;
+
+const DEFAULT_PROFILE_LOCAL_STORAGE = `{
+  "origins": [
+    {
+      "origin": "https://operatorv2-qa.ninjavan.co",
+      "localStorage": [
+        {
+          "name": "acceptedTnC",
+          "value": "true"
+        }
+      ]
+    }
+  ]
+}`;
+
 export default function WebExplorerPage() {
   const {
     browserUrl,
@@ -559,6 +592,7 @@ export default function WebExplorerPage() {
   // Profile manager modal states
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
+  const [isCreatingProfile, setIsCreatingProfile] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [profileCookies, setProfileCookies] = useState("");
   const [profileLocalStorage, setProfileLocalStorage] = useState("");
@@ -650,6 +684,7 @@ export default function WebExplorerPage() {
   };
 
   const handleOpenEditProfile = (profile: any) => {
+    setIsCreatingProfile(false);
     setEditingProfileId(profile.id);
     setProfileName(profile.name);
     setProfileCookies(profile.cookies || "");
@@ -669,6 +704,7 @@ export default function WebExplorerPage() {
 
   const handleClearProfileForm = () => {
     setEditingProfileId(null);
+    setIsCreatingProfile(false);
     setProfileName("");
     setProfileCookies("");
     setProfileLocalStorage("");
@@ -678,6 +714,29 @@ export default function WebExplorerPage() {
     setProfileAuthInjectionKey("");
     setProfileAuthInjectionDomainOrOrigin("");
   };
+
+  const handleOpenCreateProfile = () => {
+    setEditingProfileId(null);
+    setProfileName("");
+    setProfileCookies(DEFAULT_PROFILE_COOKIES);
+    setProfileLocalStorage(DEFAULT_PROFILE_LOCAL_STORAGE);
+    setProfileAuthFunctionId("");
+    setProfileDefaultUrl("");
+    setProfileAuthInjectionType("cookie");
+    setProfileAuthInjectionKey("");
+    setProfileAuthInjectionDomainOrOrigin("");
+    setIsCreatingProfile(true);
+  };
+
+  useEffect(() => {
+    if (showProfileModal) {
+      if (profiles.length > 0) {
+        handleOpenEditProfile(profiles[0]);
+      } else {
+        handleClearProfileForm();
+      }
+    }
+  }, [showProfileModal]);
 
   const downloadFile = (content: string, filename: string) => {
     const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
@@ -1693,7 +1752,12 @@ export default function WebExplorerPage() {
             <div className="flex flex-1 overflow-hidden gap-6 pt-4">
               {/* List */}
               <div className="w-1/3 border-r border-line pr-4 flex flex-col overflow-hidden">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-mute mb-3">Profiles list</span>
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-mute">Profiles list</span>
+                  <button type="button" onClick={handleOpenCreateProfile} className="text-[10px] font-medium text-clay hover:text-clay-dark">
+                    Create
+                  </button>
+                </div>
                 <div className="flex-1 overflow-y-auto flex flex-col gap-2 pr-1">
                   {profiles.length ? (
                     profiles.map((p) => {
@@ -1732,14 +1796,15 @@ export default function WebExplorerPage() {
               </div>
 
               {/* Form */}
+              {editingProfileId || isCreatingProfile ? (
               <form onSubmit={handleSaveProfileSubmit} className="w-2/3 flex flex-col overflow-hidden gap-4">
                 <div className="flex items-center justify-between flex-shrink-0">
                   <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-mute">
                     {editingProfileId ? "Edit profile settings" : "Configure new profile"}
                   </span>
                   {editingProfileId && (
-                    <button type="button" onClick={handleClearProfileForm} className="text-[10px] font-medium text-clay hover:text-clay-dark">
-                      New profile form
+                    <button type="button" onClick={handleOpenCreateProfile} className="text-[10px] font-medium text-clay hover:text-clay-dark">
+                      Create
                     </button>
                   )}
                 </div>
@@ -1864,6 +1929,20 @@ export default function WebExplorerPage() {
                   </button>
                 </div>
               </form>
+              ) : (
+                <div className="w-2/3 flex flex-col items-center justify-center gap-3">
+                  <p className="text-sm text-mute">
+                    {profiles.length === 0 ? "No profile yet — create a new one." : "Select a profile or create a new one."}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleOpenCreateProfile}
+                    className="h-10 px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors"
+                  >
+                    Create
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
