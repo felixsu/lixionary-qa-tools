@@ -282,6 +282,9 @@ interface AppContextType {
   setSelectedLogId: (id: string | null) => void;
   logDetails: NetworkDetails | null;
   setLogDetails: (details: NetworkDetails | null) => void;
+  networkPillFilter: "all" | "api";
+  setNetworkPillFilter: (filter: "all" | "api") => void;
+  handleClearNetworkLogs: () => void;
   activePomClass: string;
   setActivePomClass: (className: string) => void;
   pomClasses: string[];
@@ -437,6 +440,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [sessionId, setSessionId] = useState("");
   const [networkLogs, setNetworkLogs] = useState<NetworkLog[]>([]);
   const [networkFilter, setNetworkFilter] = useState("");
+  const [networkPillFilter, setNetworkPillFilter] = useState<"all" | "api">("all");
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [logDetails, setLogDetails] = useState<NetworkDetails | null>(null);
   const [activePomClass, setActivePomClass] = useState("MyPage");
@@ -995,6 +999,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ action: "set-anchor" }));
     }
+  };
+
+  const handleClearNetworkLogs = () => {
+    setNetworkLogs([]);
+    setSelectedLogId(null);
+    setLogDetails(null);
+    setNetworkPillFilter("all");
   };
 
   const handleClearAnchor = () => {
@@ -1692,6 +1703,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setSelectedLogId,
         logDetails,
         setLogDetails,
+        networkPillFilter,
+        setNetworkPillFilter,
+        handleClearNetworkLogs,
         activePomClass,
         setActivePomClass,
         pomClasses,

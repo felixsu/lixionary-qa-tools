@@ -40,6 +40,9 @@ export default function WebExplorerPage() {
     networkLogs,
     networkFilter,
     setNetworkFilter,
+    networkPillFilter,
+    setNetworkPillFilter,
+    handleClearNetworkLogs,
     logDetails,
     setLogDetails,
     activePomClass,
@@ -687,11 +690,16 @@ export default function WebExplorerPage() {
     document.body.removeChild(link);
   };
 
-  const filteredLogs = networkLogs.filter(
-    (log) =>
+  const filteredLogs = networkLogs.filter((log) => {
+    const matchesText =
+      networkFilter === "" ||
       log.url.toLowerCase().includes(networkFilter.toLowerCase()) ||
-      log.method.toLowerCase().includes(networkFilter.toLowerCase())
-  );
+      log.method.toLowerCase().includes(networkFilter.toLowerCase());
+    const matchesPill =
+      networkPillFilter === "all" ||
+      (networkPillFilter === "api" && log.url.toLowerCase().includes("api"));
+    return matchesText && matchesPill;
+  });
 
   // Save network log to collection helpers
   const logBaseUrl = (url: string) => url.split("?")[0];
@@ -944,12 +952,36 @@ export default function WebExplorerPage() {
             <span className={sectionLabel}>
               <Activity className="h-3.5 w-3.5 text-stone" /> Network requests
             </span>
-            <div className="flex items-center gap-1.5">
-              <div className="h-1.5 w-1.5 rounded-full bg-danger animate-pulse" />
-              <span className="text-[10px] font-semibold uppercase tracking-[0.05em] text-danger">Recording</span>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
+                <div className="h-1.5 w-1.5 rounded-full bg-danger animate-pulse" />
+                <span className="text-[10px] font-semibold uppercase tracking-[0.05em] text-danger">Recording</span>
+              </div>
+              <button
+                onClick={handleClearNetworkLogs}
+                title="Clear network log"
+                className="h-[22px] px-2 rounded-md border border-line text-[10px] font-medium text-mute hover:text-ink hover:border-clay transition-colors flex items-center gap-1"
+              >
+                <RotateCcw className="h-3 w-3" /> Reset
+              </button>
             </div>
           </div>
-          <div className="p-3 border-b border-line flex-shrink-0">
+          <div className="px-3 pt-2.5 pb-0 flex gap-1.5 flex-shrink-0">
+            {(["all", "api"] as const).map((pill) => (
+              <button
+                key={pill}
+                onClick={() => setNetworkPillFilter(pill)}
+                className={`h-[22px] px-2.5 rounded-full text-[10px] font-semibold transition-colors ${
+                  networkPillFilter === pill
+                    ? "bg-clay text-white"
+                    : "bg-line text-mute hover:text-ink"
+                }`}
+              >
+                {pill === "all" ? "Show all" : "API"}
+              </button>
+            ))}
+          </div>
+          <div className="p-3 pb-3 pt-2 border-b border-line flex-shrink-0">
             <input
               type="text"
               placeholder="Filter by URL or method…"
