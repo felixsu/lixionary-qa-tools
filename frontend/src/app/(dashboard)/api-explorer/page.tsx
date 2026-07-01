@@ -1086,6 +1086,7 @@ export default function ApiExplorerPage() {
                 value={reqUrl}
                 onChange={(e) => setReqUrl(e.target.value)}
                 onPaste={handleUrlPaste}
+                onKeyDown={(e) => { if (e.key === "Enter") handleExecuteRequest(); }}
                 placeholder="Request URL (paste a curl command to import)"
                 className="flex-1 h-[38px] bg-cream border border-line rounded-lg px-3.5 font-mono text-xs text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
               />
