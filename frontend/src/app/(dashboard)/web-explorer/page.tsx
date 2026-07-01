@@ -88,6 +88,8 @@ export default function WebExplorerPage() {
     setSelectedElement,
     selectedElementLocators,
     setSelectedElementLocators,
+    selectedElementStale,
+    setSelectedElementStale,
     selectedElementAction,
     setSelectedElementAction,
     selectedElementMethodName,
@@ -625,6 +627,7 @@ export default function WebExplorerPage() {
       
       setSelectedElement(null);
       setSelectedElementLocators([]);
+      setSelectedElementStale({ stale: false, reason: null });
       setSelectedElementMethodName("");
       
       await fetchWorkspaceFiles();
@@ -1491,7 +1494,7 @@ export default function WebExplorerPage() {
                       <Crosshair className="h-4 w-4 text-clay animate-pulse" /> Inspect Element
                     </span>
                     <button
-                      onClick={() => { setSelectedElement(null); setSelectedElementLocators([]); }}
+                      onClick={() => { setSelectedElement(null); setSelectedElementLocators([]); setSelectedElementStale({ stale: false, reason: null }); }}
                       className="h-6 w-6 rounded-md hover:bg-line flex items-center justify-center transition-colors"
                     >
                       <X className="h-4 w-4 text-mute hover:text-graphite" />
@@ -1507,6 +1510,12 @@ export default function WebExplorerPage() {
                         </div>
                       )}
                     </div>
+
+                    {selectedElementStale?.stale && (
+                      <div className="px-3 py-2 bg-amber-50 border border-amber-300 rounded-lg text-[11px] text-amber-800 font-medium">
+                        ⚠️ Content changed while analyzing — the dropdown is likely still loading or refreshing. Locators below may not match. Click the element again once it settles.
+                      </div>
+                    )}
 
                     <div className="flex flex-col gap-1">
                       <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">Method name</label>
@@ -1549,8 +1558,14 @@ export default function WebExplorerPage() {
                         className="h-8 px-2.5 rounded-md text-xs text-ink font-mono bg-cream"
                         openUpward
                         options={selectedElementLocators.map((loc, idx) => {
-                          const uniqueness =
-                            loc.unique === true ? " ✅ (Unique)" : loc.unique === false ? ` ⚠️ (${loc.count} matches)` : "";
+                          let uniqueness = "";
+                          if (selectedElementStale?.stale && loc.count === 0) {
+                            uniqueness = " ⚠️ (stale — retry)";
+                          } else if (loc.unique === true) {
+                            uniqueness = " ✅ (Unique)";
+                          } else if (loc.unique === false) {
+                            uniqueness = ` ⚠️ (${loc.count} matches)`;
+                          }
                           return { value: String(idx), label: `${loc.strategy}${uniqueness}` };
                         })}
                       />

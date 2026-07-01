@@ -295,6 +295,8 @@ interface AppContextType {
   setSelectedElement: (el: any) => void;
   selectedElementLocators: any[];
   setSelectedElementLocators: (locators: any[]) => void;
+  selectedElementStale: { stale: boolean; reason: string | null };
+  setSelectedElementStale: (stale: { stale: boolean; reason: string | null }) => void;
   selectedElementAction: string;
   setSelectedElementAction: (action: string) => void;
   selectedElementMethodName: string;
@@ -448,6 +450,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [pomElements, setPomElements] = useState<Record<string, RecordedElement[]>>({ "MyPage": [] });
   const [selectedElement, setSelectedElement] = useState<any>(null);
   const [selectedElementLocators, setSelectedElementLocators] = useState<any[]>([]);
+  const [selectedElementStale, setSelectedElementStale] = useState<{ stale: boolean; reason: string | null }>({ stale: false, reason: null });
   const [selectedElementAction, setSelectedElementAction] = useState("click");
   const [selectedElementMethodName, setSelectedElementMethodName] = useState("");
   const [anchorElement, setAnchorElement] = useState<{ tagName: string; id: string; text: string } | null>(null);
@@ -828,6 +831,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         case "element_selected":
           setSelectedElement(msg.data.element);
           setSelectedElementLocators(msg.data.locators);
+          setSelectedElementStale({ stale: !!msg.data.stale, reason: msg.data.staleReason || null });
           if (msg.data.locators.length) {
             setSelectedElementMethodName(`click_${msg.data.element.tagName}_${msg.data.locators[0].strategy}`);
           }
@@ -889,6 +893,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setNetworkLogs([]);
     setSelectedElement(null);
     setSelectedElementLocators([]);
+    setSelectedElementStale({ stale: false, reason: null });
     setBrowserTabs([]);
     setActiveTabIndex(0);
     setVncUrl(""); // Empty initially; will be populated dynamically by the WebSocket status message
@@ -912,6 +917,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setNetworkLogs([]);
       setSelectedElement(null);
       setSelectedElementLocators([]);
+      setSelectedElementStale({ stale: false, reason: null });
       setBrowserTabs([]);
       setActiveTabIndex(0);
       setVncUrl(""); // Empty initially; will be populated dynamically by the WebSocket status message
@@ -1720,6 +1726,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setSelectedElement,
         selectedElementLocators,
         setSelectedElementLocators,
+        selectedElementStale,
+        setSelectedElementStale,
         selectedElementAction,
         setSelectedElementAction,
         selectedElementMethodName,

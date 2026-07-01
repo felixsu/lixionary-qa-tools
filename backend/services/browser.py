@@ -233,31 +233,55 @@ class BrowserSessionManager:
                 el_info["frameLocators"] = frame_chain
                 
                 ranked_locators = rank_locators(el_info)
-                
-                # Verify uniqueness on the active browser frame
+
+                # Verify uniqueness on the active browser frame (counted concurrently to
+                # minimize the window during which async-populated content can shift
+                # under us between capture and validation)
+                counts = await asyncio.gather(*[
+                    cls._count_locator_matches(source["frame"], loc["strategy"], loc["selector"])
+                    for loc in ranked_locators
+                ])
+
                 validated_locators = []
-                for loc in ranked_locators:
-                    count = await cls._count_locator_matches(
-                        source["frame"],
-                        loc["strategy"],
-                        loc["selector"]
-                    )
+                for loc, count in zip(ranked_locators, counts):
                     loc["count"] = count
                     loc["unique"] = (count == 1)
                     if count > 1:
                         # Heavily penalize non-unique locators to push them to the bottom
                         loc["score"] -= 1000
                     validated_locators.append(loc)
-                
+
                 # Re-sort after adjusting scores
                 validated_locators.sort(key=lambda x: x["score"], reverse=True)
-                
+
+                # Detect whether the originally clicked element was detached or
+                # mutated in place while we were counting matches (e.g. a dropdown
+                # whose options are still being replaced by an in-flight backend
+                # query) — this makes a "0 matches" result distinguishable from a
+                # genuinely bad locator.
+                stale = False
+                stale_reason = None
+                try:
+                    connectivity = await source["frame"].evaluate(
+                        "window.__lixionaryCheckElementConnected && window.__lixionaryCheckElementConnected()"
+                    )
+                    if connectivity and not connectivity.get("connected"):
+                        stale = True
+                        stale_reason = connectivity.get("reason") or "detached"
+                    elif connectivity and connectivity.get("reason") == "mutated":
+                        stale = True
+                        stale_reason = "mutated"
+                except Exception as e:
+                    print(f"Error checking element connectivity: {e}")
+
                 if session.get("callback"):
                     await session["callback"]({
                         "type": "element_selected",
                         "data": {
                             "element": el_info,
-                            "locators": validated_locators
+                            "locators": validated_locators,
+                            "stale": stale,
+                            "staleReason": stale_reason
                         }
                     })
             except Exception as e:
@@ -571,6 +595,7 @@ class BrowserSessionManager:
             let hoverOverlay = null;
             let lixionaryAnchor = null;
             let lixionaryLastClickedEl = null;
+            let lixionaryLastClickedFingerprint = null;
 
             window.__setLixionaryAnchorFromLast = function() {
                 if (lixionaryAnchor) {
@@ -595,6 +620,26 @@ class BrowserSessionManager:
                     lixionaryAnchor._prevOutline = undefined;
                 }
                 lixionaryAnchor = null;
+            };
+
+            // Lets the backend tell whether the element captured on the last click
+            // is still the same DOM node with the same content, or whether it was
+            // detached/replaced (e.g. a dropdown re-rendering with backend results)
+            // in the time it took to rank and validate locators for it.
+            window.__lixionaryCheckElementConnected = function() {
+                const el = lixionaryLastClickedEl;
+                if (!el) return { connected: false, reason: 'no-element' };
+
+                if (!el.isConnected) {
+                    return { connected: false, reason: 'detached' };
+                }
+
+                const currentFingerprint = (el.outerHTML || '').length + '|' + (el.innerText ? el.innerText.trim() : '');
+                if (lixionaryLastClickedFingerprint !== null && currentFingerprint !== lixionaryLastClickedFingerprint) {
+                    return { connected: true, reason: 'mutated' };
+                }
+
+                return { connected: true, reason: null };
             };
 
             // Create canvas hover border outline
@@ -876,6 +921,7 @@ class BrowserSessionManager:
 
                 // Store last clicked element for anchor-setting
                 lixionaryLastClickedEl = el;
+                lixionaryLastClickedFingerprint = (el.outerHTML || '').length + '|' + (el.innerText ? el.innerText.trim() : '');
 
                 // Build metadata and send to python backend
                 const metadata = getElementMetadata(el);
