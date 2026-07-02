@@ -27,6 +27,47 @@ class RunScriptPayload(BaseModel):
     filename: str
     session_id: str
 
+# Default workspace boilerplate — used by both the scaffold (GET /files) and POST /reset
+DEFAULT_MY_PAGE_PY = "from playwright.sync_api import Page\n\nclass MyPage:\n    def __init__(self, page: Page):\n        self.page = page\n"
+
+DEFAULT_MY_CLIENT_PY = 'from __future__ import annotations\nimport httpx\nfrom pydantic import BaseModel, Field\nfrom typing import List, Optional, Any\n\n# --- Pydantic Models ---\n\nclass MyClient:\n    def __init__(self, base_url: str = "https://api-qa.ninjavan.co", token: str = None):\n        self.client = httpx.Client(base_url=base_url)\n        if token:\n            self.client.headers.update({"Authorization": f"Bearer {token}"})\n'
+
+DEFAULT_PLAYGROUND_PY = 'from playwright.sync_api import Page\nfrom inspection_code.my_page import MyPage\n\n\nclass PlaygroundPage(MyPage):\n    def __init__(self, page: Page):\n        super().__init__(page)\n'
+
+DEFAULT_MAIN_PY = """import os
+import time
+from playwright.sync_api import sync_playwright
+from playground import PlaygroundPage
+
+# Pre-made delay helper (ms: milliseconds)
+def delay(ms: int):
+    time.sleep(ms / 1000)
+
+def run_playground(page):
+    \"\"\"Run playground tasks using the live browser page.\"\"\"
+    mPage = PlaygroundPage(page)
+    # Add your test operations here!
+    # e.g., mPage.click_button()
+
+# Retrieve VNC browser remote debugging URL from environment
+cdp_url = os.getenv("BROWSER_CDP_URL", "http://vnc-browser:9222")
+
+print(f"Connecting to VNC browser at: {cdp_url}...")
+try:
+    with sync_playwright() as p:
+        browser = p.chromium.connect_over_cdp(cdp_url)
+
+        # Reuse the first active context and page
+        context = browser.contexts[0]
+        page = context.pages[0]
+
+        print(f"Current page URL: {page.url}")
+        run_playground(page)
+        print("Execution completed successfully!")
+except Exception as e:
+    print(f"ERROR: Execution failed: {e}")
+"""
+
 def get_workspace_dir(user_id: str, session_id: str) -> str:
     path = os.path.join("/workspaces", user_id, session_id)
     os.makedirs(path, exist_ok=True)
@@ -71,7 +112,7 @@ async def get_workspace_files(
     if not os.path.exists(my_page_path):
         try:
             with open(my_page_path, "w") as f:
-                f.write("from playwright.sync_api import Page\n\nclass MyPage:\n    def __init__(self, page: Page):\n        self.page = page\n")
+                f.write(DEFAULT_MY_PAGE_PY)
         except Exception as e:
             print(f"Failed to write default my_page.py: {e}")
 
@@ -79,7 +120,7 @@ async def get_workspace_files(
     if not os.path.exists(my_client_path):
         try:
             with open(my_client_path, "w") as f:
-                f.write('from __future__ import annotations\nimport httpx\nfrom pydantic import BaseModel, Field\nfrom typing import List, Optional, Any\n\n# --- Pydantic Models ---\n\nclass MyClient:\n    def __init__(self, base_url: str = "https://api-qa.ninjavan.co", token: str = None):\n        self.client = httpx.Client(base_url=base_url)\n        if token:\n            self.client.headers.update({"Authorization": f"Bearer {token}"})\n')
+                f.write(DEFAULT_MY_CLIENT_PY)
         except Exception as e:
             print(f"Failed to write default my_client.py: {e}")
 
@@ -87,48 +128,15 @@ async def get_workspace_files(
     if not os.path.exists(my_playground_path):
         try:
             with open(my_playground_path, "w") as f:
-                f.write('from playwright.sync_api import Page\nfrom inspection_code.my_page import MyPage\n\n\nclass PlaygroundPage(MyPage):\n    def __init__(self, page: Page):\n        super().__init__(page)\n')
+                f.write(DEFAULT_PLAYGROUND_PY)
         except Exception as e:
             print(f"Failed to write default playground.py: {e}")
 
     main_py_path = os.path.join(workspace_dir, "main.py")
     if not os.path.exists(main_py_path):
-        default_content = """import os
-import time
-from playwright.sync_api import sync_playwright
-from playground import PlaygroundPage
-
-# Pre-made delay helper (ms: milliseconds)
-def delay(ms: int):
-    time.sleep(ms / 1000)
-
-def run_playground(page):
-    \"\"\"Run playground tasks using the live browser page.\"\"\"
-    playground_page = PlaygroundPage(page)
-    # Add your test operations here!
-    # e.g., playground_page.click_button()
-
-# Retrieve VNC browser remote debugging URL from environment
-cdp_url = os.getenv("BROWSER_CDP_URL", "http://vnc-browser:9222")
-
-print(f"Connecting to VNC browser at: {cdp_url}...")
-try:
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(cdp_url)
-
-        # Reuse the first active context and page
-        context = browser.contexts[0]
-        page = context.pages[0]
-
-        print(f"Current page URL: {page.url}")
-        run_playground(page)
-        print("Execution completed successfully!")
-except Exception as e:
-    print(f"ERROR: Execution failed: {e}")
-"""
         try:
             with open(main_py_path, "w") as f:
-                f.write(default_content)
+                f.write(DEFAULT_MAIN_PY)
         except Exception as e:
             print(f"Failed to write default main.py: {e}")
 
@@ -392,45 +400,13 @@ async def reset_workspace_file(
 
     default_content = ""
     if safe_name == "inspection_code/my_page.py":
-        default_content = "from playwright.sync_api import Page\n\nclass MyPage:\n    def __init__(self, page: Page):\n        self.page = page\n"
+        default_content = DEFAULT_MY_PAGE_PY
     elif safe_name == "inspection_code/my_client.py":
-        default_content = 'from __future__ import annotations\nimport httpx\nfrom pydantic import BaseModel, Field\nfrom typing import List, Optional, Any\n\n# --- Pydantic Models ---\n\nclass MyClient:\n    def __init__(self, base_url: str = "https://api-qa.ninjavan.co", token: str = None):\n        self.client = httpx.Client(base_url=base_url)\n        if token:\n            self.client.headers.update({"Authorization": f"Bearer {token}"})\n'
+        default_content = DEFAULT_MY_CLIENT_PY
     elif safe_name == "playground.py":
-        default_content = 'from playwright.sync_api import Page\nfrom inspection_code.my_page import MyPage\n\n\nclass PlaygroundPage(MyPage):\n    def __init__(self, page: Page):\n        super().__init__(page)\n'
+        default_content = DEFAULT_PLAYGROUND_PY
     elif safe_name == "main.py":
-        default_content = """import os
-import time
-from playwright.sync_api import sync_playwright
-from playground import PlaygroundPage
-
-# Pre-made delay helper (ms: milliseconds)
-def delay(ms: int):
-    time.sleep(ms / 1000)
-
-def run_playground(page):
-    \"\"\"Run playground tasks using the live browser page.\"\"\"
-    playground_page = PlaygroundPage(page)
-    # Add your test operations here!
-    # e.g., playground_page.click_button()
-
-# Retrieve VNC browser remote debugging URL from environment
-cdp_url = os.getenv("BROWSER_CDP_URL", "http://vnc-browser:9222")
-
-print(f"Connecting to VNC browser at: {cdp_url}...")
-try:
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(cdp_url)
-
-        # Reuse the first active context and page
-        context = browser.contexts[0]
-        page = context.pages[0]
-
-        print(f"Current page URL: {page.url}")
-        run_playground(page)
-        print("Execution completed successfully!")
-except Exception as e:
-    print(f"ERROR: Execution failed: {e}")
-"""
+        default_content = DEFAULT_MAIN_PY
     else:
         raise HTTPException(status_code=400, detail="Only boilerplate files can be reset")
 

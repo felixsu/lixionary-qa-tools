@@ -5,6 +5,7 @@ import {
   Globe, Terminal, Eye, Crosshair, Download, Trash2, Plus, FileCode, Play,
   Save, File, Folder, XCircle, Rows, Lock, X, Layers, Code2, Clipboard, Activity,
   ChevronDown, ChevronUp, RotateCcw, Copy, Mail, Anchor, Loader2, ScanSearch,
+  CheckCircle2, AlertCircle,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
@@ -215,13 +216,35 @@ export default function WebExplorerPage() {
   const completionProviderRef = useRef<any>(null);
   const activeReaderRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
 
+  // Auto-save machinery: refs so the debounced callback and flush-on-switch
+  // never act on stale state captured in an earlier render's closure.
+  const contentRef = useRef<string>("");
+  const dirtyFileRef = useRef<string>("");
+  const dirtyRef = useRef<boolean>(false);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+  const sessionIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
+
+  // Toast (workspace save feedback)
+  const [toast, setToast] = useState<{ msg: string; variant: "success" | "error" } | null>(null);
+  const showToast = (msg: string, variant: "success" | "error" = "success") => {
+    setToast({ msg, variant });
+    setTimeout(() => setToast(null), 2600);
+  };
+
   useEffect(() => {
     return () => {
       if (completionProviderRef.current) {
         completionProviderRef.current.dispose();
         completionProviderRef.current = null;
       }
+      flushPendingSave();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Restore persisted layout sizes on mount
@@ -303,14 +326,27 @@ export default function WebExplorerPage() {
 
   const updateMethodsCache = async () => {
     if (!sessionId) return;
+    let myPageMethods: { name: string; args: string; doc: string }[] = [];
+    let playgroundMethods: { name: string; args: string; doc: string }[] = [];
     try {
       const pageData = await apiCall(`/api/workspace/files/inspection_code/my_page.py?session_id=${sessionId}`);
       if (pageData && pageData.content) {
-        pageMethodsRef.current = parsePythonMethods(pageData.content);
+        myPageMethods = parsePythonMethods(pageData.content);
       }
     } catch (e) {
       console.error("Failed to parse my_page.py", e);
     }
+    try {
+      const pgData = await apiCall(`/api/workspace/files/playground.py?session_id=${sessionId}`);
+      if (pgData && pgData.content) {
+        playgroundMethods = parsePythonMethods(pgData.content);
+      }
+    } catch (e) {
+      console.error("Failed to parse playground.py", e);
+    }
+    // PlaygroundPage extends MyPage: suggest the union, overrides win
+    const seen = new Set(playgroundMethods.map((m) => m.name));
+    pageMethodsRef.current = [...playgroundMethods, ...myPageMethods.filter((m) => !seen.has(m.name))];
     try {
       const clientData = await apiCall(`/api/workspace/files/inspection_code/my_client.py?session_id=${sessionId}`);
       if (clientData && clientData.content) {
@@ -324,12 +360,14 @@ export default function WebExplorerPage() {
   const handleEditorDidMount = (editor: any, monaco: any) => {
     if (!completionProviderRef.current) {
       completionProviderRef.current = monaco.languages.registerCompletionItemProvider("python", {
-        triggerCharacters: [".", "p"],
+        triggerCharacters: [".", "p", "m"],
         provideCompletionItems: (model: any, position: any) => {
           const lineContent = model.getLineContent(position.lineNumber);
           const textBeforeCursor = lineContent.substring(0, position.column - 1);
           
-          if (textBeforeCursor.endsWith("playground_page.")) {
+          // mPage is the current template variable; playground_page kept for
+          // workspaces scaffolded before the rename
+          if (/(^|[^\w])(mPage|playground_page)\.$/.test(textBeforeCursor)) {
             return {
               suggestions: pageMethodsRef.current.map((m) => ({
                 label: m.name,
@@ -370,7 +408,7 @@ export default function WebExplorerPage() {
           const word = model.getWordUntilPosition(position);
           if (!textBeforeCursor.includes(".")) {
             const vars = [
-              { label: "playground_page", detail: "PlaygroundPage instance" },
+              { label: "mPage", detail: "PlaygroundPage instance" },
               { label: "playground_client", detail: "PlaygroundClient instance" }
             ];
             return {
@@ -420,17 +458,62 @@ export default function WebExplorerPage() {
     }
   };
 
+  const saveFile = (filename: string, content: string): Promise<void> => {
+    const sid = sessionIdRef.current;
+    if (!filename || !sid || filename.startsWith("inspection_code/")) return Promise.resolve();
+    const run = async () => {
+      try {
+        await apiCall(`/api/workspace/files/${filename}?session_id=${sid}`, {
+          method: "POST",
+          body: JSON.stringify({ content }),
+        });
+        fetchWorkspaceFiles();
+      } catch (e: any) {
+        showToast(`Failed to save ${filename}: ${e.message}`, "error");
+      }
+    };
+    // Chain saves so POSTs never land out of order (e.g. a debounced save
+    // in flight when a flush-on-switch fires)
+    saveChainRef.current = saveChainRef.current.then(run, run);
+    return saveChainRef.current;
+  };
+
+  const flushPendingSave = (): Promise<void> => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    if (!dirtyRef.current) return Promise.resolve();
+    // Clear before awaiting so a concurrent flush can't double-fire. On save
+    // failure we stay non-dirty: the next keystroke re-arms with full content,
+    // and retry loops against a dead session are worse than one clear toast.
+    dirtyRef.current = false;
+    return saveFile(dirtyFileRef.current, contentRef.current);
+  };
+
+  const cancelPendingSave = () => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    dirtyRef.current = false;
+  };
+
+  const handleEditorChange = (val: string | undefined) => {
+    const v = val || "";
+    setWorkspaceFileContent(v);
+    if (!selectedWorkspaceFile || selectedWorkspaceFile.startsWith("inspection_code/")) return;
+    contentRef.current = v;
+    dirtyFileRef.current = selectedWorkspaceFile;
+    dirtyRef.current = true;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => { flushPendingSave(); }, 1000);
+  };
+
   const handleSaveWorkspaceFile = async () => {
     if (!selectedWorkspaceFile || !sessionId) return;
-    try {
-      await apiCall(`/api/workspace/files/${selectedWorkspaceFile}?session_id=${sessionId}`, {
-        method: "POST",
-        body: JSON.stringify({ content: workspaceFileContent }),
-      });
-      fetchWorkspaceFiles();
-    } catch (e: any) {
-      alert(`Failed to save file: ${e.message}`);
-    }
+    cancelPendingSave();
+    await saveFile(selectedWorkspaceFile, workspaceFileContent);
   };
 
   const handleResetWorkspaceFile = async () => {
@@ -438,6 +521,8 @@ export default function WebExplorerPage() {
     if (!confirm(`Are you sure you want to reset ${selectedWorkspaceFile} to its default boilerplate? This will overwrite all your current modifications.`)) {
       return;
     }
+    // A pending debounced save firing after the reset would clobber the boilerplate
+    cancelPendingSave();
     setIsWorkspaceLoading(true);
     try {
       const data = await apiCall(`/api/workspace/reset`, {
@@ -445,9 +530,9 @@ export default function WebExplorerPage() {
         body: JSON.stringify({ sessionId, filename: selectedWorkspaceFile }),
       });
       setWorkspaceFileContent(data.content || "");
-      alert("File successfully reset to default boilerplate!");
+      showToast("File reset to default boilerplate");
     } catch (e: any) {
-      alert(`Failed to reset file: ${e.message}`);
+      showToast(`Failed to reset file: ${e.message}`, "error");
     } finally {
       setIsWorkspaceLoading(false);
     }
@@ -476,6 +561,8 @@ export default function WebExplorerPage() {
     if (filename === "main.py") { alert("main.py cannot be deleted."); return; }
     if (!confirm(`Are you sure you want to delete ${filename}?`)) return;
     if (!sessionId) return;
+    // A pending flush after the DELETE would re-create the file (POST creates)
+    if (filename === dirtyFileRef.current) cancelPendingSave();
     try {
       await apiCall(`/api/workspace/files/${filename}?session_id=${sessionId}`, { method: "DELETE" });
       if (selectedWorkspaceFile === filename) setSelectedWorkspaceFile("main.py");
@@ -540,6 +627,7 @@ export default function WebExplorerPage() {
 
     setIsScriptRunning(true);
     setWorkspaceLogs("");
+    cancelPendingSave(); // run saves the file itself below
     try {
       await apiCall(`/api/workspace/files/${selectedWorkspaceFile}?session_id=${sessionId}`, {
         method: "POST",
@@ -589,14 +677,23 @@ export default function WebExplorerPage() {
 
   useEffect(() => {
     if (sessionId) {
+      cancelPendingSave(); // the previous session's workspace may be gone
       fetchWorkspaceFiles();
       setSelectedWorkspaceFile("");
       setWorkspaceFileContent("");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   useEffect(() => {
-    if (selectedWorkspaceFile) fetchFileContent(selectedWorkspaceFile);
+    const load = async () => {
+      // Flush the previous file's pending edits (via refs) before fetching the
+      // new one, so a rapid A→edit→B→A switch can't read stale content
+      await flushPendingSave();
+      if (selectedWorkspaceFile) fetchFileContent(selectedWorkspaceFile);
+    };
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedWorkspaceFile]);
 
   // Profile manager modal states
@@ -1046,7 +1143,7 @@ export default function WebExplorerPage() {
               language="python"
               theme="vs-dark"
               value={workspaceFileContent}
-              onChange={(val) => setWorkspaceFileContent(val || "")}
+              onChange={handleEditorChange}
               onMount={handleEditorDidMount}
               options={{
                 minimap: { enabled: false },
@@ -1966,6 +2063,23 @@ export default function WebExplorerPage() {
             />
           </form>
         </ModalShell>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div
+          className={`fixed bottom-5 right-5 z-50 flex items-center gap-2.5 bg-ink-900 text-cream px-4 py-3 rounded-lg border-l-4 ${
+            toast.variant === "error" ? "border-red-500" : "border-sage"
+          } text-[13px] shadow-[0_4px_16px_rgba(20,20,19,0.24)] max-w-[360px]`}
+          style={{ animation: "fadeUp 0.2s ease-out" }}
+        >
+          {toast.variant === "error" ? (
+            <AlertCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
+          ) : (
+            <CheckCircle2 className="h-4 w-4 text-sage flex-shrink-0" />
+          )}
+          <span>{toast.msg}</span>
+        </div>
       )}
 
       {/* New class modal */}
