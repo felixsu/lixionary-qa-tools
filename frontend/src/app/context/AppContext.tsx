@@ -367,6 +367,18 @@ interface AppContextType {
       body: string;
     }
   ) => Promise<void>;
+  handleSaveNetworkRequestToNewCollection: (
+    newCollectionName: string,
+    requestName: string,
+    requestData: {
+      method: string;
+      url: string;
+      headers: { key: string; value: string }[];
+      queryParams: { key: string; value: string }[];
+      bodyType: string;
+      body: string;
+    }
+  ) => Promise<void>;
   handleCreateSubCollection: (name: string, parentColId: string) => Promise<void>;
   handleMoveNode: (nodeId: string, nodeType: "request" | "collection", targetColId: string) => Promise<void>;
   handleDeleteNode: (nodeId: string, nodeType: "request" | "collection") => Promise<void>;
@@ -1257,8 +1269,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const handleSaveNetworkRequestToCollection = async (
-    collectionId: string,
+  const persistRequestToCollection = async (
+    col: Collection,
     targetColId: string,
     requestName: string,
     requestData: {
@@ -1269,10 +1281,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       bodyType: string;
       body: string;
     }
-  ) => {
-    const col = collections.find(c => c.id === collectionId);
-    if (!col) throw new Error("Collection not found.");
-    
+  ): Promise<void> => {
     const newRequest: RequestItem = {
       id: `req_${Math.random().toString(36).substring(2, 9)}`,
       name: requestName,
@@ -1288,7 +1297,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const updatedCol = addRequestToNode(col, targetColId, newRequest);
 
-    await apiCall(`/api/collections/${collectionId}`, {
+    await apiCall(`/api/collections/${col.id}`, {
       method: "PUT",
       body: JSON.stringify({
         requests: updatedCol.requests,
@@ -1296,6 +1305,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       })
     });
     await fetchCollections();
+  };
+
+  const handleSaveNetworkRequestToCollection = async (
+    collectionId: string,
+    targetColId: string,
+    requestName: string,
+    requestData: {
+      method: string;
+      url: string;
+      headers: { key: string; value: string }[];
+      queryParams: { key: string; value: string }[];
+      bodyType: string;
+      body: string;
+    }
+  ) => {
+    const col = collections.find(c => c.id === collectionId);
+    if (!col) throw new Error("Collection not found.");
+    await persistRequestToCollection(col, targetColId, requestName, requestData);
+  };
+
+  const handleSaveNetworkRequestToNewCollection = async (
+    newCollectionName: string,
+    requestName: string,
+    requestData: {
+      method: string;
+      url: string;
+      headers: { key: string; value: string }[];
+      queryParams: { key: string; value: string }[];
+      bodyType: string;
+      body: string;
+    }
+  ): Promise<void> => {
+    const newCol = await createCollection(newCollectionName);
+    await persistRequestToCollection(newCol, newCol.id, requestName, requestData);
   };
 
   const handleCreateSubCollection = async (name: string, parentColId: string) => {
@@ -1552,13 +1595,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const createCollection = async (name: string): Promise<Collection> => {
+    const result = await apiCall("/api/collections", {
+      method: "POST",
+      body: JSON.stringify({ name })
+    });
+    await fetchCollections();
+    return result as Collection;
+  };
+
   const handleCreateCollection = async (name: string) => {
     try {
-      const result = await apiCall("/api/collections", {
-        method: "POST",
-        body: JSON.stringify({ name })
-      });
-      await fetchCollections();
+      const result = await createCollection(name);
       setSelectedCollectionId(result.id);
     } catch (e: any) {
       throw new Error(`Failed to create collection: ${e.message}`);
@@ -1831,6 +1879,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         handleSaveRequest,
         handleCreateRequest,
         handleSaveNetworkRequestToCollection,
+        handleSaveNetworkRequestToNewCollection,
         handleCreateSubCollection,
         handleMoveNode,
         handleDeleteNode,

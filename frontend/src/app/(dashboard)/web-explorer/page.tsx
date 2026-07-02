@@ -112,6 +112,7 @@ export default function WebExplorerPage() {
 
     collections,
     handleSaveNetworkRequestToCollection,
+    handleSaveNetworkRequestToNewCollection,
 
     profiles,
     selectedProfileId,
@@ -204,6 +205,7 @@ export default function WebExplorerPage() {
   const [pendingSaveDetails, setPendingSaveDetails] = useState<NetworkDetails | null>(null);
   const [saveCollectionId, setSaveCollectionId] = useState("");
   const [saveRequestName, setSaveRequestName] = useState("");
+  const [newCollectionName, setNewCollectionName] = useState("");
   const [saveDuplicates, setSaveDuplicates] = useState<{ collectionName: string; requestName: string }[]>([]);
   const [saveShowDuplicateWarning, setSaveShowDuplicateWarning] = useState(false);
   const [isSavingToCollection, setIsSavingToCollection] = useState(false);
@@ -863,7 +865,8 @@ export default function WebExplorerPage() {
     setPendingSaveLog(log);
     setPendingSaveDetails(null);
     setSaveRequestName(suggestRequestName(log.url));
-    setSaveCollectionId(collections[0]?.id || "");
+    setSaveCollectionId(collections.length ? collections[0].id : "__new__");
+    setNewCollectionName("");
     setSaveDuplicates([]);
     setSaveShowDuplicateWarning(false);
     setShowSaveToCollectionModal(true);
@@ -875,7 +878,9 @@ export default function WebExplorerPage() {
 
   const handleConfirmSaveToCollection = async (e: React.FormEvent) => {
     e.preventDefault();
+    const isNewCollection = saveCollectionId === "__new__";
     if (!pendingSaveLog || !saveCollectionId || !saveRequestName) return;
+    if (isNewCollection && !newCollectionName.trim()) return;
 
     if (!saveShowDuplicateWarning) {
       const dupes = findCollectionDuplicates(pendingSaveLog.method, pendingSaveLog.url);
@@ -902,14 +907,25 @@ export default function WebExplorerPage() {
 
     setIsSavingToCollection(true);
     try {
-      await handleSaveNetworkRequestToCollection(saveCollectionId, saveCollectionId, saveRequestName, {
-        method: pendingSaveLog.method,
-        url: urlWithoutQuery,
-        headers,
-        queryParams,
-        bodyType,
-        body,
-      });
+      if (isNewCollection) {
+        await handleSaveNetworkRequestToNewCollection(newCollectionName.trim(), saveRequestName, {
+          method: pendingSaveLog.method,
+          url: urlWithoutQuery,
+          headers,
+          queryParams,
+          bodyType,
+          body,
+        });
+      } else {
+        await handleSaveNetworkRequestToCollection(saveCollectionId, saveCollectionId, saveRequestName, {
+          method: pendingSaveLog.method,
+          url: urlWithoutQuery,
+          headers,
+          queryParams,
+          bodyType,
+          body,
+        });
+      }
       setShowSaveToCollectionModal(false);
     } catch (err: any) {
       alert(err.message);
@@ -1889,19 +1905,40 @@ export default function WebExplorerPage() {
 
             <div className="flex flex-col gap-1.5">
               <label className="text-[13px] font-medium text-graphite">Collection</label>
-              <select
-                value={saveCollectionId}
-                onChange={(e) => setSaveCollectionId(e.target.value)}
-                required
-                className="h-10 bg-cream border border-line rounded-lg px-3 text-sm text-ink outline-none focus:border-clay"
-              >
-                {collections.length === 0 && (
-                  <option value="" disabled>No collections — create one in API Explorer first</option>
-                )}
-                {collections.map(col => (
-                  <option key={col.id} value={col.id}>{col.name}</option>
-                ))}
-              </select>
+              {saveCollectionId === "__new__" ? (
+                <>
+                  <input
+                    type="text"
+                    placeholder="e.g. Authentication Suite"
+                    value={newCollectionName}
+                    onChange={(e) => setNewCollectionName(e.target.value)}
+                    autoFocus
+                    required
+                    className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
+                  />
+                  {collections.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => { setSaveCollectionId(collections[0].id); setNewCollectionName(""); }}
+                      className="self-start text-[12px] text-clay hover:underline"
+                    >
+                      ← Choose existing collection
+                    </button>
+                  )}
+                </>
+              ) : (
+                <select
+                  value={saveCollectionId}
+                  onChange={(e) => setSaveCollectionId(e.target.value)}
+                  required
+                  className="h-10 bg-cream border border-line rounded-lg px-3 text-sm text-ink outline-none focus:border-clay"
+                >
+                  {collections.map(col => (
+                    <option key={col.id} value={col.id}>{col.name}</option>
+                  ))}
+                  <option value="__new__">+ Create new collection…</option>
+                </select>
+              )}
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -1910,7 +1947,7 @@ export default function WebExplorerPage() {
                 type="text"
                 value={saveRequestName}
                 onChange={(e) => setSaveRequestName(e.target.value)}
-                autoFocus
+                autoFocus={saveCollectionId !== "__new__"}
                 required
                 className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
               />
