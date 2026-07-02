@@ -696,11 +696,11 @@ export default function ApiExplorerPage() {
         method: "POST",
         body: JSON.stringify({
           prompt: aiPrompt,
-          responseSample: apiResponse ? JSON.stringify(apiResponse.body, null, 2) : "",
+          responseBodySample: apiResponse ? JSON.stringify(apiResponse.body, null, 2) : "",
         }),
       });
-      if (result.code) {
-        setReqParserScript(result.code);
+      if (result.generatedScript) {
+        setReqParserScript(result.generatedScript);
         setShowAiModal(false);
         setAiPrompt("");
         showToast("Parser script generated");
