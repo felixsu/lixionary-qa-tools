@@ -200,20 +200,24 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
                 "headers": {},
                 "body": f"HTTP dispatch failed: {str(e)}",
                 "executionTimeMs": duration_ms,
-                "parsedVariables": {}
+                "parsedVariables": {},
+                "parserError": None
             }
 
     # 5. Execute Response Parser Script
     parsed_variables = {}
+    parser_error = None
     parser_script = request_data.get("responseParserScript")
-    if parser_script and response.status_code < 400:
+    if parser_script and response.status_code >= 400:
+        parser_error = f"Parser skipped: response status {response.status_code}"
+    elif parser_script:
         try:
             parsed_variables = await run_unsafe_response_parser(
                 response_body=response_body,
                 response_headers=response_headers,
                 parser_script=parser_script
             )
-            
+
             # If variables were extracted, save them back to the active environment
             if parsed_variables and environment_id:
                 env_col = MongoDB.get_collection("environments")
@@ -221,7 +225,7 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
                 env_doc = await env_col.find_one({"_id": ObjectId(environment_id)})
                 if env_doc:
                     updated_vars = {v["key"]: v for v in env_doc.get("variables", [])}
-                    
+
                     # Update or append parsed variables
                     for key, val in parsed_variables.items():
                         updated_vars[key] = {
@@ -229,12 +233,13 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
                             "value": str(val),
                             "isSecret": False
                         }
-                    
+
                     await env_col.update_one(
                         {"_id": ObjectId(environment_id)},
                         {"$set": {"variables": list(updated_vars.values())}}
                     )
         except Exception as e:
+            parser_error = str(e)
             print(f"Response parser script run failed: {str(e)}")
 
     # Try formatting body as JSON for client
@@ -249,5 +254,6 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
         "headers": response_headers,
         "body": formatted_body,
         "executionTimeMs": duration_ms,
-        "parsedVariables": parsed_variables
+        "parsedVariables": parsed_variables,
+        "parserError": parser_error
     }

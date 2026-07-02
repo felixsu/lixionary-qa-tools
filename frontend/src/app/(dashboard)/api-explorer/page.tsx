@@ -4,7 +4,7 @@ import React, { useState, useRef } from "react";
 import {
   Send, Plus, Trash2, Share2, ChevronDown, ChevronRight,
   Sparkles, Code2, Copy, Check, X, CheckCircle2, AlignLeft, Minimize2,
-  PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil
+  PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil, AlertCircle
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, findRequestInTree } from "../../context/AppContext";
@@ -540,6 +540,7 @@ export default function ApiExplorerPage() {
     setReqAuthConfig,
     reqParserScript,
     setReqParserScript,
+    selectedEnvId,
 
     apiResponse,
     lastApiResponse,
@@ -1507,27 +1508,40 @@ export default function ApiExplorerPage() {
                   )}
                   {responseTab === "extracted" && (
                     <div className="flex-1 p-4 overflow-y-auto">
-                      {apiResponse.parsedVariables && Object.keys(apiResponse.parsedVariables).length ? (
-                        <div className="flex flex-col gap-1.5">
-                          {Object.entries(apiResponse.parsedVariables).map(([k, v]) => (
-                            <div
-                              key={k}
-                              className="flex items-center gap-2.5 px-3.5 py-2.5 bg-panel border border-line rounded-lg"
-                            >
-                              <span className="font-mono text-xs font-medium text-clay min-w-[120px]">{k}</span>
-                              <span className="text-[11px] text-stone">=</span>
-                              <span className="font-mono text-[11px] text-graphite flex-1 truncate">{String(v)}</span>
-                            </div>
-                          ))}
+                      {apiResponse.parserError && (
+                        <div className="flex items-start gap-2.5 px-3.5 py-2.5 mb-3 bg-red-50 border border-red-300 rounded-lg">
+                          <AlertCircle className="h-4 w-4 text-red-600 flex-shrink-0 mt-0.5" />
+                          <span className="text-[12px] text-red-700 font-mono break-all">{apiResponse.parserError}</span>
                         </div>
-                      ) : (
+                      )}
+                      {apiResponse.parsedVariables && Object.keys(apiResponse.parsedVariables).length ? (
+                        <>
+                          {!selectedEnvId && (
+                            <div className="px-3.5 py-2 mb-3 bg-amber-50 border border-amber-300 rounded-lg text-[12px] text-amber-800">
+                              Extracted but not saved — select an environment to persist these variables.
+                            </div>
+                          )}
+                          <div className="flex flex-col gap-1.5">
+                            {Object.entries(apiResponse.parsedVariables).map(([k, v]) => (
+                              <div
+                                key={k}
+                                className="flex items-center gap-2.5 px-3.5 py-2.5 bg-panel border border-line rounded-lg"
+                              >
+                                <span className="font-mono text-xs font-medium text-clay min-w-[120px]">{k}</span>
+                                <span className="text-[11px] text-stone">=</span>
+                                <span className="font-mono text-[11px] text-graphite flex-1 truncate">{String(v)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      ) : !apiResponse.parserError ? (
                         <div className="flex flex-col items-center justify-center gap-2.5 min-h-[100px]">
                           <Code2 className="h-6 w-6 text-mute" />
                           <p className="text-[13px] text-mute text-center">
                             No variables extracted. Add a parser script in the Variables tab.
                           </p>
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   )}
                 </div>

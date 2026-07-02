@@ -106,10 +106,17 @@ async def run_unsafe_response_parser(response_body: str, response_headers: Dict[
         extracted_vars[key] = value
 
     ctx.add_callable("python_vars_set", vars_set_handler)
+    # Coerce values on the JS side: the quickjs->Python bridge only accepts
+    # primitives, so objects/arrays are JSON-stringified and null/undefined
+    # become empty strings instead of raising a conversion error.
     ctx.eval("""
     const vars = {
         set: function(key, val) {
-            python_vars_set(key, val);
+            if (val === null || val === undefined) {
+                python_vars_set(String(key), "");
+                return;
+            }
+            python_vars_set(String(key), typeof val === "object" ? JSON.stringify(val) : val);
         }
     };
     """)
