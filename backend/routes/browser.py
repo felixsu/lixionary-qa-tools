@@ -224,62 +224,73 @@ def add_pom_method_to_file(session_id: str, my_page_path: str, method_name: str,
             f.write(new_content)
 
 
+def add_pom_methods_to_file(session_id: str, my_page_path: str, methods: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """
+    Appends multiple POM methods in one lock acquisition / file write.
+    Name collisions (with the file or within the batch) are auto-suffixed _2/_3.
+    Each entry in `methods` is {"name": ..., "action": ..., "strategy": ..., "selector": ..., "frameLocators": [...]}.
+    Returns [{"requested": name, "recorded": final_name}].
+    """
+    import os
+    from services.browser import get_session_lock
+    from services.generator import build_pom_method_code
+
+    lock = get_session_lock(session_id)
+    with lock:
+        if not os.path.exists(my_page_path):
+            os.makedirs(os.path.dirname(my_page_path), exist_ok=True)
+            with open(my_page_path, "w") as f:
+                f.write("from playwright.sync_api import Page\n\nclass MyPage:\n    def __init__(self, page: Page):\n        self.page = page\n")
+
+        with open(my_page_path, "r") as f:
+            content = f.read()
+
+        added = []
+        for method in methods:
+            requested = method["name"]
+            final_name = requested
+            suffix = 1
+            while f"def {final_name}(" in content:
+                suffix += 1
+                final_name = f"{requested}_{suffix}"
+
+            method_body = build_pom_method_code(
+                final_name,
+                method["action"],
+                method["strategy"],
+                method["selector"],
+                method.get("frameLocators") or [],
+            )
+
+            if not content.endswith("\n"):
+                content += "\n"
+            if not content.endswith("\n\n"):
+                content += "\n"
+            content += method_body
+            added.append({"requested": requested, "recorded": final_name})
+
+        with open(my_page_path, "w") as f:
+            f.write(content)
+
+    return added
+
+
 @router.post("/pom/add")
 async def add_pom_method(payload: AddPOMMethodPayload, current_user: dict = Depends(get_current_user)):
     import os
-    import re
-    import asyncio
     from routes.workspace import get_workspace_dir, validate_session_owner
+    from services.generator import build_pom_method_code
+    from services.naming import sanitize_method_name
 
     user_id = str(current_user["id"])
     await validate_session_owner(payload.sessionId, user_id)
     workspace_dir = get_workspace_dir(user_id, payload.sessionId)
     my_page_path = os.path.join(workspace_dir, "inspection_code", "my_page.py")
 
-    # Clean and check method name
-    method_name = re.sub(r"[^a-zA-Z0-9_]", "", payload.methodName.lower())
-    if not method_name or method_name[0].isdigit():
-        method_name = f"action_{method_name}"
-
-    # Format the strategy and args
-    strategy = payload.strategy
-    if strategy.startswith("locator"):
-        strategy = "locator"
-    
-    strategy_args = ""
-    if strategy == "get_by_role":
-        match = re.match(r'([^\[]+)\[name="([^"]+)"\]', payload.selector)
-        if match:
-            role_type = match.group(1)
-            role_name = match.group(2).replace('"', '\\"')
-            strategy_args = f'"{role_type}", name="{role_name}"'
-        else:
-            escaped_selector = payload.selector.replace('"', '\\"')
-            strategy_args = f'"{escaped_selector}"'
-    else:
-        escaped_selector = payload.selector.replace('"', '\\"')
-        strategy_args = f'"{escaped_selector}"'
-
-    frame_chain = ""
-    if payload.frameLocators:
-        for fl in payload.frameLocators:
-            frame_chain += f".frame_locator('{fl}')"
-
-    docstring = f"Perform {payload.action} on {strategy}: {payload.selector}"
-    if payload.frameLocators:
-        docstring += f" (inside iframe: {' -> '.join(payload.frameLocators)})"
-
-    # Construct the method signature and body
-    sig_args = "self"
-    if payload.action == "fill":
-        sig_args += ", value: str"
-
-    method_body = f"    def {method_name}({sig_args}) -> None:\n"
-    method_body += f'        """{docstring}"""\n'
-    
-    target = "self.page"
-    call_args = 'value' if payload.action == 'fill' else ''
-    method_body += f'        {target}{frame_chain}.{strategy}({strategy_args}).{payload.action}({call_args})\n'
+    method_name = sanitize_method_name(payload.methodName)
+    method_body = build_pom_method_code(
+        method_name, payload.action, payload.strategy, payload.selector, payload.frameLocators or []
+    )
 
     try:
         await asyncio.to_thread(
@@ -292,6 +303,49 @@ async def add_pom_method(payload: AddPOMMethodPayload, current_user: dict = Depe
         return {"message": f"Method {method_name} added to MyPage successfully"}
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write to my_page.py: {str(e)}")
+
+
+class BulkPOMMethod(BaseModel):
+    methodName: str
+    action: str
+    strategy: str
+    selector: str
+    frameLocators: Optional[List[str]] = []
+
+class AddPOMMethodsBulkPayload(BaseModel):
+    sessionId: str
+    methods: List[BulkPOMMethod]
+
+@router.post("/pom/add-bulk")
+async def add_pom_methods_bulk(payload: AddPOMMethodsBulkPayload, current_user: dict = Depends(get_current_user)):
+    import os
+    from routes.workspace import get_workspace_dir, validate_session_owner
+    from services.naming import sanitize_method_name
+
+    if not payload.methods:
+        raise HTTPException(status_code=400, detail="No methods to record")
+
+    user_id = str(current_user["id"])
+    await validate_session_owner(payload.sessionId, user_id)
+    workspace_dir = get_workspace_dir(user_id, payload.sessionId)
+    my_page_path = os.path.join(workspace_dir, "inspection_code", "my_page.py")
+
+    methods = [
+        {
+            "name": sanitize_method_name(m.methodName),
+            "action": m.action,
+            "strategy": m.strategy,
+            "selector": m.selector,
+            "frameLocators": m.frameLocators or [],
+        }
+        for m in payload.methods
+    ]
+
+    try:
+        added = await asyncio.to_thread(add_pom_methods_to_file, payload.sessionId, my_page_path, methods)
+        return {"count": len(added), "added": added}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to write to my_page.py: {str(e)}")
 
@@ -484,6 +538,12 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
                 if _session:
                     _session["anchor_frame"] = None
                 await send_to_client({"type": "anchor_cleared"})
+            elif action == "scan-page":
+                scan_scope = cmd.get("scope", "page")
+                await send_to_client({"type": "page_scan_started", "data": {"scope": scan_scope}})
+                # Run in the background so the WS receive loop stays responsive
+                # during the multi-second scan + LLM naming pass.
+                asyncio.create_task(BrowserSessionManager.run_page_scan(session_id, scan_scope))
             elif action == "click":
                 selector = cmd.get("selector")
                 if selector:

@@ -21,6 +21,47 @@ class {{ class_name }}:
     {% endfor %}
 """
 
+def build_pom_method_code(method_name: str, action: str, strategy: str, selector: str, frame_locators: List[str]) -> str:
+    """
+    Builds a single POM method body (indented for insertion into the MyPage class).
+    """
+    if strategy.startswith("locator"):
+        strategy = "locator"
+
+    strategy_args = ""
+    if strategy == "get_by_role":
+        match = re.match(r'([^\[]+)\[name="([^"]+)"\]', selector)
+        if match:
+            role_type = match.group(1)
+            role_name = match.group(2).replace('"', '\\"')
+            strategy_args = f'"{role_type}", name="{role_name}"'
+        else:
+            escaped_selector = selector.replace('"', '\\"')
+            strategy_args = f'"{escaped_selector}"'
+    else:
+        escaped_selector = selector.replace('"', '\\"')
+        strategy_args = f'"{escaped_selector}"'
+
+    frame_chain = ""
+    if frame_locators:
+        for fl in frame_locators:
+            frame_chain += f".frame_locator('{fl}')"
+
+    docstring = f"Perform {action} on {strategy}: {selector}"
+    if frame_locators:
+        docstring += f" (inside iframe: {' -> '.join(frame_locators)})"
+
+    sig_args = "self"
+    if action == "fill":
+        sig_args += ", value: str"
+
+    method_body = f"    def {method_name}({sig_args}) -> None:\n"
+    method_body += f'        """{docstring}"""\n'
+    call_args = 'value' if action == 'fill' else ''
+    method_body += f'        self.page{frame_chain}.{strategy}({strategy_args}).{action}({call_args})\n'
+    return method_body
+
+
 def generate_pom_class(class_name: str, url: str, parent_locator: str, elements: List[Dict[str, Any]]) -> str:
     """
     Renders a Python Playwright Page Object Model class using the Jinja2 template.

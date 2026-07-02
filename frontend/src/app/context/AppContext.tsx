@@ -297,6 +297,12 @@ interface AppContextType {
   setSelectedElementLocators: (locators: any[]) => void;
   selectedElementStale: { stale: boolean; reason: string | null };
   setSelectedElementStale: (stale: { stale: boolean; reason: string | null }) => void;
+  pageScanStatus: "idle" | "scanning" | "done" | "error";
+  pageScanError: string | null;
+  pageScanResults: any[] | null;
+  pageScanScopeLabel: string | null;
+  handleScanPage: (scope?: "page" | "selected") => void;
+  resetPageScan: () => void;
   selectedElementAction: string;
   setSelectedElementAction: (action: string) => void;
   selectedElementMethodName: string;
@@ -451,6 +457,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [selectedElement, setSelectedElement] = useState<any>(null);
   const [selectedElementLocators, setSelectedElementLocators] = useState<any[]>([]);
   const [selectedElementStale, setSelectedElementStale] = useState<{ stale: boolean; reason: string | null }>({ stale: false, reason: null });
+  const [pageScanStatus, setPageScanStatus] = useState<"idle" | "scanning" | "done" | "error">("idle");
+  const [pageScanError, setPageScanError] = useState<string | null>(null);
+  const [pageScanResults, setPageScanResults] = useState<any[] | null>(null);
+  const [pageScanScopeLabel, setPageScanScopeLabel] = useState<string | null>(null);
   const [selectedElementAction, setSelectedElementAction] = useState("click");
   const [selectedElementMethodName, setSelectedElementMethodName] = useState("");
   const [anchorElement, setAnchorElement] = useState<{ tagName: string; id: string; text: string } | null>(null);
@@ -836,6 +846,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             setSelectedElementMethodName(`click_${msg.data.element.tagName}_${msg.data.locators[0].strategy}`);
           }
           break;
+        case "page_scan_started":
+          setPageScanStatus("scanning");
+          setPageScanError(null);
+          break;
+        case "page_scan_result":
+          setPageScanResults(msg.data.elements);
+          setPageScanScopeLabel(msg.data.scopeLabel || null);
+          setPageScanStatus("done");
+          break;
+        case "page_scan_error":
+          setPageScanError(msg.data.message || "Page scan failed");
+          setPageScanStatus("error");
+          break;
         case "anchor_set":
           setAnchorElement(msg.data.anchorInfo);
           break;
@@ -854,6 +877,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       console.log("WS Control Connection Closed");
       setIsBrowserConnected(false);
       setInspectMode(false);
+      setPageScanStatus("idle");
+      setPageScanError(null);
+      setPageScanResults(null);
+      setPageScanScopeLabel(null);
       fetchUserSessions();
     };
 
@@ -894,6 +921,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelectedElement(null);
     setSelectedElementLocators([]);
     setSelectedElementStale({ stale: false, reason: null });
+    setPageScanStatus("idle");
+    setPageScanError(null);
+    setPageScanResults(null);
+    setPageScanScopeLabel(null);
     setBrowserTabs([]);
     setActiveTabIndex(0);
     setVncUrl(""); // Empty initially; will be populated dynamically by the WebSocket status message
@@ -1005,6 +1036,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ action: "set-anchor" }));
     }
+  };
+
+  const handleScanPage = (scope: "page" | "selected" = "page") => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      setPageScanStatus("scanning");
+      setPageScanError(null);
+      setPageScanResults(null);
+      setPageScanScopeLabel(null);
+      wsRef.current.send(JSON.stringify({ action: "scan-page", scope }));
+    } else {
+      console.warn("[Lixionary] WebSocket not open, cannot scan page");
+    }
+  };
+
+  const resetPageScan = () => {
+    setPageScanStatus("idle");
+    setPageScanError(null);
+    setPageScanResults(null);
+    setPageScanScopeLabel(null);
   };
 
   const handleClearNetworkLogs = () => {
@@ -1728,6 +1778,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setSelectedElementLocators,
         selectedElementStale,
         setSelectedElementStale,
+        pageScanStatus,
+        pageScanError,
+        pageScanResults,
+        pageScanScopeLabel,
+        handleScanPage,
+        resetPageScan,
         selectedElementAction,
         setSelectedElementAction,
         selectedElementMethodName,

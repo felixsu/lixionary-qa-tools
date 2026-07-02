@@ -642,6 +642,132 @@ class BrowserSessionManager:
                 return { connected: true, reason: null };
             };
 
+            // Enumerate interactive elements for bulk POM generation.
+            // opts.scoped: limit the scan to the last inspect-clicked element's subtree.
+            // Returns { elements, truncated, total, scope } in DOM order,
+            // or { error: 'scope-missing' } when a scoped scan has no valid root.
+            window.__lixionaryScanPage = function(opts) {
+                const scoped = !!(opts && opts.scoped);
+                const SCAN_CAP = 200;
+                const CLICKABLE_SELECTOR = 'button, a[href], [role="button"], [role="link"]';
+                const FILL_INPUT_TYPES = ['text', 'email', 'password', 'search', 'tel', 'url', 'number'];
+
+                function classify(el) {
+                    const tag = el.tagName.toLowerCase();
+                    const role = el.getAttribute('role') || '';
+                    const type = (el.getAttribute('type') || '').toLowerCase();
+
+                    if ((tag === 'input' && type === 'checkbox') || role === 'checkbox' || role === 'switch') {
+                        return { action: 'check', subtype: 'checkbox' };
+                    }
+                    if ((tag === 'input' && type === 'radio') || role === 'radio') {
+                        return { action: 'check', subtype: 'radio' };
+                    }
+                    if (tag === 'button' || (tag === 'a' && el.hasAttribute('href')) ||
+                        role === 'button' || role === 'link' ||
+                        (tag === 'input' && (type === 'submit' || type === 'button'))) {
+                        return { action: 'click', subtype: null };
+                    }
+                    if (tag === 'textarea' || el.getAttribute('contenteditable') === 'true' ||
+                        (tag === 'input' && (!type || FILL_INPUT_TYPES.indexOf(type) !== -1))) {
+                        return { action: 'fill', subtype: null };
+                    }
+                    return null;
+                }
+
+                function isVisible(el) {
+                    if (el.checkVisibility) return el.checkVisibility();
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width === 0 || rect.height === 0) return false;
+                    return getComputedStyle(el).visibility !== 'hidden';
+                }
+
+                function associatedLabelText(el) {
+                    try {
+                        if (el.labels && el.labels.length > 0) {
+                            const t = el.labels[0].innerText;
+                            if (t && t.trim()) return t.trim().substring(0, 80);
+                        }
+                        if (el.id) {
+                            const forLabel = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+                            if (forLabel && forLabel.innerText && forLabel.innerText.trim()) {
+                                return forLabel.innerText.trim().substring(0, 80);
+                            }
+                        }
+                        const wrapping = el.closest('label');
+                        if (wrapping && wrapping.innerText && wrapping.innerText.trim()) {
+                            return wrapping.innerText.trim().substring(0, 80);
+                        }
+                    } catch (e) { /* CSS.escape or labels unavailable */ }
+                    return '';
+                }
+
+                const INTERACTIVE_SELECTOR =
+                    'button, a[href], [role="button"], [role="link"], input, textarea, ' +
+                    '[contenteditable="true"], [role="checkbox"], [role="radio"], [role="switch"]';
+
+                let root = document;
+                let scopeInfo = null;
+                let candidates;
+                if (scoped) {
+                    const scopeEl = lixionaryLastClickedEl;
+                    if (!scopeEl || !scopeEl.isConnected) {
+                        return { error: 'scope-missing' };
+                    }
+                    root = scopeEl;
+                    scopeInfo = {
+                        tagName: scopeEl.tagName.toLowerCase(),
+                        text: scopeEl.innerText ? scopeEl.innerText.trim().substring(0, 60) : ''
+                    };
+                    // Include the scope element itself in case it is interactive
+                    candidates = [scopeEl, ...scopeEl.querySelectorAll(INTERACTIVE_SELECTOR)];
+                } else {
+                    candidates = document.querySelectorAll(INTERACTIVE_SELECTOR);
+                }
+                const collectedClickables = new Set();
+                const elements = [];
+                let total = 0;
+                let truncated = false;
+
+                for (const el of candidates) {
+                    if (el.id === 'lixionary-hover-overlay') continue;
+                    const cls = classify(el);
+                    if (!cls) continue;
+                    if (!isVisible(el)) continue;
+
+                    if (cls.action === 'click') {
+                        // Skip clickables nested in an already-collected clickable
+                        // (e.g. a span-wrapping button inside a link)
+                        const ancestor = el.parentElement && el.parentElement.closest(CLICKABLE_SELECTOR);
+                        if (ancestor && collectedClickables.has(ancestor)) continue;
+                    }
+
+                    total++;
+                    if (elements.length >= SCAN_CAP) {
+                        truncated = true;
+                        continue;
+                    }
+
+                    const meta = getElementMetadata(el);
+                    const nearby = findPrecedingTextSibling(el);
+                    meta.action = cls.action;
+                    meta.subtype = cls.subtype;
+                    meta.inputType = (el.getAttribute('type') || '').toLowerCase();
+                    meta.value = el.getAttribute('value') || '';
+                    meta.nameAttr = el.getAttribute('name') || '';
+                    meta.title = el.getAttribute('title') || '';
+                    meta.associatedLabel = associatedLabelText(el);
+                    meta.nearbyText = nearby ? nearby.text : '';
+                    meta.disabled = !!(el.disabled || el.getAttribute('aria-disabled') === 'true');
+                    meta.scanIndex = elements.length;
+                    elements.push(meta);
+
+                    if (cls.action === 'click') collectedClickables.add(el);
+                }
+
+                return { elements: elements, truncated: truncated, total: total, scope: scopeInfo };
+            };
+
             // Create canvas hover border outline
             function createHoverOverlay() {
                 if (hoverOverlay) return;
@@ -967,6 +1093,164 @@ class BrowserSessionManager:
                         print(f"Warning: Failed to evaluate inspect mode on frame {frame.url}: {fe}")
             except Exception as e:
                 print(f"Error setting inspect mode: {e}")
+
+    @classmethod
+    async def scan_page(cls, session_id: str, scope: str = "page") -> dict:
+        """
+        Enumerate interactive elements, pick the best unique locator per element,
+        and propose intuitive method names.
+
+        scope="page": scans every frame of the active page (including iframes;
+        elements carry their frame_locator chain).
+        scope="selected": scans only the subtree of the last inspect-clicked
+        element, in whatever frame it was clicked.
+        """
+        from services.naming import dedupe_names, heuristic_method_name, polish_method_names
+
+        session = cls._sessions.get(session_id)
+        if not session:
+            raise ValueError(f"No active browser session: {session_id}")
+
+        page = cls._active_page(session)
+        SCAN_CAP = 200
+
+        async def evaluate_scan(frame, scoped: bool):
+            expr = (
+                "window.__lixionaryScanPage ? window.__lixionaryScanPage({scoped: %s}) : null"
+                % ("true" if scoped else "false")
+            )
+            return await frame.evaluate(expr)
+
+        # Collect (frame, item, frame_chain) tuples per scanned frame
+        scan_items = []
+        scope_label = None
+        total = 0
+        truncated = False
+
+        if scope == "selected":
+            frame = session.get("last_clicked_frame")
+            try:
+                if frame is None or frame.is_detached():
+                    frame = page.main_frame
+            except Exception:
+                frame = page.main_frame
+
+            raw = await evaluate_scan(frame, True)
+            if raw is None:
+                await cls.inject_inspector_script(page, session_id)
+                raw = await evaluate_scan(frame, True)
+            if raw is None:
+                raise RuntimeError("Inspector script is not available on the page")
+            if raw.get("error") == "scope-missing":
+                raise RuntimeError(
+                    "No scope element available — enable Inspect, click the parent "
+                    "element of the section you want to scan, then scan again"
+                )
+
+            scope_info = raw.get("scope") or {}
+            scope_label = f"<{scope_info.get('tagName', '?')}> {scope_info.get('text', '')}".strip()
+            frame_chain = await cls._get_frame_locators_chain(frame, page)
+            total = raw.get("total", 0)
+            truncated = bool(raw.get("truncated"))
+            for item in raw.get("elements", []):
+                scan_items.append((frame, item, frame_chain))
+        else:
+            scanned_any = False
+            for frame in page.frames:
+                if len(scan_items) >= SCAN_CAP:
+                    truncated = True
+                    break
+                try:
+                    raw = await evaluate_scan(frame, False)
+                    if raw is None and frame is page.main_frame:
+                        await cls.inject_inspector_script(page, session_id)
+                        raw = await evaluate_scan(frame, False)
+                    if raw is None:
+                        continue
+                    scanned_any = True
+                    frame_chain = await cls._get_frame_locators_chain(frame, page)
+                    total += raw.get("total", 0)
+                    truncated = truncated or bool(raw.get("truncated"))
+                    for item in raw.get("elements", []):
+                        if len(scan_items) >= SCAN_CAP:
+                            truncated = True
+                            break
+                        scan_items.append((frame, item, frame_chain))
+                except Exception as fe:
+                    # Cross-origin or detached frames can't be evaluated — skip them
+                    print(f"Skipping frame during scan ({getattr(frame, 'url', '?')}): {fe}")
+            if not scanned_any:
+                raise RuntimeError("Inspector script is not available on the page")
+
+        semaphore = asyncio.Semaphore(10)
+
+        async def resolve_locator(frame, item: dict) -> dict:
+            async with semaphore:
+                ranked = rank_locators(item)
+                chosen = None
+                for loc in ranked:
+                    count = await cls._count_locator_matches(frame, loc["strategy"], loc["selector"])
+                    loc["count"] = count
+                    loc["unique"] = (count == 1)
+                    if count == 1:
+                        chosen = loc
+                        break
+                if chosen is None:
+                    for loc in ranked:
+                        loc.setdefault("count", None)
+                        loc.setdefault("unique", False)
+                    chosen = ranked[0] if ranked else None
+                return {"ranked": ranked, "chosen": chosen}
+
+        resolved = await asyncio.gather(*[resolve_locator(frame, item) for frame, item, _chain in scan_items])
+
+        items = [item for _frame, item, _chain in scan_items]
+        positional_counters: dict = {}
+        heuristic_results = [heuristic_method_name(item, positional_counters) for item in items]
+        heuristic_names = dedupe_names([name for name, _weak in heuristic_results])
+        final_names, name_source = await polish_method_names(items, heuristic_names)
+
+        elements = []
+        for idx, ((_frame, item, frame_chain), res) in enumerate(zip(scan_items, resolved)):
+            if res["chosen"] is None:
+                continue
+            elements.append({
+                "id": idx,
+                "tagName": item.get("tagName", ""),
+                "text": item.get("text") or item.get("value") or "",
+                "action": item.get("action"),
+                "subtype": item.get("subtype"),
+                "disabled": bool(item.get("disabled")),
+                "methodName": final_names[idx],
+                "locator": res["chosen"],
+                "locators": res["ranked"],
+                "frameLocators": frame_chain,
+            })
+
+        return {
+            "url": page.url,
+            "total": total or len(elements),
+            "truncated": truncated,
+            "nameSource": name_source,
+            "scope": scope,
+            "scopeLabel": scope_label,
+            "elements": elements,
+        }
+
+    @classmethod
+    async def run_page_scan(cls, session_id: str, scope: str = "page"):
+        session = cls._sessions.get(session_id)
+        if not session or not session.get("callback"):
+            return
+        try:
+            result = await cls.scan_page(session_id, scope)
+            await session["callback"]({"type": "page_scan_result", "data": result})
+        except Exception as e:
+            print(f"Error scanning page for session {session_id}: {e}")
+            try:
+                await session["callback"]({"type": "page_scan_error", "data": {"message": str(e)}})
+            except Exception:
+                pass
 
 def rank_locators(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
