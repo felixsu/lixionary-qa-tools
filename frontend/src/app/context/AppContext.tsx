@@ -149,6 +149,28 @@ export const findCollectionInTree = (collection: Collection, targetId: string): 
   return null;
 };
 
+// Finds the root-level collection that owns a request, regardless of nesting depth.
+export const findRequestOwnerCollection = (collections: Collection[], requestId: string): Collection | null => {
+  for (const col of collections) {
+    if (findRequestInTree(col, requestId)) return col;
+  }
+  return null;
+};
+
+// Returns the chain of collection ids from root down to the collection directly
+// containing the request (inclusive), or null if not found.
+export const findAncestorPathToRequest = (collection: Collection, requestId: string, path: string[] = []): string[] | null => {
+  const currentPath = [...path, collection.id];
+  if (collection.requests?.some(r => r.id === requestId)) return currentPath;
+  if (collection.children) {
+    for (const child of collection.children) {
+      const res = findAncestorPathToRequest(child, requestId, currentPath);
+      if (res) return res;
+    }
+  }
+  return null;
+};
+
 export interface NetworkLog {
   id: string;
   url: string;
@@ -557,10 +579,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Synchronize request inputs when selection changes
   useEffect(() => {
-    if (selectedCollectionId && selectedRequestId) {
-      const col = collections.find(c => c.id === selectedCollectionId);
+    if (selectedRequestId) {
+      const col = findRequestOwnerCollection(collections, selectedRequestId);
       const req = col ? findRequestInTree(col, selectedRequestId) : null;
       if (req) {
+        if (col && col.id !== selectedCollectionId) {
+          setSelectedCollectionId(col.id);
+        }
         setReqName(req.name);
         setReqMethod(req.method);
         setReqUrl(req.url);
