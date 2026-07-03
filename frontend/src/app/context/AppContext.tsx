@@ -297,6 +297,8 @@ interface AppContextType {
   setSelectedElementLocators: (locators: any[]) => void;
   selectedElementStale: { stale: boolean; reason: string | null };
   setSelectedElementStale: (stale: { stale: boolean; reason: string | null }) => void;
+  inspectError: string | null;
+  setInspectError: (msg: string | null) => void;
   pageScanStatus: "idle" | "scanning" | "done" | "error";
   pageScanError: string | null;
   pageScanResults: any[] | null;
@@ -469,6 +471,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [selectedElement, setSelectedElement] = useState<any>(null);
   const [selectedElementLocators, setSelectedElementLocators] = useState<any[]>([]);
   const [selectedElementStale, setSelectedElementStale] = useState<{ stale: boolean; reason: string | null }>({ stale: false, reason: null });
+  const [inspectError, setInspectError] = useState<string | null>(null);
   const [pageScanStatus, setPageScanStatus] = useState<"idle" | "scanning" | "done" | "error">("idle");
   const [pageScanError, setPageScanError] = useState<string | null>(null);
   const [pageScanResults, setPageScanResults] = useState<any[] | null>(null);
@@ -857,6 +860,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           if (msg.data.locators.length) {
             setSelectedElementMethodName(`click_${msg.data.element.tagName}_${msg.data.locators[0].strategy}`);
           }
+          break;
+        case "element_selected_error":
+          setInspectError(msg.data.message || "Failed to inspect element");
           break;
         case "page_scan_started":
           setPageScanStatus("scanning");
@@ -1826,6 +1832,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setSelectedElementLocators,
         selectedElementStale,
         setSelectedElementStale,
+        inspectError,
+        setInspectError,
         pageScanStatus,
         pageScanError,
         pageScanResults,

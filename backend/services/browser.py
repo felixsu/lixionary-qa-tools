@@ -286,6 +286,17 @@ class BrowserSessionManager:
                     })
             except Exception as e:
                 print(f"Error processing selected element: {e}")
+                # Surface the failure instead of leaving the click looking like a no-op
+                # (e.g. a click inside an iframe whose parent frame chain resolution or
+                # locator counting threw for a reason unrelated to the click itself).
+                if session.get("callback"):
+                    try:
+                        await session["callback"]({
+                            "type": "element_selected_error",
+                            "data": {"message": str(e)}
+                        })
+                    except Exception:
+                        pass
 
         try:
             await context.expose_binding("pythonOnElementSelected", on_element_selected)
@@ -552,9 +563,17 @@ class BrowserSessionManager:
                         selector = await parent.evaluate("""
                             (el) => {
                                 if (el.id) return '#' + el.id;
-                                if (el.name) return 'iframe[name="' + el.name + '"]';
-                                if (el.src) {
-                                    const cleanSrc = el.src.split(/[?#]/)[0];
+                                // Use getAttribute (raw markup text) rather than the .name/.src
+                                // IDL properties: the browser resolves/normalizes those (e.g.
+                                // collapsing "/./" path segments), but Playwright's CSS engine
+                                // matches attribute selectors against the literal, unnormalized
+                                // attribute value in the DOM — so a selector built from the
+                                // normalized property can permanently fail to match.
+                                const nameAttr = el.getAttribute('name');
+                                if (nameAttr) return 'iframe[name="' + nameAttr.replace(/"/g, '\\\\"') + '"]';
+                                const srcAttr = el.getAttribute('src');
+                                if (srcAttr) {
+                                    const cleanSrc = srcAttr.split(/[?#]/)[0].replace(/"/g, '\\\\"');
                                     return `iframe[src*="${cleanSrc}"]`;
                                 }
                                 const iframes = Array.from(document.querySelectorAll('iframe'));
