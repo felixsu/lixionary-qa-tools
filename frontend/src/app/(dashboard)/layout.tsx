@@ -115,7 +115,11 @@ export default function DashboardLayout({
         style={{ width: collapsed ? 52 : 236 }}
       >
         {/* Brand */}
-        <div className="h-14 flex items-center gap-2.5 px-3 bg-ink-900 flex-shrink-0 overflow-hidden">
+        <button
+          onClick={toggleSidebar}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="w-full h-14 flex items-center gap-2.5 px-3 bg-cream border-b border-line flex-shrink-0 overflow-hidden hover:bg-panel transition-colors"
+        >
           <Image
             src="/logo.png"
             alt="Lixionary"
@@ -125,11 +129,11 @@ export default function DashboardLayout({
           />
           {!collapsed && (
             <>
-              <span className="text-sm font-semibold text-cream whitespace-nowrap">Lixionary</span>
-              <span className="ml-auto text-[11px] text-cream/35 whitespace-nowrap">Explorer</span>
+              <span className="text-sm font-semibold text-ink whitespace-nowrap">Lixionary</span>
+              <span className="ml-auto text-[11px] text-mute whitespace-nowrap">Explorer</span>
             </>
           )}
-        </div>
+        </button>
 
         {/* Nav */}
         <nav className="flex-1 px-1.5 py-3 flex flex-col gap-0.5 overflow-y-auto overflow-x-hidden">
