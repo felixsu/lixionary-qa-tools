@@ -91,6 +91,8 @@ export default function WebExplorerPage() {
     setSelectedElementLocators,
     selectedElementStale,
     setSelectedElementStale,
+    inspectError,
+    setInspectError,
     pageScanStatus,
     pageScanError,
     pageScanResults,
@@ -235,6 +237,17 @@ export default function WebExplorerPage() {
     setToast({ msg, variant });
     setTimeout(() => setToast(null), 2600);
   };
+
+  // Surface element-inspection failures (e.g. a click inside an iframe that
+  // threw while resolving the frame chain) instead of leaving the click
+  // looking like it silently did nothing.
+  useEffect(() => {
+    if (inspectError) {
+      showToast(`Inspect failed: ${inspectError}`, "error");
+      setInspectError(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inspectError]);
 
   useEffect(() => {
     return () => {

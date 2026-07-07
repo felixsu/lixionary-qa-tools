@@ -286,6 +286,17 @@ class BrowserSessionManager:
                     })
             except Exception as e:
                 print(f"Error processing selected element: {e}")
+                # Surface the failure instead of leaving the click looking like a no-op
+                # (e.g. a click inside an iframe whose parent frame chain resolution or
+                # locator counting threw for a reason unrelated to the click itself).
+                if session.get("callback"):
+                    try:
+                        await session["callback"]({
+                            "type": "element_selected_error",
+                            "data": {"message": str(e)}
+                        })
+                    except Exception:
+                        pass
 
         try:
             await context.expose_binding("pythonOnElementSelected", on_element_selected)
@@ -552,9 +563,17 @@ class BrowserSessionManager:
                         selector = await parent.evaluate("""
                             (el) => {
                                 if (el.id) return '#' + el.id;
-                                if (el.name) return 'iframe[name="' + el.name + '"]';
-                                if (el.src) {
-                                    const cleanSrc = el.src.split(/[?#]/)[0];
+                                // Use getAttribute (raw markup text) rather than the .name/.src
+                                // IDL properties: the browser resolves/normalizes those (e.g.
+                                // collapsing "/./" path segments), but Playwright's CSS engine
+                                // matches attribute selectors against the literal, unnormalized
+                                // attribute value in the DOM — so a selector built from the
+                                // normalized property can permanently fail to match.
+                                const nameAttr = el.getAttribute('name');
+                                if (nameAttr) return 'iframe[name="' + nameAttr.replace(/"/g, '\\\\"') + '"]';
+                                const srcAttr = el.getAttribute('src');
+                                if (srcAttr) {
+                                    const cleanSrc = srcAttr.split(/[?#]/)[0].replace(/"/g, '\\\\"');
                                     return `iframe[src*="${cleanSrc}"]`;
                                 }
                                 const iframes = Array.from(document.querySelectorAll('iframe'));
@@ -647,6 +666,8 @@ class BrowserSessionManager:
             // Returns { elements, truncated, total, scope } in DOM order,
             // or { error: 'scope-missing' } when a scoped scan has no valid root.
             window.__lixionaryScanPage = function(opts) {
+                // Self-heal listeners stripped by legacy document.open() rewrites
+                ensureInspectorListeners();
                 const scoped = !!(opts && opts.scoped);
                 const SCAN_CAP = 200;
                 const CLICKABLE_SELECTOR = 'button, a[href], [role="button"], [role="link"]';
@@ -770,7 +791,8 @@ class BrowserSessionManager:
 
             // Create canvas hover border outline
             function createHoverOverlay() {
-                if (hoverOverlay) return;
+                // Recreate if a document.open() rewrite detached the old overlay node
+                if (hoverOverlay && hoverOverlay.isConnected) return;
                 hoverOverlay = document.createElement('div');
                 hoverOverlay.id = 'lixionary-hover-overlay';
                 hoverOverlay.style.position = 'absolute';
@@ -789,6 +811,8 @@ class BrowserSessionManager:
 
             // Expose control API
             window.__setLixionaryInspectMode = function(enabled) {
+                // Self-heal listeners stripped by legacy document.open() rewrites
+                ensureInspectorListeners();
                 inspectMode = enabled;
                 if (!inspectMode && hoverOverlay) {
                     hoverOverlay.style.display = 'none';
@@ -1021,10 +1045,10 @@ class BrowserSessionManager:
                 e.stopPropagation();
             }
 
-            document.addEventListener('mouseover', function(e) {
+            function onInspectorMouseOver(e) {
                 if (!inspectMode) return;
                 createHoverOverlay();
-                
+
                 const el = e.target;
                 if (el.id === 'lixionary-hover-overlay') return;
 
@@ -1034,11 +1058,11 @@ class BrowserSessionManager:
                 hoverOverlay.style.width = rect.width + 'px';
                 hoverOverlay.style.height = rect.height + 'px';
                 hoverOverlay.style.display = 'block';
-            }, true);
+            }
 
-            document.addEventListener('click', function(e) {
+            function onInspectorClick(e) {
                 if (!inspectMode) return;
-                
+
                 const el = e.target;
                 if (el.id === 'lixionary-hover-overlay') return;
 
@@ -1054,15 +1078,29 @@ class BrowserSessionManager:
                 if (window.pythonOnElementSelected) {
                     window.pythonOnElementSelected(JSON.stringify(metadata));
                 }
-            }, true);
+            }
 
-            // Block other pointer/mouse/touch events to prevent dropdowns/buttons from opening/reacting
-            document.addEventListener('mousedown', blockEvent, true);
-            document.addEventListener('mouseup', blockEvent, true);
-            document.addEventListener('pointerdown', blockEvent, true);
-            document.addEventListener('pointerup', blockEvent, true);
-            document.addEventListener('touchstart', blockEvent, true);
-            document.addEventListener('touchend', blockEvent, true);
+            // Attach (or re-attach) all inspector listeners. Pages that rewrite
+            // themselves via document.open()/document.write() — e.g. legacy
+            // operator sub-pages loaded in xo-frame iframes — keep the same
+            // window AND Document objects but strip every event listener from
+            // them, silently killing inspect clicks while window-level globals
+            // (and therefore scans) keep working. addEventListener with the
+            // same function reference is a no-op when the listener is still
+            // attached, so calling this on every inspect toggle / scan is safe.
+            function ensureInspectorListeners() {
+                document.addEventListener('mouseover', onInspectorMouseOver, true);
+                document.addEventListener('click', onInspectorClick, true);
+                // Block other pointer/mouse/touch events to prevent dropdowns/buttons from opening/reacting
+                document.addEventListener('mousedown', blockEvent, true);
+                document.addEventListener('mouseup', blockEvent, true);
+                document.addEventListener('pointerdown', blockEvent, true);
+                document.addEventListener('pointerup', blockEvent, true);
+                document.addEventListener('touchstart', blockEvent, true);
+                document.addEventListener('touchend', blockEvent, true);
+            }
+
+            ensureInspectorListeners();
         })();
         """
 

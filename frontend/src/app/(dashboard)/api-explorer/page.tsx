@@ -1,13 +1,14 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Send, Plus, Trash2, Share2, ChevronDown, ChevronRight,
   Sparkles, Code2, Copy, Check, X, CheckCircle2, AlignLeft, Minimize2,
   PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil, AlertCircle
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
-import { useAppContext, findRequestInTree } from "../../context/AppContext";
+import { useAppContext, findRequestInTree, findRequestOwnerCollection, findAncestorPathToRequest } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
 
 type ConfigTab = "headers" | "params" | "auth" | "variables" | "body";
@@ -594,8 +595,40 @@ export default function ApiExplorerPage() {
   const [configHeight, setConfigHeight] = useState(250);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const activeCollection = collections.find((c) => c.id === selectedCollectionId);
+  const activeCollection = selectedRequestId ? findRequestOwnerCollection(collections, selectedRequestId) : undefined;
   const activeRequest = activeCollection ? findRequestInTree(activeCollection, selectedRequestId) : undefined;
+
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Persist the selected request in the URL so it survives a refresh.
+  useEffect(() => {
+    if (!selectedRequestId) return;
+    const params = new URLSearchParams(searchParams.toString());
+    if (params.get("request") === selectedRequestId) return;
+    params.set("request", selectedRequestId);
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  }, [selectedRequestId]);
+
+  // Deep-link: once collections load, select the request named in the URL (if any).
+  useEffect(() => {
+    const requestParam = searchParams.get("request");
+    if (!requestParam || requestParam === selectedRequestId) return;
+    const owner = findRequestOwnerCollection(collections, requestParam);
+    if (owner) {
+      setSelectedCollectionId(owner.id);
+      setSelectedRequestId(requestParam);
+      const path = findAncestorPathToRequest(owner, requestParam);
+      if (path) {
+        setExpandedFolders((prev) => {
+          const next = { ...prev };
+          for (const id of path) next[id] = true;
+          return next;
+        });
+      }
+    }
+  }, [collections]);
 
   const toggleFolder = (id: string) => {
     setExpandedFolders(prev => ({

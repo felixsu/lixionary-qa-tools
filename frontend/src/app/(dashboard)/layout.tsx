@@ -2,8 +2,9 @@
 
 import React, { useEffect } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Cpu, Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users } from "lucide-react";
+import { Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import Dropdown from "../components/Dropdown";
 
@@ -114,17 +115,25 @@ export default function DashboardLayout({
         style={{ width: collapsed ? 52 : 236 }}
       >
         {/* Brand */}
-        <div className="h-14 flex items-center gap-2.5 px-3 bg-ink-900 flex-shrink-0 overflow-hidden">
-          <div className="h-7 w-7 rounded-md bg-clay flex items-center justify-center flex-shrink-0">
-            <Cpu className="h-4 w-4 text-cream" />
-          </div>
+        <button
+          onClick={toggleSidebar}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="w-full h-14 flex items-center gap-2.5 px-3 bg-cream border-b border-line flex-shrink-0 overflow-hidden hover:bg-panel transition-colors"
+        >
+          <Image
+            src="/logo.png"
+            alt="Lixionary"
+            width={28}
+            height={28}
+            className="h-7 w-7 rounded-md flex-shrink-0"
+          />
           {!collapsed && (
             <>
-              <span className="text-sm font-semibold text-cream whitespace-nowrap">Lixionary</span>
-              <span className="ml-auto text-[11px] text-cream/35 whitespace-nowrap">Explorer</span>
+              <span className="text-sm font-semibold text-ink whitespace-nowrap">Lixionary</span>
+              <span className="ml-auto text-[11px] text-mute whitespace-nowrap">Explorer</span>
             </>
           )}
-        </div>
+        </button>
 
         {/* Nav */}
         <nav className="flex-1 px-1.5 py-3 flex flex-col gap-0.5 overflow-y-auto overflow-x-hidden">
