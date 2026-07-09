@@ -1,7 +1,7 @@
 import re
 import pytest
-from services.executor import interpolate_variables, extract_jwt_expiry
-from datetime import datetime, timezone
+from services.executor import interpolate_variables, extract_jwt_expiry, resolve_request
+from datetime import datetime, timedelta, timezone
 
 def test_interpolate_variables():
     variables = {"BASE_URL": "https://api.example.com", "USER_ID": "12345"}
@@ -34,6 +34,39 @@ def test_interpolate_variables_dynamic_tokens():
     # Dynamic tokens and normal variables can mix in the same string.
     mixed = interpolate_variables("{{VAR}} FLX-{{$randomInt:4}}", {"VAR": "hi"})
     assert re.fullmatch(r"hi FLX-[1-9]\d{3}", mixed)
+
+def test_interpolate_variables_date_math():
+    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+    assert interpolate_variables("{{$date:+1d}}", {}) == tomorrow
+
+    two_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M")
+    result = interpolate_variables("{{$date:-2h:YYYY-MM-DD HH:mm}}", {})
+    assert result == two_hours_ago
+
+    chained_expected = (datetime.now(timezone.utc) + timedelta(days=1) - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M")
+    chained_result = interpolate_variables("{{$date:+1d-3h:YYYY-MM-DD HH:mm}}", {})
+    assert chained_result == chained_expected
+
+    # A malformed offset-looking arg falls back to being treated as a literal format string.
+    assert interpolate_variables("{{$date:+bogus}}", {}) == "+bogus"
+
+async def test_resolve_request():
+    result = await resolve_request({
+        "url": "{{BASE_URL}}/orders",
+        "method": "POST",
+        "headers": [{"key": "X-Test", "value": "{{$randomInt:2}}"}],
+        "queryParams": [{"key": "q", "value": "{{$randomEmail}}"}],
+        "bodyType": "JSON",
+        "body": '{"tracking_id": "FLX-{{$randomInt:4}}"}',
+        "authType": "BEARER",
+        "authConfig": {"token": "tok-{{$randomInt:4}}"},
+    }, None)
+
+    assert result["url"] == "{{BASE_URL}}/orders"  # no environment given, left unresolved
+    assert re.fullmatch(r"[1-9]\d", result["headers"]["X-Test"])
+    assert "@" in result["params"]["q"]
+    assert re.fullmatch(r'\{"tracking_id": "FLX-[1-9]\d{3}"\}', result["body"])
+    assert re.fullmatch(r"Bearer tok-[1-9]\d{3}", result["headers"]["Authorization"])
 
 def test_extract_jwt_expiry_fallback():
     # Invalid token should fallback to 1 hour from now

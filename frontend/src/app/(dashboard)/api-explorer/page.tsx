@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Send, Plus, Trash2, Share2, ChevronDown, ChevronRight,
@@ -12,16 +13,6 @@ import { useAppContext, findRequestInTree, findRequestOwnerCollection, findAnces
 import Dropdown from "../../components/Dropdown";
 
 type ConfigTab = "headers" | "params" | "auth" | "variables" | "body";
-
-const DYNAMIC_VALUE_OPTIONS = [
-  { value: "{{$date:YYYY-MM-DD}}", label: "Today's date (YYYY-MM-DD)" },
-  { value: "{{$date:YYYY-MM-DD HH:mm:ss}}", label: "Today's date & time" },
-  { value: "{{$randomEmail}}", label: "Random email" },
-  { value: "{{$randomFirstName}}", label: "Random first name" },
-  { value: "{{$randomLastName}}", label: "Random last name" },
-  { value: "{{$randomFullName}}", label: "Random full name" },
-  { value: "{{$randomInt:4}}", label: "Random number (4 digits)" },
-];
 
 interface ParsedCurl {
   method: string;
@@ -601,6 +592,10 @@ export default function ApiExplorerPage() {
   const [curlCopied, setCurlCopied] = useState(false);
   const [pythonCopied, setPythonCopied] = useState(false);
   const [showPythonModal, setShowPythonModal] = useState(false);
+  const [showCurlModal, setShowCurlModal] = useState(false);
+  const [isBuildingCurl, setIsBuildingCurl] = useState(false);
+  const [resolvedCurl, setResolvedCurl] = useState("");
+  const [curlError, setCurlError] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [configHeight, setConfigHeight] = useState(250);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -813,27 +808,65 @@ export default function ApiExplorerPage() {
       : String(apiResponse.body ?? "");
   };
 
-  const buildCurl = (): string => {
-    const q = reqQueryParams.filter((p) => p.key !== "");
-    let url = reqUrl;
+  const buildCurlFromFields = (
+    method: string,
+    url: string,
+    headers: Record<string, string>,
+    params: Record<string, string>,
+    bodyType: string,
+    body: string
+  ): string => {
+    let fullUrl = url;
+    const q = Object.entries(params).filter(([k]) => k !== "");
     if (q.length) {
-      const qs = q.map((p) => `${encodeURIComponent(p.key)}=${encodeURIComponent(p.value)}`).join("&");
-      url += (url.includes("?") ? "&" : "?") + qs;
+      const qs = q.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+      fullUrl += (fullUrl.includes("?") ? "&" : "?") + qs;
     }
     const shell = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
-    const parts: string[] = [`curl -X ${reqMethod}`, `  ${shell(url)}`];
-    reqHeaders.filter((h) => h.key !== "").forEach((h) => {
-      parts.push(`  -H ${shell(`${h.key}: ${h.value}`)}`);
+    const parts: string[] = [`curl -X ${method}`, `  ${shell(fullUrl)}`];
+    Object.entries(headers).filter(([k]) => k !== "").forEach(([k, v]) => {
+      parts.push(`  -H ${shell(`${k}: ${v}`)}`);
     });
-    if (reqBodyType !== "NONE" && reqBody) {
-      parts.push(`  -d ${shell(reqBody)}`);
+    if (bodyType !== "NONE" && body) {
+      parts.push(`  -d ${shell(body)}`);
     }
     return parts.join(" \\\n");
   };
 
-  const handleCopyCurl = () => {
-    copyToClipboard(buildCurl(), setCurlCopied);
-    showToast("cURL command copied");
+  const handleCopyCurl = async () => {
+    setShowCurlModal(true);
+    setIsBuildingCurl(true);
+    setCurlError(null);
+    setCurlCopied(false);
+    try {
+      const resolved = await apiCall("/api/executor/preview", {
+        method: "POST",
+        body: JSON.stringify({
+          requestId: selectedRequestId,
+          method: reqMethod,
+          url: reqUrl,
+          headers: reqHeaders.filter((h) => h.key !== ""),
+          queryParams: reqQueryParams.filter((p) => p.key !== ""),
+          bodyType: reqBodyType,
+          body: reqBody,
+          authType: reqAuthType,
+          authConfig: {
+            token: reqAuthConfig.token,
+            key: reqAuthConfig.key,
+            value: reqAuthConfig.value,
+            authFunctionId: reqAuthConfig.authFunctionId
+          },
+          environmentId: selectedEnvId || null
+        })
+      });
+      const curl = buildCurlFromFields(reqMethod, resolved.url, resolved.headers, resolved.params, reqBodyType, resolved.body);
+      setResolvedCurl(curl);
+      copyToClipboard(curl, setCurlCopied);
+    } catch (e: any) {
+      setCurlError(e.message || "Failed to resolve request tokens");
+    } finally {
+      setIsBuildingCurl(false);
+    }
   };
 
   const buildPython = (): string => {
@@ -1427,18 +1460,7 @@ export default function ApiExplorerPage() {
                               </button>
                             </>
                           )}
-                          <Dropdown
-                            value=""
-                            onChange={insertBodyToken}
-                            align="right"
-                            className="h-[30px] px-2.5 flex items-center gap-1.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors"
-                            options={DYNAMIC_VALUE_OPTIONS}
-                            renderTrigger={() => (
-                              <>
-                                <Wand2 className="h-3.5 w-3.5" /> Insert value
-                              </>
-                            )}
-                          />
+                          <InsertValueMenu onInsert={insertBodyToken} />
                           <button
                             onClick={() => copyToClipboard(reqBody, setBodyCopied)}
                             title="Copy body"
@@ -1750,6 +1772,45 @@ export default function ApiExplorerPage() {
         );
       })()}
 
+      {showCurlModal && (
+        <Modal title="cURL command" onClose={() => setShowCurlModal(false)} width={680}>
+          <div className="flex flex-col gap-4">
+            <p className="text-[13px] text-stone leading-relaxed">
+              {curlError
+                ? "Failed to resolve variables and dynamic values."
+                : "Environment variables and dynamic value tokens (dates, random values) resolved to their real values."}
+            </p>
+            {isBuildingCurl ? (
+              <div className="flex items-center justify-center h-24 text-xs text-mute">Resolving tokens…</div>
+            ) : curlError ? (
+              <p className="m-0 p-4 bg-ink-900 text-red-400 font-mono text-xs leading-relaxed rounded-xl">{curlError}</p>
+            ) : (
+              <div className="relative">
+                <pre className="m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre rounded-xl max-h-[420px]">
+                  {resolvedCurl}
+                </pre>
+                <button
+                  onClick={() => copyToClipboard(resolvedCurl, setCurlCopied)}
+                  title="Copy command"
+                  className="absolute top-3 right-3 h-7 px-2.5 flex items-center gap-1.5 bg-ink-800/80 border border-white/10 rounded-md text-xs font-medium text-cream/70 hover:text-cream hover:bg-ink-700 transition-colors"
+                >
+                  {curlCopied ? <Check className="h-3.5 w-3.5 text-sage" /> : <Copy className="h-3.5 w-3.5" />}
+                  {curlCopied ? "Copied" : "Copy"}
+                </button>
+              </div>
+            )}
+            <div className="flex justify-end pt-1 border-t border-line">
+              <button
+                onClick={() => setShowCurlModal(false)}
+                className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {showAiModal && (
         <Modal title="AI agent parser" onClose={() => setShowAiModal(false)} width={560}>
           <div className="flex flex-col gap-5">
@@ -1846,5 +1907,169 @@ function ModalFooter({ onCancel, submitLabel }: { onCancel: () => void; submitLa
         {submitLabel}
       </button>
     </div>
+  );
+}
+
+const DATE_OFFSET_UNITS = [
+  { value: "d", label: "Days" },
+  { value: "h", label: "Hours" },
+  { value: "m", label: "Minutes" },
+  { value: "s", label: "Seconds" },
+];
+
+const INSERT_VALUE_ROWS = [
+  { label: "Random email", token: "{{$randomEmail}}" },
+  { label: "Random first name", token: "{{$randomFirstName}}" },
+  { label: "Random last name", token: "{{$randomLastName}}" },
+  { label: "Random full name", token: "{{$randomFullName}}" },
+];
+
+function InsertValueMenu({ onInsert }: { onInsert: (token: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const [dateOffset, setDateOffset] = useState("0");
+  const [dateUnit, setDateUnit] = useState("d");
+  const [dateFormat, setDateFormat] = useState("YYYY-MM-DD");
+  const [digits, setDigits] = useState("4");
+
+  const updateCoords = () => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setCoords({ top: r.bottom + 4, left: r.right - 288 });
+  };
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    updateCoords();
+    const handle = () => updateCoords();
+    window.addEventListener("scroll", handle, true);
+    window.addEventListener("resize", handle);
+    return () => {
+      window.removeEventListener("scroll", handle, true);
+      window.removeEventListener("resize", handle);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointer);
+    return () => document.removeEventListener("mousedown", onPointer);
+  }, [open]);
+
+  const handleUnitChange = (unit: string) => {
+    setDateUnit(unit);
+    setDateFormat((prev) => {
+      if (prev !== "YYYY-MM-DD" && prev !== "YYYY-MM-DD HH:mm:ss") return prev; // user customized it, leave alone
+      return unit === "d" ? "YYYY-MM-DD" : "YYYY-MM-DD HH:mm:ss";
+    });
+  };
+
+  const insertDate = () => {
+    const n = parseInt(dateOffset, 10) || 0;
+    const offsetPart = n !== 0 ? `${n > 0 ? "+" : ""}${n}${dateUnit}:` : "";
+    onInsert(`{{$date:${offsetPart}${dateFormat || "YYYY-MM-DD"}}}`);
+    setOpen(false);
+  };
+
+  const insertRandomInt = () => {
+    const n = Math.max(1, parseInt(digits, 10) || 4);
+    onInsert(`{{$randomInt:${n}}}`);
+    setOpen(false);
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="h-[30px] px-2.5 flex items-center gap-1.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors"
+      >
+        <Wand2 className="h-3.5 w-3.5" /> Insert value
+      </button>
+
+      {open && coords &&
+        createPortal(
+          <div
+            ref={menuRef}
+            style={{ position: "fixed", top: coords.top, left: coords.left, width: 288 }}
+            className="z-[100] rounded-lg border border-line bg-cream p-3 shadow-lg shadow-ink/5 flex flex-col gap-3 animate-[fadeUp_0.12s_ease-out]"
+          >
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px] font-medium text-stone uppercase tracking-wide">Date</span>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  value={dateOffset}
+                  onChange={(e) => setDateOffset(e.target.value)}
+                  title="Offset (e.g. 3, -2)"
+                  className="w-16 h-8 bg-panel border border-line rounded-md px-2 text-xs text-ink outline-none focus:border-clay"
+                />
+                <Dropdown
+                  value={dateUnit}
+                  onChange={handleUnitChange}
+                  className="h-8 px-2 rounded-md text-xs text-ink flex-1"
+                  options={DATE_OFFSET_UNITS}
+                />
+              </div>
+              <input
+                type="text"
+                value={dateFormat}
+                onChange={(e) => setDateFormat(e.target.value)}
+                placeholder="YYYY-MM-DD"
+                className="h-8 bg-panel border border-line rounded-md px-2 font-mono text-xs text-ink outline-none focus:border-clay"
+              />
+              <button
+                onClick={insertDate}
+                className="h-8 bg-clay hover:bg-clay-dark rounded-md text-xs font-medium text-white transition-colors"
+              >
+                Insert date
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-1.5 pt-2 border-t border-line">
+              <span className="text-[11px] font-medium text-stone uppercase tracking-wide">Random number</span>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  min={1}
+                  value={digits}
+                  onChange={(e) => setDigits(e.target.value)}
+                  className="w-16 h-8 bg-panel border border-line rounded-md px-2 text-xs text-ink outline-none focus:border-clay"
+                />
+                <span className="text-xs text-mute">digits</span>
+                <button
+                  onClick={insertRandomInt}
+                  className="ml-auto h-8 px-3 bg-clay hover:bg-clay-dark rounded-md text-xs font-medium text-white transition-colors"
+                >
+                  Insert
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-0.5 pt-2 border-t border-line">
+              {INSERT_VALUE_ROWS.map((row) => (
+                <button
+                  key={row.token}
+                  onClick={() => { onInsert(row.token); setOpen(false); }}
+                  className="h-8 px-2 text-left rounded-md text-xs text-ink hover:bg-hover transition-colors"
+                >
+                  {row.label}
+                </button>
+              ))}
+            </div>
+          </div>,
+          document.body
+        )}
+    </>
   );
 }

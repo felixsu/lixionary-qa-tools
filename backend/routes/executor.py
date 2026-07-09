@@ -3,7 +3,7 @@ from typing import Dict, Any, Optional
 from pydantic import BaseModel
 
 from routes.auth import get_current_user
-from services.executor import execute_request
+from services.executor import execute_request, resolve_request
 
 router = APIRouter(prefix="/api/executor", tags=["executor"])
 
@@ -35,3 +35,16 @@ async def run_request(payload: ExecutorPayload, current_user: dict = Depends(get
         return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Request execution failed: {str(e)}")
+
+@router.post("/preview")
+async def preview_request(payload: ExecutorPayload, current_user: dict = Depends(get_current_user)):
+    """
+    Resolves URL, headers, query params, body, and auth (including firing an Auth
+    Hook script if configured) into their fully-interpolated values, without
+    dispatching the HTTP call. Used to build a runnable cURL preview.
+    """
+    try:
+        req_data = payload.model_dump()
+        return await resolve_request(req_data, payload.environmentId)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Request resolution failed: {str(e)}")

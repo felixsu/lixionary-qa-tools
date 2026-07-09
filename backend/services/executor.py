@@ -17,6 +17,10 @@ _DATE_FORMAT_TOKENS = [
     ("HH", "%H"), ("mm", "%M"), ("ss", "%S"),
 ]
 
+_OFFSET_UNIT_TO_KWARG = {"d": "days", "h": "hours", "m": "minutes", "s": "seconds"}
+_OFFSET_CHAIN_RE = re.compile(r"^((?:[+-]\d+[dhms])+)(?::(.*))?$", re.DOTALL)
+_OFFSET_SEGMENT_RE = re.compile(r"([+-]\d+)([dhms])")
+
 _RANDOM_FIRST_NAMES = [
     "James", "Mary", "John", "Patricia", "Robert", "Jennifer", "Michael", "Linda",
     "William", "Elizabeth", "David", "Barbara", "Richard", "Susan", "Joseph", "Jessica",
@@ -28,11 +32,35 @@ _RANDOM_LAST_NAMES = [
     "Taylor", "Moore", "Jackson", "Martin",
 ]
 
-def _format_date(fmt: Optional[str]) -> str:
-    pattern = fmt if fmt else "YYYY-MM-DD"
+def _format_date(arg: Optional[str]) -> str:
+    """
+    arg may be a plain format string ("YYYY-MM-DD"), a chain of signed offsets
+    ("+3d", "-30m", "+1d-2h"), or an offset chain followed by ":format". Offsets
+    are applied as a single timedelta on top of the current UTC time.
+    """
+    fmt = "YYYY-MM-DD"
+    offset_kwargs: Dict[str, int] = {}
+
+    if arg:
+        if arg[0] in "+-":
+            m = _OFFSET_CHAIN_RE.match(arg)
+            if m:
+                chain, rest_fmt = m.group(1), m.group(2)
+                for num, unit in _OFFSET_SEGMENT_RE.findall(chain):
+                    kw = _OFFSET_UNIT_TO_KWARG[unit]
+                    offset_kwargs[kw] = offset_kwargs.get(kw, 0) + int(num)
+                if rest_fmt is not None:
+                    fmt = rest_fmt
+            else:
+                fmt = arg
+        else:
+            fmt = arg
+
+    pattern = fmt
     for token, directive in _DATE_FORMAT_TOKENS:
         pattern = pattern.replace(token, directive)
-    return datetime.now(timezone.utc).strftime(pattern)
+    dt = datetime.now(timezone.utc) + timedelta(**offset_kwargs)
+    return dt.strftime(pattern)
 
 def _random_int(arg: Optional[str]) -> Optional[str]:
     if arg is None:
@@ -181,15 +209,11 @@ async def get_valid_auth_token(auth_func_id: str, environment_id: Optional[str] 
 
     return cached_token
 
-async def execute_request(request_data: Dict[str, Any], environment_id: str = None) -> Dict[str, Any]:
+async def resolve_request(request_data: Dict[str, Any], environment_id: str = None) -> Dict[str, Any]:
     """
-    Runs the full Request Execution Loop:
-    1. Reads active environment variables.
-    2. Performs variable interpolation.
-    3. Runs Auth Hook functions if configured (caching tokens).
-    4. Executes the HTTP call via async proxy client.
-    5. Evaluates Response Parser script.
-    6. Returns execution statistics, headers, body, and extracted variables.
+    Loads active environment variables and interpolates URL, headers, query params,
+    body, and auth config (including firing an Auth Hook script if configured) into
+    their fully-resolved values. Does not dispatch any HTTP call.
     """
     # 1. Load active environment variables
     variables = {}
@@ -202,13 +226,12 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
 
     # 2. Interpolate URL, headers, query params, body
     url = interpolate_variables(request_data.get("url", ""), variables)
-    method = request_data.get("method", "GET").upper()
-    
+
     headers = {}
     for h in request_data.get("headers", []):
         if h.get("key"):
             headers[h["key"]] = interpolate_variables(h.get("value", ""), variables)
-            
+
     params = {}
     for p in request_data.get("queryParams", []):
         if p.get("key"):
@@ -216,7 +239,7 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
 
     body_type = request_data.get("bodyType", "NONE").upper()
     body_content = request_data.get("body", "")
-    
+
     # Interpolate body if JSON or TEXT
     if body_type in ["JSON", "RAW", "TEXT"] and body_content:
         body_content = interpolate_variables(body_content, variables)
@@ -233,11 +256,29 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
     elif auth_type == "BEARER" and auth_config.get("token"):
         token_val = interpolate_variables(auth_config["token"], variables)
         headers["Authorization"] = f"Bearer {token_val}"
-        
+
     elif auth_type == "API_KEY" and auth_config.get("key") and auth_config.get("value"):
         key_name = interpolate_variables(auth_config["key"], variables)
         key_val = interpolate_variables(auth_config["value"], variables)
         headers[key_name] = key_val
+
+    return {"url": url, "headers": headers, "params": params, "body": body_content}
+
+async def execute_request(request_data: Dict[str, Any], environment_id: str = None) -> Dict[str, Any]:
+    """
+    Runs the full Request Execution Loop:
+    1. Resolves URL, headers, query params, body, and auth via resolve_request().
+    2. Executes the HTTP call via async proxy client.
+    3. Evaluates Response Parser script.
+    4. Returns execution statistics, headers, body, and extracted variables.
+    """
+    resolved = await resolve_request(request_data, environment_id)
+    url = resolved["url"]
+    headers = resolved["headers"]
+    params = resolved["params"]
+    body_content = resolved["body"]
+    method = request_data.get("method", "GET").upper()
+    body_type = request_data.get("bodyType", "NONE").upper()
 
     # 4. Dispatch the HTTP Request
     start_time = time.time()
