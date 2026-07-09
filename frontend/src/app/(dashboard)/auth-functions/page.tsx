@@ -16,6 +16,37 @@ const response = fetchToken("https://api.example.com/oauth/token", {
 const data = JSON.parse(response);
 return data.access_token;`;
 
+const PRESETS: { id: string; label: string; description: string; script: string }[] = [
+  {
+    id: "opv2",
+    label: "Operator V2",
+    description: "Client-credentials grant against the Operator V2 (OPV2) OAuth endpoint.",
+    script: `const response = fetchToken("https://api.ninjavan.dev/sg/aaa/2.0/oauth/access_token", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ client_id: "opv2_client_id", client_secret: "opv2_client_secret", grant_type: "client_credentials" })
+});
+
+const data = JSON.parse(response);
+
+return data.access_token;`,
+  },
+  {
+    id: "pudo",
+    label: "PUDO",
+    description: "Username/password login against the PUDO (Pick-up, Drop-off) partner API.",
+    script: `const response = fetchToken("https://api.ninjavan.co/global/dp/1.0/login", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ username: "dp_user", password: "dp_password" })
+});
+
+const data = JSON.parse(response);
+
+return data.data.access_token;`,
+  },
+];
+
 export default function AuthFunctionsPage() {
   const { authFunctions, handleSaveAuthFunc, handleDeleteAuthFunc, apiCall, selectedEnvId } = useAppContext();
 
@@ -48,6 +79,16 @@ export default function AuthFunctionsPage() {
     setExpiresIn(func.expires_in ? String(func.expires_in) : "");
     setTestResult(null);
     setShowModal(true);
+  };
+
+  const applyPreset = (presetId: string) => {
+    const preset = PRESETS.find((p) => p.id === presetId);
+    if (!preset) return;
+    if (script.trim() && script.trim() !== DEFAULT_SCRIPT.trim() && !confirm(`Replace the current script with the "${preset.label}" preset?`)) {
+      return;
+    }
+    setScript(preset.script);
+    setTestResult(null);
   };
 
   const handleTestScript = async () => {
@@ -225,7 +266,27 @@ export default function AuthFunctionsPage() {
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-[13px] font-medium text-graphite">Token fetch script</label>
+              <div className="flex items-center justify-between">
+                <label className="text-[13px] font-medium text-graphite">Token fetch script</label>
+                <select
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) applyPreset(e.target.value);
+                    e.target.value = "";
+                  }}
+                  title="Start from a preset for a known Ninja Van service"
+                  className="h-7 px-2 bg-cream border border-line rounded-md text-[12px] text-graphite outline-none focus:border-clay cursor-pointer"
+                >
+                  <option value="" disabled>
+                    Use a preset...
+                  </option>
+                  {PRESETS.map((p) => (
+                    <option key={p.id} value={p.id} title={p.description}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <div className="rounded-lg overflow-hidden border border-line">
                 <Editor
                   height="260px"
