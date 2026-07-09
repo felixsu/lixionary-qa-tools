@@ -744,6 +744,9 @@ export default function WebExplorerPage() {
   const [profileName, setProfileName] = useState("");
   const [profileCookies, setProfileCookies] = useState("");
   const [profileLocalStorage, setProfileLocalStorage] = useState("");
+  const [rawLsOrigin, setRawLsOrigin] = useState("");
+  const [rawLsKey, setRawLsKey] = useState("");
+  const [rawLsValue, setRawLsValue] = useState("");
   const [profileAuthFunctionId, setProfileAuthFunctionId] = useState<string>("");
   const [profileAuthInjectionType, setProfileAuthInjectionType] = useState<"cookie" | "localStorage">("cookie");
   const [profileAuthInjectionKey, setProfileAuthInjectionKey] = useState("");
@@ -894,6 +897,44 @@ export default function WebExplorerPage() {
     setActivePomClass(newClassName);
     setNewClassName("");
     setShowNewClassModal(false);
+  };
+
+  // Lets users paste a raw target value (e.g. a transit/JSON blob that already
+  // contains literal backslashes) without hand-escaping it. Hand-typing such a
+  // value directly into the JSON textarea below is error-prone: JSON.parse
+  // (both the validation above and the backend's json.loads) treats `\"` as an
+  // escaped quote and silently drops the backslash. JSON.stringify here does
+  // the escaping correctly so the raw value round-trips byte-for-byte.
+  const handleInsertRawLocalStorageValue = () => {
+    if (!rawLsOrigin || !rawLsKey) {
+      alert("Origin and key are required.");
+      return;
+    }
+    let parsed: any;
+    try {
+      parsed = profileLocalStorage ? JSON.parse(profileLocalStorage) : { origins: [] };
+    } catch {
+      alert("The localStorage JSON above is currently invalid — fix or clear it before inserting.");
+      return;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) parsed = { origins: [] };
+    if (!Array.isArray(parsed.origins)) parsed.origins = [];
+
+    const targetOrigin = rawLsOrigin.toLowerCase().replace(/\/$/, "");
+    let originEntry = parsed.origins.find(
+      (o: any) => (o?.origin || "").toLowerCase().replace(/\/$/, "") === targetOrigin
+    );
+    if (!originEntry) {
+      originEntry = { origin: rawLsOrigin, localStorage: [] };
+      parsed.origins.push(originEntry);
+    }
+    if (!Array.isArray(originEntry.localStorage)) originEntry.localStorage = [];
+    originEntry.localStorage = originEntry.localStorage.filter((kv: any) => kv?.name !== rawLsKey);
+    originEntry.localStorage.push({ name: rawLsKey, value: rawLsValue });
+
+    setProfileLocalStorage(JSON.stringify(parsed, null, 2));
+    setRawLsKey("");
+    setRawLsValue("");
   };
 
   const handleSaveProfileSubmit = async (e: React.FormEvent) => {
@@ -2484,6 +2525,41 @@ export default function WebExplorerPage() {
                       placeholder={'{\n  "origins": [\n    { "origin": "https://example.com", "localStorage": [{"name": "k", "value": "v"}] }\n  ]\n}'}
                       className="bg-cream border border-line rounded-lg p-3 font-mono text-xs text-graphite outline-none focus:border-clay resize-none"
                     />
+                    <div className="bg-panel p-3 rounded-lg border border-line flex flex-col gap-2">
+                      <span className="text-[11px] font-medium text-mute">
+                        Add a raw value (paste it literally — backslashes and quotes are escaped for you automatically)
+                      </span>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          placeholder="Origin, e.g. https://example.com"
+                          value={rawLsOrigin}
+                          onChange={(e) => setRawLsOrigin(e.target.value)}
+                          className="h-8 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay"
+                        />
+                        <input
+                          type="text"
+                          placeholder="Key name"
+                          value={rawLsKey}
+                          onChange={(e) => setRawLsKey(e.target.value)}
+                          className="h-8 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay"
+                        />
+                      </div>
+                      <textarea
+                        rows={3}
+                        placeholder="Raw value, exactly as it should appear in localStorage"
+                        value={rawLsValue}
+                        onChange={(e) => setRawLsValue(e.target.value)}
+                        className="bg-cream border border-line rounded-md p-2.5 font-mono text-xs text-graphite outline-none focus:border-clay resize-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleInsertRawLocalStorageValue}
+                        className="self-end h-8 px-3 rounded-md border border-line text-xs font-medium text-graphite hover:border-clay hover:text-ink transition-colors"
+                      >
+                        Insert into JSON above
+                      </button>
+                    </div>
                   </div>
 
                   <div className="border-t border-line pt-3 flex flex-col gap-4">
