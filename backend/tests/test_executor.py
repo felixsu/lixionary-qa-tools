@@ -1,10 +1,11 @@
+import re
 import pytest
 from services.executor import interpolate_variables, extract_jwt_expiry
 from datetime import datetime, timezone
 
 def test_interpolate_variables():
     variables = {"BASE_URL": "https://api.example.com", "USER_ID": "12345"}
-    
+
     url = "{{BASE_URL}}/users/{{USER_ID}}"
     result = interpolate_variables(url, variables)
     assert result == "https://api.example.com/users/12345"
@@ -12,6 +13,27 @@ def test_interpolate_variables():
     no_match = "{{NOT_FOUND}}/path"
     result = interpolate_variables(no_match, variables)
     assert result == "{{NOT_FOUND}}/path"
+
+def test_interpolate_variables_dynamic_tokens():
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    assert interpolate_variables("{{$date:YYYY-MM-DD}}", {}) == today
+
+    random_int = interpolate_variables("{{$randomInt:4}}", {})
+    assert re.fullmatch(r"[1-9]\d{3}", random_int)
+
+    ranged_int = int(interpolate_variables("{{$randomInt:1:5}}", {}))
+    assert 1 <= ranged_int <= 5
+
+    email = interpolate_variables("{{$randomEmail}}", {})
+    assert "@" in email
+
+    # Unknown dynamic token is left untouched, same fallback as an unresolved variable.
+    assert interpolate_variables("{{$bogus}}", {}) == "{{$bogus}}"
+
+    # Dynamic tokens and normal variables can mix in the same string.
+    mixed = interpolate_variables("{{VAR}} FLX-{{$randomInt:4}}", {"VAR": "hi"})
+    assert re.fullmatch(r"hi FLX-[1-9]\d{3}", mixed)
 
 def test_extract_jwt_expiry_fallback():
     # Invalid token should fallback to 1 hour from now

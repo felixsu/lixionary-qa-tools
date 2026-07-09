@@ -5,13 +5,23 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Send, Plus, Trash2, Share2, ChevronDown, ChevronRight,
   Sparkles, Code2, Copy, Check, X, CheckCircle2, AlignLeft, Minimize2,
-  PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil, AlertCircle
+  PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil, AlertCircle, Wand2
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, findRequestInTree, findRequestOwnerCollection, findAncestorPathToRequest } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
 
 type ConfigTab = "headers" | "params" | "auth" | "variables" | "body";
+
+const DYNAMIC_VALUE_OPTIONS = [
+  { value: "{{$date:YYYY-MM-DD}}", label: "Today's date (YYYY-MM-DD)" },
+  { value: "{{$date:YYYY-MM-DD HH:mm:ss}}", label: "Today's date & time" },
+  { value: "{{$randomEmail}}", label: "Random email" },
+  { value: "{{$randomFirstName}}", label: "Random first name" },
+  { value: "{{$randomLastName}}", label: "Random last name" },
+  { value: "{{$randomFullName}}", label: "Random full name" },
+  { value: "{{$randomInt:4}}", label: "Random number (4 digits)" },
+];
 
 interface ParsedCurl {
   method: string;
@@ -594,6 +604,7 @@ export default function ApiExplorerPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [configHeight, setConfigHeight] = useState(250);
   const containerRef = useRef<HTMLDivElement>(null);
+  const bodyEditorRef = useRef<any>(null);
 
   const activeCollection = selectedRequestId ? findRequestOwnerCollection(collections, selectedRequestId) : undefined;
   const activeRequest = activeCollection ? findRequestInTree(activeCollection, selectedRequestId) : undefined;
@@ -770,6 +781,14 @@ export default function ApiExplorerPage() {
     } catch {
       showToast("Invalid JSON");
     }
+  };
+
+  const insertBodyToken = (token: string) => {
+    const editor = bodyEditorRef.current;
+    if (!editor) return;
+    const selection = editor.getSelection();
+    editor.executeEdits("insert-dynamic-token", [{ range: selection, text: token, forceMoveMarkers: true }]);
+    editor.focus();
   };
 
   const copyToClipboard = (text: string, setFlag: (v: boolean) => void) => {
@@ -1408,6 +1427,18 @@ export default function ApiExplorerPage() {
                               </button>
                             </>
                           )}
+                          <Dropdown
+                            value=""
+                            onChange={insertBodyToken}
+                            align="right"
+                            className="h-[30px] px-2.5 flex items-center gap-1.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors"
+                            options={DYNAMIC_VALUE_OPTIONS}
+                            renderTrigger={() => (
+                              <>
+                                <Wand2 className="h-3.5 w-3.5" /> Insert value
+                              </>
+                            )}
+                          />
                           <button
                             onClick={() => copyToClipboard(reqBody, setBodyCopied)}
                             title="Copy body"
@@ -1430,6 +1461,7 @@ export default function ApiExplorerPage() {
                           theme="vs-dark"
                           value={reqBody}
                           onChange={(val) => setReqBody(val || "")}
+                          onMount={(editor) => { bodyEditorRef.current = editor; }}
                           options={{
                             minimap: { enabled: false },
                             fontSize: 12,

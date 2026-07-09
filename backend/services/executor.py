@@ -1,3 +1,4 @@
+import random
 import re
 import time
 import json
@@ -10,17 +11,95 @@ from bson import ObjectId
 from db.mongo import MongoDB
 from services.auth_sandbox import run_unsafe_auth_script, run_unsafe_response_parser
 
+_DATE_FORMAT_TOKENS = [
+    ("YYYY", "%Y"), ("YY", "%y"),
+    ("MM", "%m"), ("DD", "%d"),
+    ("HH", "%H"), ("mm", "%M"), ("ss", "%S"),
+]
+
+_RANDOM_FIRST_NAMES = [
+    "James", "Mary", "John", "Patricia", "Robert", "Jennifer", "Michael", "Linda",
+    "William", "Elizabeth", "David", "Barbara", "Richard", "Susan", "Joseph", "Jessica",
+    "Thomas", "Sarah", "Charles", "Karen",
+]
+_RANDOM_LAST_NAMES = [
+    "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis",
+    "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson", "Thomas",
+    "Taylor", "Moore", "Jackson", "Martin",
+]
+
+def _format_date(fmt: Optional[str]) -> str:
+    pattern = fmt if fmt else "YYYY-MM-DD"
+    for token, directive in _DATE_FORMAT_TOKENS:
+        pattern = pattern.replace(token, directive)
+    return datetime.now(timezone.utc).strftime(pattern)
+
+def _random_int(arg: Optional[str]) -> Optional[str]:
+    if arg is None:
+        return str(random.randint(0, 999))
+    if ":" in arg:
+        parts = arg.split(":")
+        if len(parts) != 2:
+            return None
+        lo, hi = parts
+        if not (lo.strip().lstrip("-").isdigit() and hi.strip().lstrip("-").isdigit()):
+            return None
+        lo, hi = int(lo), int(hi)
+        if lo > hi:
+            return None
+        return str(random.randint(lo, hi))
+    if not arg.isdigit() or int(arg) < 1:
+        return None
+    length = int(arg)
+    if length == 1:
+        return str(random.randint(0, 9))
+    return str(random.randint(1, 9)) + "".join(str(random.randint(0, 9)) for _ in range(length - 1))
+
+def _random_email(domain: Optional[str]) -> str:
+    local = f"{random.choice(_RANDOM_FIRST_NAMES).lower()}.{random.choice(_RANDOM_LAST_NAMES).lower()}{random.randint(1, 999)}"
+    return f"{local}@{domain or 'example.com'}"
+
+_DYNAMIC_TOKEN_HANDLERS = {
+    "date": lambda arg: _format_date(arg),
+    "randomint": lambda arg: _random_int(arg),
+    "randomemail": lambda arg: _random_email(arg),
+    "randomfirstname": lambda arg: random.choice(_RANDOM_FIRST_NAMES),
+    "randomlastname": lambda arg: random.choice(_RANDOM_LAST_NAMES),
+    "randomfullname": lambda arg: f"{random.choice(_RANDOM_FIRST_NAMES)} {random.choice(_RANDOM_LAST_NAMES)}",
+}
+
+def _resolve_dynamic_token(key: str) -> Optional[str]:
+    """
+    Resolves a $-prefixed dynamic token (e.g. "$date:YYYY-MM-DD", "$randomInt:4") to its
+    generated value, or None if the token is unrecognized/malformed.
+    """
+    body = key[1:]
+    if ":" in body:
+        fn_name, arg = body.split(":", 1)
+    else:
+        fn_name, arg = body, None
+    handler = _DYNAMIC_TOKEN_HANDLERS.get(fn_name.lower())
+    if not handler:
+        return None
+    return handler(arg)
+
 def interpolate_variables(text: str, variables: Dict[str, str]) -> str:
     """
     Replaces all occurrences of {{key}} in text with the matching value from variables.
+    Keys starting with "$" are resolved as dynamic tokens (e.g. {{$date:YYYY-MM-DD}},
+    {{$randomInt:4}}) instead of being looked up in variables. Unresolved/unrecognized
+    tokens are left untouched.
     """
     if not text:
         return text
-    
+
     def replacer(match):
         key = match.group(1).strip()
+        if key.startswith("$"):
+            resolved = _resolve_dynamic_token(key)
+            return resolved if resolved is not None else match.group(0)
         return variables.get(key, match.group(0))
-        
+
     return re.sub(r"\{\{([^}]+)\}\}", replacer, text)
 
 def extract_jwt_expiry(token: str) -> datetime:
