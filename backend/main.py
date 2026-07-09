@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db.mongo import MongoDB
 from db.redis_client import RedisClient
-from routes import auth, collections, environments, auth_functions, executor, ai, browser, profiles, workspace, admin
+from routes import auth, collections, environments, auth_functions, executor, ai, browser, profiles, workspace, admin, user_guides
 
 async def cleanup_dangling_containers():
     try:
@@ -130,6 +130,8 @@ app.include_router(browser.router)
 app.include_router(profiles.router)
 app.include_router(workspace.router)
 app.include_router(admin.router)
+app.include_router(user_guides.router)
+app.include_router(user_guides.admin_router)
 
 @app.get("/")
 def read_root():

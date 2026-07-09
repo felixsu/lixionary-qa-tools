@@ -20,6 +20,14 @@ export interface AuthFunction {
   expiresAt?: string;
 }
 
+export interface UserGuideSummary {
+  id: string;
+  title: string;
+  description: string;
+  blockCount: number;
+  updatedAt?: string;
+}
+
 export interface RequestItem {
   id: string;
   name: string;
@@ -240,6 +248,8 @@ interface AppContextType {
   fetchEnvironments: () => Promise<void>;
   authFunctions: AuthFunction[];
   fetchAuthFunctions: () => Promise<void>;
+  userGuides: UserGuideSummary[];
+  fetchUserGuides: () => Promise<void>;
   collections: Collection[];
   selectedCollectionId: string;
   setSelectedCollectionId: (id: string) => void;
@@ -455,6 +465,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [selectedEnvId, setSelectedEnvId] = useState<string>("");
   const [authFunctions, setAuthFunctions] = useState<AuthFunction[]>([]);
+  const [userGuides, setUserGuides] = useState<UserGuideSummary[]>([]);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [selectedCollectionId, setSelectedCollectionId] = useState<string>("");
   const [selectedRequestId, setSelectedRequestId] = useState<string>("");
@@ -590,6 +601,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       fetchCollections();
       fetchProfiles();
       fetchUserSessions();
+      fetchUserGuides();
     }
   }, [token]);
 
@@ -772,6 +784,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setAuthFunctions(data);
     } catch (e) {
       console.error("Failed to fetch auth functions", e);
+    }
+  };
+
+  const fetchUserGuides = async () => {
+    try {
+      const data = await apiCall("/api/user-guides");
+      setUserGuides(data);
+    } catch (e) {
+      console.error("Failed to fetch user guides", e);
     }
   };
 
@@ -1890,6 +1911,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         fetchEnvironments,
         authFunctions,
         fetchAuthFunctions,
+        userGuides,
+        fetchUserGuides,
         collections,
         selectedCollectionId,
         setSelectedCollectionId,

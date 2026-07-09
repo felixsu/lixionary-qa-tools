@@ -4,13 +4,14 @@ import React, { useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users } from "lucide-react";
+import { Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import Dropdown from "../components/Dropdown";
 
 type NavEntry =
   | { type: "section"; label: string }
-  | { type: "item"; href: string; icon: typeof Send; label: string; badge?: "env" };
+  | { type: "item"; href: string; icon: typeof Send; label: string; badge?: "env" }
+  | { type: "group"; href: string; icon: typeof Send; label: string; children: { href: string; label: string }[] };
 
 const NAV: NavEntry[] = [
   { type: "section", label: "QA Tools" },
@@ -34,6 +35,7 @@ export default function DashboardLayout({
     selectedEnvId,
     setSelectedEnvId,
     handleLogout,
+    userGuides,
   } = useAppContext();
 
   const pathname = usePathname();
@@ -76,7 +78,15 @@ export default function DashboardLayout({
   const isActive = (path: string) => pathname === path;
 
   const getHeaderTitle = () => {
+    if (pathname.startsWith("/user-guides/")) {
+      const guide = userGuides.find((g) => `/user-guides/${g.id}` === pathname);
+      return guide ? guide.title : "User guide";
+    }
     switch (pathname) {
+      case "/user-guides":
+        return "User guides";
+      case "/user-guide-admin":
+        return "User guide studio";
       case "/api-explorer":
         return "API Automation Engine";
       case "/web-explorer":
@@ -97,12 +107,22 @@ export default function DashboardLayout({
   const showEnvPill = pathname === "/api-explorer" || pathname === "/web-explorer";
   const userInitial = (user?.name || user?.email || "D").charAt(0).toUpperCase();
 
-  const sidebarNavItems = [...NAV];
+  const sidebarNavItems: NavEntry[] = [
+    ...NAV,
+    {
+      type: "group",
+      href: "/user-guides",
+      icon: BookOpen,
+      label: "User guide",
+      children: userGuides.map((g) => ({ href: `/user-guides/${g.id}`, label: g.title })),
+    },
+  ];
   if (user?.role === "admin") {
     sidebarNavItems.push(
       { type: "section", label: "Administration" },
       { type: "item", href: "/admin-console", icon: Shield, label: "Admin console" },
-      { type: "item", href: "/user-management", icon: Users, label: "User management" }
+      { type: "item", href: "/user-management", icon: Users, label: "User management" },
+      { type: "item", href: "/user-guide-admin", icon: NotebookPen, label: "User guide studio" }
     );
   }
 
@@ -148,6 +168,56 @@ export default function DashboardLayout({
                   }`}
                 >
                   {entry.label}
+                </div>
+              );
+            }
+            if (entry.type === "group") {
+              const Icon = entry.icon;
+              const active = isActive(entry.href);
+              const expanded = pathname.startsWith(entry.href);
+              return (
+                <div key={entry.href} className="flex flex-col gap-0.5">
+                  <Link
+                    href={entry.href}
+                    title={collapsed ? entry.label : undefined}
+                    className="flex items-center gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-panel"
+                    style={{
+                      background: active ? "var(--color-hover)" : "transparent",
+                      borderLeft: `3px solid ${active ? "var(--color-clay)" : "transparent"}`,
+                      justifyContent: collapsed ? "center" : undefined,
+                    }}
+                  >
+                    <Icon className={`h-3.5 w-3.5 flex-shrink-0 ${active ? "text-clay" : "text-stone"}`} />
+                    {!collapsed && (
+                      <>
+                        <span className={`flex-1 text-[13px] whitespace-nowrap ${active ? "font-medium text-clay" : "text-graphite"}`}>
+                          {entry.label}
+                        </span>
+                        <ChevronDown
+                          className={`h-3.5 w-3.5 flex-shrink-0 text-mute transition-transform ${expanded ? "" : "-rotate-90"}`}
+                        />
+                      </>
+                    )}
+                  </Link>
+                  {expanded && !collapsed &&
+                    entry.children.map((child) => {
+                      const childActive = pathname === child.href;
+                      return (
+                        <Link
+                          key={child.href}
+                          href={child.href}
+                          className="flex items-center rounded-lg py-1.5 pr-2 pl-[34px] transition-colors hover:bg-panel"
+                          style={{
+                            background: childActive ? "var(--color-hover)" : "transparent",
+                            borderLeft: `3px solid ${childActive ? "var(--color-clay)" : "transparent"}`,
+                          }}
+                        >
+                          <span className={`text-[12.5px] truncate ${childActive ? "font-medium text-clay" : "text-stone"}`}>
+                            {child.label}
+                          </span>
+                        </Link>
+                      );
+                    })}
                 </div>
               );
             }

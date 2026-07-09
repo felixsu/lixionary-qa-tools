@@ -70,3 +70,82 @@ body {
   background: #e6dfd8;
   border-radius: 9999px;
 }
+
+/* Markdown prose styling for user guides */
+.guide-prose {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--color-graphite);
+}
+.guide-prose h1,
+.guide-prose h2,
+.guide-prose h3,
+.guide-prose h4 {
+  font-family: var(--font-serif);
+  color: var(--color-ink);
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 1.4em 0 0.5em;
+}
+.guide-prose h1 { font-size: 26px; }
+.guide-prose h2 { font-size: 22px; }
+.guide-prose h3 { font-size: 18px; }
+.guide-prose h4 { font-size: 16px; }
+.guide-prose > :first-child { margin-top: 0; }
+.guide-prose p { margin: 0.6em 0; }
+.guide-prose a { color: var(--color-clay); text-decoration: underline; text-underline-offset: 2px; }
+.guide-prose a:hover { color: var(--color-clay-dark); }
+.guide-prose ul, .guide-prose ol { margin: 0.6em 0; padding-left: 1.4em; }
+.guide-prose ul { list-style: disc; }
+.guide-prose ol { list-style: decimal; }
+.guide-prose li { margin: 0.25em 0; }
+.guide-prose blockquote {
+  margin: 0.8em 0;
+  padding: 0.1em 1em;
+  border-left: 3px solid var(--color-clay);
+  background: var(--color-panel);
+  border-radius: 0 8px 8px 0;
+  color: var(--color-stone);
+}
+.guide-prose code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--color-chip);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.guide-prose pre {
+  margin: 0.8em 0;
+  padding: 12px 14px;
+  background: var(--color-ink-900);
+  color: #e8e6e1;
+  border-radius: 10px;
+  overflow-x: auto;
+}
+.guide-prose pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+.guide-prose table {
+  margin: 0.8em 0;
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+.guide-prose th, .guide-prose td {
+  border: 1px solid var(--color-line);
+  padding: 6px 10px;
+  text-align: left;
+}
+.guide-prose th {
+  background: var(--color-panel);
+  color: var(--color-ink);
+  font-weight: 600;
+}
+.guide-prose hr {
+  border: none;
+  border-top: 1px solid var(--color-line);
+  margin: 1.5em 0;
+}
+.guide-prose img { max-width: 100%; border-radius: 8px; }
