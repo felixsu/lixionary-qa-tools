@@ -25,6 +25,9 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "Lixionary Automation Explorer",
   description: "Collaborative API automation, variable chaining, and Playwright POM generation engine.",
+  icons: {
+    icon: "/logo.png",
+  },
 };
 
 export default function RootLayout({
