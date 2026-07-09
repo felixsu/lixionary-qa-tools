@@ -404,32 +404,44 @@ class BrowserSessionManager:
             print(f"Error stopping/removing dynamic container {session_id}: {e}")
 
     @classmethod
+    def _build_locator(cls, target, strategy: str, selector: str):
+        """
+        Resolves a (strategy, selector) pair — the same shape produced by
+        rank_locators() — into a real Playwright Locator against a Page or Frame.
+        Shared by uniqueness counting (_count_locator_matches) and live action
+        execution (run_element_verify) so both stay in sync with rank_locators'
+        strategy vocabulary.
+        """
+        if strategy == "get_by_test_id":
+            return target.get_by_test_id(selector)
+        elif strategy == "get_by_label":
+            return target.get_by_label(selector)
+        elif strategy == "get_by_role":
+            match = re.match(r'^([^\[]+)\[name="(.+)"\]$', selector)
+            if match:
+                return target.get_by_role(match.group(1), name=match.group(2))
+            return target.locator(selector)
+        elif strategy == "get_by_text":
+            return target.get_by_text(selector)
+        elif strategy == "locator (CSS)":
+            return target.locator(selector)
+        elif strategy == "locator (XPath)":
+            return target.locator(selector)
+        elif strategy == "locator (Anchored XPath)":
+            return target.locator(f"xpath={selector}")
+        elif strategy == "locator (User Anchor XPath)":
+            # Must use the xpath= prefix like Anchored XPath above — without it,
+            # a plain frame.locator(selector) call on a raw "//..." string relies
+            # on Playwright's implicit xpath auto-detection instead of being explicit,
+            # and previously fell into the generic else-branch below by omission.
+            return target.locator(f"xpath={selector}")
+        else:
+            return target.locator(selector)
+
+    @classmethod
     async def _count_locator_matches(cls, frame, strategy: str, selector: str) -> int:
         try:
-            if strategy == "get_by_test_id":
-                loc = frame.get_by_test_id(selector)
-            elif strategy == "get_by_label":
-                loc = frame.get_by_label(selector)
-            elif strategy == "get_by_role":
-                import re
-                match = re.match(r'^([^\[]+)\[name="(.+)"\]$', selector)
-                if match:
-                    role = match.group(1)
-                    name = match.group(2)
-                    loc = frame.get_by_role(role, name=name)
-                else:
-                    loc = frame.locator(selector)
-            elif strategy == "get_by_text":
-                loc = frame.get_by_text(selector)
-            elif strategy == "locator (CSS)":
-                loc = frame.locator(selector)
-            elif strategy == "locator (XPath)":
-                loc = frame.locator(selector)
-            elif strategy == "locator (Anchored XPath)":
-                loc = frame.locator(f"xpath={selector}")
-            else:
-                loc = frame.locator(selector)
-            
+            loc = cls._build_locator(frame, strategy, selector)
             return await loc.count()
         except Exception as e:
             print(f"Error counting matches for strategy {strategy}, selector {selector}: {e}")
@@ -693,6 +705,9 @@ class BrowserSessionManager:
                         (tag === 'input' && (!type || FILL_INPUT_TYPES.indexOf(type) !== -1))) {
                         return { action: 'fill', subtype: null };
                     }
+                    if (tag === 'select' || role === 'combobox' || role === 'listbox') {
+                        return { action: 'select_option', subtype: null };
+                    }
                     return null;
                 }
 
@@ -724,8 +739,9 @@ class BrowserSessionManager:
                 }
 
                 const INTERACTIVE_SELECTOR =
-                    'button, a[href], [role="button"], [role="link"], input, textarea, ' +
-                    '[contenteditable="true"], [role="checkbox"], [role="radio"], [role="switch"]';
+                    'button, a[href], [role="button"], [role="link"], input, textarea, select, ' +
+                    '[contenteditable="true"], [role="checkbox"], [role="radio"], [role="switch"], ' +
+                    '[role="combobox"], [role="listbox"]';
 
                 let root = document;
                 let scopeInfo = null;
@@ -781,6 +797,11 @@ class BrowserSessionManager:
                     meta.nearbyText = nearby ? nearby.text : '';
                     meta.disabled = !!(el.disabled || el.getAttribute('aria-disabled') === 'true');
                     meta.scanIndex = elements.length;
+                    if (cls.action === 'select_option' && el.tagName.toLowerCase() === 'select') {
+                        meta.options = Array.from(el.options).slice(0, 20).map(function(o) {
+                            return { value: o.value, label: (o.label || o.textContent || '').trim().substring(0, 60) };
+                        });
+                    }
                     elements.push(meta);
 
                     if (cls.action === 'click') collectedClickables.add(el);
@@ -1022,6 +1043,7 @@ class BrowserSessionManager:
                     label: el.getAttribute('aria-label') || el.getAttribute('label') || '',
                     placeholder: el.getAttribute('placeholder') || '',
                     role: el.getAttribute('role') || '',
+                    href: el.tagName.toLowerCase() === 'a' ? (el.getAttribute('href') || '') : '',
                     cssSelector: getCssPath(el),
                     xpath: getXPath(el),
                     anchoredXpath: getAnchoredXPath(el),
@@ -1133,18 +1155,18 @@ class BrowserSessionManager:
                 print(f"Error setting inspect mode: {e}")
 
     @classmethod
-    async def scan_page(cls, session_id: str, scope: str = "page") -> dict:
+    async def _enumerate_interactive_elements(cls, session_id: str, scope: str = "page"):
         """
-        Enumerate interactive elements, pick the best unique locator per element,
-        and propose intuitive method names.
+        JS-only enumeration of interactive elements via window.__lixionaryScanPage —
+        no Playwright roundtrips, no locator resolution yet. Returns
+        (scan_items, total, truncated, scope_label) where scan_items is a list of
+        raw (frame, item, frame_chain) tuples.
 
         scope="page": scans every frame of the active page (including iframes;
         elements carry their frame_locator chain).
         scope="selected": scans only the subtree of the last inspect-clicked
         element, in whatever frame it was clicked.
         """
-        from services.naming import dedupe_names, heuristic_method_name, polish_method_names
-
         session = cls._sessions.get(session_id)
         if not session:
             raise ValueError(f"No active browser session: {session_id}")
@@ -1220,6 +1242,15 @@ class BrowserSessionManager:
             if not scanned_any:
                 raise RuntimeError("Inspector script is not available on the page")
 
+        return scan_items, total, truncated, scope_label
+
+    @classmethod
+    async def _resolve_locators_for_items(cls, scan_items):
+        """
+        Ranks + uniqueness-checks locator candidates for each (frame, item, frame_chain)
+        tuple, bounded to 10 concurrent frame evaluations. Returns a list aligned
+        with scan_items: [{"ranked": [...], "chosen": {...} | None}].
+        """
         semaphore = asyncio.Semaphore(10)
 
         async def resolve_locator(frame, item: dict) -> dict:
@@ -1240,7 +1271,18 @@ class BrowserSessionManager:
                     chosen = ranked[0] if ranked else None
                 return {"ranked": ranked, "chosen": chosen}
 
-        resolved = await asyncio.gather(*[resolve_locator(frame, item) for frame, item, _chain in scan_items])
+        return await asyncio.gather(*[resolve_locator(frame, item) for frame, item, _chain in scan_items])
+
+    @classmethod
+    async def _finalize_scan_elements(
+        cls, scan_items, resolved, url: str, scope: str, scope_label: Optional[str], total: int, truncated: bool
+    ) -> dict:
+        """
+        Names every resolved element (heuristic -> Gemini polish) and builds the
+        final {url, total, truncated, nameSource, scope, scopeLabel, elements}
+        shape shared by both Scan and Explore results.
+        """
+        from services.naming import dedupe_names, heuristic_method_name, polish_method_names
 
         items = [item for _frame, item, _chain in scan_items]
         positional_counters: dict = {}
@@ -1266,7 +1308,7 @@ class BrowserSessionManager:
             })
 
         return {
-            "url": page.url,
+            "url": url,
             "total": total or len(elements),
             "truncated": truncated,
             "nameSource": name_source,
@@ -1274,6 +1316,21 @@ class BrowserSessionManager:
             "scopeLabel": scope_label,
             "elements": elements,
         }
+
+    @classmethod
+    async def scan_page(cls, session_id: str, scope: str = "page") -> dict:
+        """
+        Enumerate interactive elements, pick the best unique locator per element,
+        and propose intuitive method names.
+        """
+        session = cls._sessions.get(session_id)
+        if not session:
+            raise ValueError(f"No active browser session: {session_id}")
+        page = cls._active_page(session)
+
+        scan_items, total, truncated, scope_label = await cls._enumerate_interactive_elements(session_id, scope)
+        resolved = await cls._resolve_locators_for_items(scan_items)
+        return await cls._finalize_scan_elements(scan_items, resolved, page.url, scope, scope_label, total, truncated)
 
     @classmethod
     async def run_page_scan(cls, session_id: str, scope: str = "page"):
@@ -1289,6 +1346,364 @@ class BrowserSessionManager:
                 await session["callback"]({"type": "page_scan_error", "data": {"message": str(e)}})
             except Exception:
                 pass
+
+    @classmethod
+    async def _execute_verify_action(cls, locator, action: str, value: Optional[str]):
+        """
+        Runs the actual Playwright action for a verify attempt. Returns the
+        extracted text for getText, None for every other action. Raises on
+        failure — the caller (run_element_verify) is responsible for catching.
+        """
+        timeout = 5000
+        if action == "click":
+            await locator.click(timeout=timeout)
+            return None
+        elif action == "fill":
+            await locator.fill(value or "", timeout=timeout)
+            return None
+        elif action == "type":
+            # press_sequentially fires real keydown/input/keyup events per character —
+            # unlike fill(), which sets the value once — required by inputs whose JS
+            # only reacts to genuine keystroke events (masks, autocomplete, etc.)
+            await locator.press_sequentially(value or "", timeout=timeout)
+            return None
+        elif action == "hover":
+            await locator.hover(timeout=timeout)
+            return None
+        elif action == "check":
+            await locator.check(timeout=timeout)
+            return None
+        elif action == "select_option":
+            await locator.select_option(value, timeout=timeout)
+            return None
+        elif action == "getText":
+            return await locator.inner_text(timeout=timeout)
+        else:
+            raise ValueError(f"Unsupported verify action: {action}")
+
+    @staticmethod
+    def _clean_verify_error(e: Exception) -> str:
+        # Playwright errors append a multi-line "Call log:" trace after the
+        # actual reason — keep only the human-readable first part.
+        text = str(e)
+        return text.split("Call log:")[0].strip() or text
+
+    @classmethod
+    async def run_element_verify(
+        cls,
+        session_id: str,
+        action: str,
+        locators: List[Dict[str, str]],
+        value: Optional[str],
+        element: Optional[Dict[str, Any]] = None,
+    ):
+        """
+        Tries each ranked (strategy, selector) candidate against the live page for
+        the given action, in order. Real side effects (a verified click really
+        clicks) are intentional. If every candidate fails, asks Gemini for up to
+        two alternative candidates and tries those too before giving up.
+        """
+        from services.naming import propose_locator_fix
+
+        session = cls._sessions.get(session_id)
+        if not session or not session.get("callback"):
+            return
+
+        session["verify_in_progress"] = True
+        attempts: List[Dict[str, Any]] = []
+        try:
+            frame = session.get("last_clicked_frame")
+            try:
+                if frame is None or frame.is_detached():
+                    frame = cls._active_page(session).main_frame
+            except Exception:
+                frame = cls._active_page(session).main_frame
+
+            async def try_candidate(strategy: str, selector: str, source: str) -> bool:
+                index = len(attempts)
+                await session["callback"]({
+                    "type": "verify_attempt",
+                    "data": {"index": index, "source": source, "strategy": strategy, "selector": selector, "status": "trying"},
+                })
+                try:
+                    locator = cls._build_locator(frame, strategy, selector)
+                    result_text = await asyncio.wait_for(cls._execute_verify_action(locator, action, value), timeout=7)
+                    attempt = {"index": index, "source": source, "strategy": strategy, "selector": selector, "status": "success"}
+                    attempts.append(attempt)
+                    await session["callback"]({
+                        "type": "verify_result",
+                        "data": {
+                            "success": True,
+                            "action": action,
+                            "winningLocator": {"strategy": strategy, "selector": selector, "source": source},
+                            "resultText": result_text,
+                            "attempts": attempts,
+                        },
+                    })
+                    return True
+                except Exception as e:
+                    error = cls._clean_verify_error(e)
+                    attempt = {"index": index, "source": source, "strategy": strategy, "selector": selector, "status": "failed", "error": error}
+                    attempts.append(attempt)
+                    await session["callback"]({
+                        "type": "verify_attempt",
+                        "data": attempt,
+                    })
+                    return False
+
+            # Phase 1: try every already-ranked candidate as given (frontend order)
+            for loc in locators:
+                strategy = loc.get("strategy")
+                selector = loc.get("selector")
+                if not strategy or not selector:
+                    continue
+                if await try_candidate(strategy, selector, "ranked"):
+                    return
+
+            # Phase 2: all ranked candidates failed — ask Gemini for alternatives
+            failed_attempts = [
+                {"strategy": a["strategy"], "selector": a["selector"], "error": a.get("error", "")}
+                for a in attempts
+            ]
+            fixes, _ = await propose_locator_fix(element or {}, failed_attempts)
+            valid_fixes = _validate_locator_fixes(fixes, failed_attempts)
+
+            for fix in valid_fixes:
+                if await try_candidate(fix["strategy"], fix["selector"], "llm"):
+                    return
+
+            # Everything failed
+            await session["callback"]({
+                "type": "verify_result",
+                "data": {"success": False, "action": action, "attempts": attempts},
+            })
+        except Exception as e:
+            print(f"Error during element verify for session {session_id}: {e}")
+            try:
+                await session["callback"]({
+                    "type": "verify_result",
+                    "data": {"success": False, "action": action, "attempts": attempts, "error": str(e)},
+                })
+            except Exception:
+                pass
+        finally:
+            session["verify_in_progress"] = False
+
+    @classmethod
+    async def run_page_exploration(cls, session_id: str, goal_prompt: Optional[str] = None, scope: str = "page"):
+        """
+        Autonomous Gemini-driven exploration loop: repeatedly enumerate the
+        page's current interactive elements, ask the LLM to pick one action,
+        execute it for real, wait for the page to settle, and look again —
+        accumulating every distinct element discovered — until the LLM says
+        it's done, a step/time budget is hit, it gets stuck, or it's cancelled.
+        Real side effects are intentional, bounded by _filter_explore_candidates'
+        destructive-keyword/cross-origin guardrails.
+
+        scope="page": explores the whole active page (all frames).
+        scope="selected": restricts exploration to the subtree of the last
+        inspect-clicked element (same anchor Scan's "Inside selected element"
+        uses), so a user can point the AI at one section of a busy page.
+        """
+        from services.naming import decide_next_exploration_step
+
+        MAX_STEPS = 40
+        TIME_BUDGET_SECONDS = 240
+        STUCK_THRESHOLD = 5
+        MAX_CANDIDATES_FOR_LLM = 60
+
+        session = cls._sessions.get(session_id)
+        if not session or not session.get("callback"):
+            return
+
+        def identity_key(item, frame_chain):
+            return (tuple(frame_chain), item.get("cssSelector") or item.get("xpath") or item.get("text"))
+
+        session["explore_in_progress"] = True
+        session["explore_cancelled"] = False
+        aggregate: Dict[Any, Any] = {}
+        history: List[Dict[str, Any]] = []
+        consecutive_no_progress = 0
+        step = 0
+        start_time = asyncio.get_event_loop().time()
+        page = cls._active_page(session)
+        scope_label: Optional[str] = None
+
+        try:
+            while True:
+                if session.get("explore_cancelled"):
+                    break
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if step >= MAX_STEPS or elapsed >= TIME_BUDGET_SECONDS:
+                    break
+                if consecutive_no_progress >= STUCK_THRESHOLD:
+                    break
+
+                try:
+                    scan_items, _total, _truncated, this_scope_label = await cls._enumerate_interactive_elements(session_id, scope)
+                    if this_scope_label and not scope_label:
+                        scope_label = this_scope_label
+                except Exception as e:
+                    print(f"Explore: enumeration failed for session {session_id}: {e}")
+                    break
+
+                for frame, item, frame_chain in scan_items:
+                    aggregate[identity_key(item, frame_chain)] = (frame, item, frame_chain)
+
+                candidates = _filter_explore_candidates(scan_items, page.url)
+                if not candidates:
+                    break
+
+                # Prioritize elements not yet attempted, cap what's shown to the LLM
+                attempted_keys = {h["identityKey"] for h in history if h.get("identityKey")}
+                candidates.sort(key=lambda c: identity_key(c[1], c[2]) in attempted_keys)
+                candidates = candidates[:MAX_CANDIDATES_FOR_LLM]
+
+                decision = await decide_next_exploration_step(page.url, candidates, history, goal_prompt)
+
+                if decision.get("action") == "finish" or decision.get("elementIndex") is None:
+                    await session["callback"]({
+                        "type": "explore_step",
+                        "data": {
+                            "step": step, "action": "finish", "elementSummary": None,
+                            "success": True, "discoveredCount": len(aggregate),
+                            "reasoning": decision.get("reasoning") or decision.get("finishReason") or "",
+                        },
+                    })
+                    break
+
+                idx = decision.get("elementIndex")
+                if not isinstance(idx, int) or idx < 0 or idx >= len(candidates):
+                    consecutive_no_progress += 1
+                    step += 1
+                    continue
+
+                chosen_frame, chosen_item, chosen_frame_chain = candidates[idx]
+                action = decision.get("action")
+                value = decision.get("value")
+                summary_text = (chosen_item.get("text") or chosen_item.get("label") or chosen_item.get("placeholder") or "").strip()[:60]
+                element_summary = f"<{chosen_item.get('tagName', '?')}> {summary_text}"
+                key = identity_key(chosen_item, chosen_frame_chain)
+
+                if chosen_item.get("disabled") and action in ("click", "check", "select_option"):
+                    history.append({"identityKey": key, "action": action, "success": False, "error": "element disabled"})
+                    await session["callback"]({
+                        "type": "explore_step",
+                        "data": {"step": step, "action": action, "elementSummary": element_summary, "success": False,
+                                 "error": "element disabled", "discoveredCount": len(aggregate), "reasoning": decision.get("reasoning") or ""},
+                    })
+                    consecutive_no_progress += 1
+                    step += 1
+                    continue
+
+                resolved = await cls._resolve_locators_for_items([(chosen_frame, chosen_item, chosen_frame_chain)])
+                chosen_locator_info = resolved[0]["chosen"] if resolved else None
+                if not chosen_locator_info:
+                    history.append({"identityKey": key, "action": action, "success": False, "error": "no unique locator"})
+                    await session["callback"]({
+                        "type": "explore_step",
+                        "data": {"step": step, "action": action, "elementSummary": element_summary, "success": False,
+                                 "error": "no unique locator", "discoveredCount": len(aggregate), "reasoning": decision.get("reasoning") or ""},
+                    })
+                    consecutive_no_progress += 1
+                    step += 1
+                    continue
+
+                success = False
+                error = None
+                try:
+                    locator = cls._build_locator(chosen_frame, chosen_locator_info["strategy"], chosen_locator_info["selector"])
+                    await cls._execute_verify_action(locator, action, value)
+                    success = True
+                    consecutive_no_progress = 0
+                except Exception as e:
+                    error = cls._clean_verify_error(e)
+                    consecutive_no_progress += 1
+
+                history.append({"identityKey": key, "action": action, "success": success, "error": error})
+                if len(history) > 15:
+                    history = history[-15:]
+
+                await session["callback"]({
+                    "type": "explore_step",
+                    "data": {
+                        "step": step, "action": action, "elementSummary": element_summary,
+                        "success": success, "error": error, "discoveredCount": len(aggregate),
+                        "reasoning": decision.get("reasoning") or "",
+                    },
+                })
+
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=3000)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.3)  # let SPA re-renders flush even when networkidle never fires
+                step += 1
+
+            # Finalize exactly like scan_page: resolve locators for every distinct
+            # accumulated item, then name them.
+            final_scan_items = list(aggregate.values())
+            resolved_final = await cls._resolve_locators_for_items(final_scan_items)
+            label = f"AI exploration inside {scope_label} ({step} steps)" if scope_label else f"AI exploration ({step} steps)"
+            result = await cls._finalize_scan_elements(
+                final_scan_items, resolved_final, page.url, scope, label, len(aggregate), False,
+            )
+            await session["callback"]({"type": "explore_result", "data": result})
+        except Exception as e:
+            print(f"Error during page exploration for session {session_id}: {e}")
+            try:
+                await session["callback"]({"type": "explore_error", "data": {"message": str(e)}})
+            except Exception:
+                pass
+        finally:
+            session["explore_in_progress"] = False
+
+
+_EXPLORE_DENYLIST_KEYWORDS = (
+    "delete", "remove", "deactivate", "cancel account", "close account",
+    "log out", "logout", "sign out", "pay", "payment", "purchase", "checkout",
+    "place order", "submit order", "confirm order", "unsubscribe", "revoke",
+    "ban", "terminate", "destroy",
+)
+
+
+def _filter_explore_candidates(scan_items: List[tuple], current_url: str) -> List[tuple]:
+    """
+    Hard-filters exploration candidates before they're ever shown to the LLM:
+    drops elements whose text/label/etc. matches a destructive-action keyword,
+    and drops <a> links whose href resolves to a different origin than the
+    current page. This is a filter, not a prompt instruction — the LLM cannot
+    select an element that was never included in the candidate list.
+    """
+    import urllib.parse
+
+    try:
+        parsed_current = urllib.parse.urlparse(current_url)
+        current_origin = (parsed_current.scheme, parsed_current.netloc)
+    except Exception:
+        current_origin = None
+
+    filtered = []
+    for frame, item, frame_chain in scan_items:
+        combined = " ".join(
+            str(item.get(k) or "") for k in ("text", "label", "placeholder", "testId", "nameAttr", "title")
+        ).lower()
+        if any(keyword in combined for keyword in _EXPLORE_DENYLIST_KEYWORDS):
+            continue
+
+        href = item.get("href")
+        if href and current_origin:
+            try:
+                resolved = urllib.parse.urlparse(urllib.parse.urljoin(current_url, href))
+                if (resolved.scheme, resolved.netloc) != current_origin:
+                    continue
+            except Exception:
+                pass
+
+        filtered.append((frame, item, frame_chain))
+
+    return filtered
+
 
 def rank_locators(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
@@ -1388,6 +1803,52 @@ def rank_locators(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
     # Sort locators descending by score
     locators.sort(key=lambda x: x["score"], reverse=True)
     return locators
+
+
+# Strategies a Gemini-proposed fix is allowed to use. Anchored-xpath strategies
+# are deliberately excluded — they encode a sibling/parent relationship the LLM
+# has no way to correctly derive from flat element metadata, so a plausible-
+# looking but unanchored xpath string in that slot would be actively misleading.
+_ALLOWED_FIX_STRATEGIES = {
+    "get_by_test_id", "get_by_label", "get_by_role",
+    "get_by_text", "locator (CSS)", "locator (XPath)",
+}
+
+
+def _validate_locator_fixes(
+    raw_fixes: List[Any], failed_attempts: List[Dict[str, str]]
+) -> List[Dict[str, str]]:
+    """
+    Strictly validates Gemini's raw, untrusted locator-fix proposals before any
+    of them are tried against the live browser. Discards anything malformed,
+    using an unknown strategy, or duplicating an already-failed attempt. Caps
+    the result at 2 candidates regardless of how many the model returned.
+    """
+    seen_failed = {(a["strategy"], a["selector"]) for a in failed_attempts}
+    valid: List[Dict[str, str]] = []
+
+    for candidate in raw_fixes:
+        if len(valid) >= 2:
+            break
+        if not isinstance(candidate, dict):
+            continue
+        strategy = candidate.get("strategy")
+        selector = candidate.get("selector")
+        if not isinstance(strategy, str) or not isinstance(selector, str):
+            continue
+        if strategy not in _ALLOWED_FIX_STRATEGIES:
+            continue
+        if not selector or len(selector) > 300:
+            continue
+        if strategy == "get_by_role" and not re.match(r'^([^\[]+)\[name="(.+)"\]$', selector):
+            # Don't silently reinterpret a bare role string as a weaker locator
+            # while still labeling it get_by_role — reject instead.
+            continue
+        if (strategy, selector) in seen_failed:
+            continue
+        valid.append({"strategy": strategy, "selector": selector})
+
+    return valid
 
 
 import threading

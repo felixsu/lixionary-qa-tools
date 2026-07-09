@@ -1,7 +1,7 @@
 import asyncio
 import json
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from config import settings
 
@@ -11,6 +11,9 @@ _ACTION_PREFIXES = {
     "click": "click_",
     "fill": "fill_",
     "check": "check_",
+    "type": "type_",
+    "getText": "get_",
+    "select_option": "select_",
 }
 
 
@@ -185,3 +188,210 @@ async def polish_method_names(
     except Exception as e:
         print(f"LLM method-name polish failed, keeping heuristic names: {e}")
         return heuristic_names, "heuristic"
+
+
+_FIX_ALLOWED_STRATEGIES = (
+    "get_by_test_id", "get_by_label", "get_by_role", "get_by_text",
+    "locator (CSS)", "locator (XPath)",
+)
+
+
+def _build_fix_request(element: Dict[str, Any], failed_attempts: List[Dict[str, str]]) -> Tuple[str, str]:
+    def snip(value: Any) -> str:
+        return str(value or "")[:200]
+
+    payload = {
+        "element": {
+            "tagName": element.get("tagName", ""),
+            "text": snip(element.get("text")),
+            "testId": snip(element.get("testId")),
+            "label": snip(element.get("label")),
+            "placeholder": snip(element.get("placeholder")),
+            "role": snip(element.get("role")),
+            "cssSelector": snip(element.get("cssSelector")),
+            "xpath": snip(element.get("xpath")),
+        },
+        "failedAttempts": [
+            {"strategy": a.get("strategy", ""), "selector": snip(a.get("selector")), "error": snip(a.get("error"))}
+            for a in failed_attempts
+        ],
+    }
+
+    system_instruction = (
+        "You are fixing a broken Playwright locator. Every candidate locator already "
+        "tried for this element has failed (see failedAttempts, each with the error "
+        "it raised). Given the element's metadata, propose 1-2 alternative locators "
+        "that are likely to match the SAME element.\n"
+        "Rules:\n"
+        "1. Return ONLY a raw JSON array of 1-2 objects: {\"strategy\": ..., \"selector\": ...}.\n"
+        f"2. \"strategy\" must be exactly one of: {', '.join(_FIX_ALLOWED_STRATEGIES)}.\n"
+        "3. For \"get_by_role\", \"selector\" must be formatted as role[name=\"...\"] "
+        "(e.g. button[name=\"Submit\"]).\n"
+        "4. Do not repeat any (strategy, selector) pair already present in failedAttempts.\n"
+        "5. No markdown, no code fences, no commentary — raw JSON only."
+    )
+    return json.dumps(payload), system_instruction
+
+
+async def propose_locator_fix(
+    element: Dict[str, Any], failed_attempts: List[Dict[str, str]]
+) -> Tuple[List[Dict[str, str]], str]:
+    """
+    Asks Gemini for alternative locator candidates after every ranked candidate
+    has failed live verification. Fails open: returns ([], "heuristic") on any
+    error, timeout, or missing API key. The returned candidates are RAW and
+    UNVALIDATED — the caller must re-validate strategy/selector shape (see
+    services/browser.py's _validate_locator_fixes) before trying any of them.
+    """
+    if not failed_attempts or not settings.GEMINI_API_KEY:
+        return [], "heuristic"
+
+    contents, system_instruction = _build_fix_request(element, failed_attempts)
+
+    def _call() -> str:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.1,
+            ),
+        )
+        return response.text
+
+    try:
+        raw = await asyncio.wait_for(asyncio.to_thread(_call), timeout=20)
+        parsed = json.loads(_strip_code_fences(raw))
+        if not isinstance(parsed, list):
+            raise ValueError("LLM response shape mismatch")
+        return parsed, "llm"
+    except Exception as e:
+        print(f"LLM locator-fix proposal failed, no fix available: {e}")
+        return [], "heuristic"
+
+
+_EXPLORE_ALLOWED_ACTIONS = ("click", "fill", "type", "hover", "check", "select_option", "finish")
+
+_FINISH_DECISION = {"action": "finish", "elementIndex": None, "value": None, "reasoning": "", "finishReason": ""}
+
+
+def _build_explore_request(
+    url: str, candidates: List[Dict[str, Any]], history: List[Dict[str, Any]], goal_prompt: Optional[str]
+) -> Tuple[str, str]:
+    def snip(value: Any) -> str:
+        return str(value or "")[:80]
+
+    candidate_rows = []
+    for idx, (_frame, item, _chain) in enumerate(candidates):
+        row = {
+            "index": idx,
+            "tag": item.get("tagName", ""),
+            "action": item.get("action", ""),
+            "text": snip(item.get("text") or item.get("value")),
+            "label": snip(item.get("label") or item.get("placeholder") or item.get("associatedLabel")),
+            "disabled": bool(item.get("disabled")),
+        }
+        if item.get("options"):
+            row["options"] = item["options"][:20]
+        candidate_rows.append(row)
+
+    payload = {
+        "url": url,
+        "goal": goal_prompt.strip() if goal_prompt and goal_prompt.strip() else "Discover and interact with as much of this page's UI as possible.",
+        "candidates": candidate_rows,
+        "recentHistory": history[-15:],
+    }
+
+    system_instruction = (
+        "You are autonomously exploring a web page through Playwright, one action at a time, "
+        "to discover as much of its interactive UI as possible.\n"
+        "You will be given the current URL, your goal, a list of candidate elements (each with an "
+        "index, tag, suggested action, visible text/label, and whether it's disabled), and a log of "
+        "your recent actions so far.\n"
+        "Rules:\n"
+        "1. Pick exactly ONE candidate by its index and ONE action to perform on it.\n"
+        f"2. \"action\" must be exactly one of: {', '.join(_EXPLORE_ALLOWED_ACTIONS)}.\n"
+        "3. You CANNOT click/check/select_option a disabled element directly — if you want to enable "
+        "one, first find and fill nearby fields that look required (e.g. empty text/email inputs).\n"
+        "4. For \"fill\" or \"type\", supply a plausible, realistic \"value\" (e.g. a real-looking email, "
+        "name, or number matching the field's apparent purpose).\n"
+        "5. For \"select_option\", set \"value\" to one of the candidate's \"options\" values.\n"
+        "6. Prefer candidates you haven't already tried (see recentHistory) and actions likely to reveal "
+        "new UI (expanding sections, opening menus, filling forms to unlock buttons).\n"
+        "7. If you believe you've reasonably explored what's available, or no candidate looks useful, "
+        "set \"action\" to \"finish\".\n"
+        "8. Return ONLY a raw JSON object: {\"reasoning\": \"...\", \"elementIndex\": <int or null>, "
+        "\"action\": \"...\", \"value\": \"...\" or null, \"finishReason\": \"...\" or null}. "
+        "No markdown, no code fences, no commentary."
+    )
+    return json.dumps(payload), system_instruction
+
+
+async def decide_next_exploration_step(
+    url: str, candidates: List[Any], history: List[Dict[str, Any]], goal_prompt: Optional[str]
+) -> Dict[str, Any]:
+    """
+    Asks Gemini which single action to take next during autonomous page
+    exploration. Fails open: any error, timeout, missing API key, or malformed/
+    out-of-range response returns an implicit {"action": "finish"} decision so
+    the exploration loop ends gracefully instead of crashing or hanging.
+    """
+    if not candidates or not settings.GEMINI_API_KEY:
+        return dict(_FINISH_DECISION)
+
+    contents, system_instruction = _build_explore_request(url, candidates, history, goal_prompt)
+
+    def _call() -> str:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.2,
+            ),
+        )
+        return response.text
+
+    try:
+        raw = await asyncio.wait_for(asyncio.to_thread(_call), timeout=20)
+        parsed = json.loads(_strip_code_fences(raw))
+        if not isinstance(parsed, dict):
+            raise ValueError("LLM response shape mismatch")
+
+        action = parsed.get("action")
+        if action not in _EXPLORE_ALLOWED_ACTIONS:
+            raise ValueError(f"Unknown action: {action}")
+
+        if action == "finish":
+            return {
+                "action": "finish", "elementIndex": None, "value": None,
+                "reasoning": str(parsed.get("reasoning") or ""),
+                "finishReason": str(parsed.get("finishReason") or ""),
+            }
+
+        element_index = parsed.get("elementIndex")
+        if not isinstance(element_index, int) or element_index < 0 or element_index >= len(candidates):
+            raise ValueError(f"elementIndex out of range: {element_index}")
+
+        value = parsed.get("value")
+        if value is not None and not isinstance(value, str):
+            value = str(value)
+
+        return {
+            "action": action,
+            "elementIndex": element_index,
+            "value": value,
+            "reasoning": str(parsed.get("reasoning") or ""),
+            "finishReason": None,
+        }
+    except Exception as e:
+        print(f"LLM exploration-step decision failed, stopping exploration: {e}")
+        return dict(_FINISH_DECISION)

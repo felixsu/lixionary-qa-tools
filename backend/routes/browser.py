@@ -501,6 +501,8 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
                 if url:
                     await page.goto(url)
             elif action == "toggle-inspect":
+                if active_session and (active_session.get("verify_in_progress") or active_session.get("explore_in_progress")):
+                    continue
                 enabled = cmd.get("enabled", False)
                 await BrowserSessionManager.set_inspect_mode(session_id, enabled)
                 if not enabled:
@@ -539,11 +541,38 @@ async def browser_session_websocket(websocket: WebSocket, session_id: str):
                     _session["anchor_frame"] = None
                 await send_to_client({"type": "anchor_cleared"})
             elif action == "scan-page":
+                if active_session and (active_session.get("verify_in_progress") or active_session.get("explore_in_progress")):
+                    continue
                 scan_scope = cmd.get("scope", "page")
                 await send_to_client({"type": "page_scan_started", "data": {"scope": scan_scope}})
                 # Run in the background so the WS receive loop stays responsive
                 # during the multi-second scan + LLM naming pass.
                 asyncio.create_task(BrowserSessionManager.run_page_scan(session_id, scan_scope))
+            elif action == "verify":
+                if active_session and (active_session.get("verify_in_progress") or active_session.get("explore_in_progress")):
+                    continue
+                verify_action = cmd.get("verifyAction")
+                locators = cmd.get("locators") or []
+                value = cmd.get("value")
+                element = cmd.get("element")
+                await send_to_client({"type": "verify_started", "data": {"action": verify_action}})
+                # Run in the background so the WS receive loop stays responsive
+                # during the multi-attempt sequence + potential LLM fallback call.
+                asyncio.create_task(
+                    BrowserSessionManager.run_element_verify(session_id, verify_action, locators, value, element)
+                )
+            elif action == "explore":
+                if active_session and (active_session.get("verify_in_progress") or active_session.get("explore_in_progress")):
+                    continue
+                explore_prompt = cmd.get("prompt")
+                explore_scope = cmd.get("scope", "page")
+                await send_to_client({"type": "explore_started", "data": {}})
+                # Run in the background so the WS receive loop stays responsive
+                # (and stop-explore can be received) during the multi-minute loop.
+                asyncio.create_task(BrowserSessionManager.run_page_exploration(session_id, explore_prompt, explore_scope))
+            elif action == "stop-explore":
+                if active_session:
+                    active_session["explore_cancelled"] = True
             elif action == "click":
                 selector = cmd.get("selector")
                 if selector:

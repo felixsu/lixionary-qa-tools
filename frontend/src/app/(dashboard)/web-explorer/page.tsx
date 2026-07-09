@@ -5,7 +5,7 @@ import {
   Globe, Terminal, Eye, Crosshair, Download, Trash2, Plus, FileCode, Play,
   Save, File, Folder, XCircle, Rows, Lock, X, Layers, Code2, Clipboard, Activity,
   ChevronDown, ChevronUp, RotateCcw, Copy, Mail, Anchor, Loader2, ScanSearch,
-  CheckCircle2, AlertCircle,
+  CheckCircle2, AlertCircle, Sparkles, StopCircle,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
@@ -103,6 +103,19 @@ export default function WebExplorerPage() {
     setSelectedElementAction,
     selectedElementMethodName,
     setSelectedElementMethodName,
+    selectedElementTestValue,
+    setSelectedElementTestValue,
+    isVerifying,
+    verifyAttempts,
+    verifyResult,
+    handleVerifyElement,
+    isExploring,
+    exploreSteps,
+    setExploreSteps,
+    explorePrompt,
+    setExplorePrompt,
+    handleStartExplore,
+    handleStopExplore,
     activeGenCodeTab,
     setActiveGenCodeTab,
     generatedPomCode,
@@ -143,6 +156,21 @@ export default function WebExplorerPage() {
     handleSwitchTab,
     handleCloseTab,
   } = useAppContext();
+
+  // While verifying an inspected element (or running an autonomous Explore
+  // session), the noVNC view must be watch-only — the automation is really
+  // driving the tab, so the user shouldn't be able to fight it for control.
+  // Changing the iframe src forces noVNC to reconnect (brief flicker), which
+  // is an accepted tradeoff over patching the VNC container's static assets
+  // for a runtime toggle.
+  //
+  // IMPORTANT: always pass view_only explicitly (0 or 1), never omit it.
+  // noVNC's own webutil.js falls back to (and re-persists into) localStorage
+  // for this origin whenever the URL doesn't specify it — so omitting the
+  // param once we're done verifying/exploring doesn't "unset" it, it silently
+  // inherits whatever was last stored, permanently wedging every future
+  // session read-only until that stale localStorage entry is overwritten.
+  const effectiveVncUrl = vncUrl ? `${vncUrl}&view_only=${(isVerifying || isExploring) ? 1 : 0}` : vncUrl;
 
   const [workspaceFiles, setWorkspaceFiles] = useState<{ name: string; size: number; updatedAt: string }[]>([]);
   const [limitExceededModalOpen, setLimitExceededModalOpen] = useState(false);
@@ -728,6 +756,39 @@ export default function WebExplorerPage() {
   const [scanSelections, setScanSelections] = useState<Record<number, { checked: boolean; name: string }>>({});
   const [isRecordingScan, setIsRecordingScan] = useState(false);
   const [showScanMenu, setShowScanMenu] = useState(false);
+  const [showExploreMenu, setShowExploreMenu] = useState(false);
+  const [exploreScope, setExploreScope] = useState<"page" | "selected">("page");
+  const scanMenuRef = useRef<HTMLDivElement>(null);
+  const exploreMenuRef = useRef<HTMLDivElement>(null);
+  const sessionsMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close the Scan/Explore/Sessions dropdowns on an outside click or Escape.
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (scanMenuRef.current && !scanMenuRef.current.contains(e.target as Node)) {
+        setShowScanMenu(false);
+      }
+      if (exploreMenuRef.current && !exploreMenuRef.current.contains(e.target as Node)) {
+        setShowExploreMenu(false);
+      }
+      if (sessionsMenuRef.current && !sessionsMenuRef.current.contains(e.target as Node)) {
+        setShowSessionsDropdown(false);
+      }
+    }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setShowScanMenu(false);
+        setShowExploreMenu(false);
+        setShowSessionsDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
 
   useEffect(() => {
     if (!pageScanResults) {
@@ -1418,7 +1479,9 @@ export default function WebExplorerPage() {
             </button>
             <button
               onClick={handleToggleInspect}
-              className="h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border"
+              disabled={isVerifying || isExploring}
+              title={isVerifying ? "Inspect is disabled while verification is running" : isExploring ? "Inspect is disabled while exploration is running" : undefined}
+              className="h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border disabled:opacity-60"
               style={
                 inspectMode
                   ? { background: "rgba(204,120,92,0.12)", borderColor: "rgba(204,120,92,0.4)", color: "#cc785c" }
@@ -1428,11 +1491,11 @@ export default function WebExplorerPage() {
               <Crosshair className="h-3.5 w-3.5" />
               {inspectMode ? "Inspecting" : "Inspect"}
             </button>
-            <div className="relative">
+            <div className="relative" ref={scanMenuRef}>
               <button
                 onClick={() => setShowScanMenu((v) => !v)}
-                disabled={pageScanStatus === "scanning"}
-                title="Detect interactive elements and propose POM methods"
+                disabled={pageScanStatus === "scanning" || isVerifying || isExploring}
+                title={isVerifying ? "Scan is disabled while verification is running" : isExploring ? "Scan is disabled while exploration is running" : "Detect interactive elements and propose POM methods"}
                 className="h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border bg-transparent border-line text-graphite hover:bg-panel disabled:opacity-60"
               >
                 {pageScanStatus === "scanning" ? (
@@ -1467,8 +1530,77 @@ export default function WebExplorerPage() {
                 </div>
               )}
             </div>
+            <div className="relative" ref={exploreMenuRef}>
+              {isExploring ? (
+                <button
+                  onClick={handleStopExplore}
+                  title="Stop exploration and keep whatever was discovered so far"
+                  className="h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border bg-red-50 border-red-300 text-red-700 hover:bg-red-100"
+                >
+                  <StopCircle className="h-3.5 w-3.5" />
+                  Exploring… step {exploreSteps.length} (Stop)
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowExploreMenu((v) => !v)}
+                  disabled={isVerifying}
+                  title="Let AI autonomously click/fill around the page to discover interactive elements"
+                  className="h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border bg-transparent border-line text-graphite hover:bg-panel disabled:opacity-60"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Explore
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+              )}
+              {showExploreMenu && !isExploring && (
+                <div className="absolute right-0 top-full mt-1 w-[280px] bg-cream border border-line rounded-xl shadow-[0_8px_24px_rgba(20,20,19,0.12)] z-50 p-3 flex flex-col gap-2">
+                  <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">Scope</label>
+                  <div className="flex rounded-md border border-line overflow-hidden">
+                    <button
+                      onClick={() => setExploreScope("page")}
+                      className={`flex-1 h-7 text-[11px] font-medium transition-colors ${exploreScope === "page" ? "bg-clay text-white" : "bg-panel text-graphite hover:bg-line"}`}
+                    >
+                      Entire page
+                    </button>
+                    <button
+                      onClick={() => selectedElement && setExploreScope("selected")}
+                      disabled={!selectedElement}
+                      title={selectedElement ? undefined : "Inspect & click a parent element first"}
+                      className={`flex-1 h-7 text-[11px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${exploreScope === "selected" ? "bg-clay text-white" : "bg-panel text-graphite hover:bg-line"}`}
+                    >
+                      Selected element
+                    </button>
+                  </div>
+                  {exploreScope === "selected" && selectedElement && (
+                    <p className="text-[11px] text-mute -mt-1">
+                      Restricted to &lt;{selectedElement.tagName}&gt; {String(selectedElement.text || "").slice(0, 30)}
+                    </p>
+                  )}
+                  <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">
+                    What should the AI explore? (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={explorePrompt}
+                    onChange={(e) => setExplorePrompt(e.target.value)}
+                    placeholder="e.g. explore the checkout flow"
+                    className="h-8 bg-panel border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay"
+                  />
+                  <p className="text-[11px] text-mute">
+                    Runs for a few minutes, clicking/filling around the page for real. Destructive-looking
+                    actions (delete, pay, log out, etc.) are automatically skipped, and it won't leave this site.
+                  </p>
+                  <button
+                    onClick={() => { setShowExploreMenu(false); handleStartExplore(exploreScope); }}
+                    className="h-8 bg-clay hover:bg-clay-dark rounded-lg text-xs font-semibold text-white transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <Sparkles className="h-3.5 w-3.5" /> Start Exploring
+                  </button>
+                </div>
+              )}
+            </div>
             {/* Sessions dropdown */}
-            <div className="relative">
+            <div className="relative" ref={sessionsMenuRef}>
               <button
                 onClick={() => { setShowSessionsDropdown((v) => !v); fetchUserSessions(); }}
                 className="h-[34px] px-3 bg-cream border border-line rounded-lg text-[13px] text-graphite hover:bg-panel transition-colors flex items-center gap-1.5"
@@ -1628,7 +1760,7 @@ export default function WebExplorerPage() {
                   )}
                   <div className="relative flex-1 w-full overflow-hidden">
                     {vncUrl ? (
-                      <iframe src={vncUrl} className="w-full h-full border-none" title="VNC Browser Frame" />
+                      <iframe src={effectiveVncUrl} className="w-full h-full border-none" title="VNC Browser Frame" />
                     ) : (
                       <div className="flex h-full w-full items-center justify-center text-cream/40 text-xs">
                         VNC session initialized. Loading canvas…
@@ -1674,7 +1806,7 @@ export default function WebExplorerPage() {
                     )}
                     <div className="relative flex-1 w-full overflow-hidden">
                       {vncUrl ? (
-                        <iframe src={vncUrl} className="w-full h-full border-none" title="VNC Browser Frame" />
+                        <iframe src={effectiveVncUrl} className="w-full h-full border-none" title="VNC Browser Frame" />
                       ) : (
                         <div className="flex h-full w-full items-center justify-center text-cream/40 text-xs">
                           VNC session initialized. Loading canvas…
@@ -1731,6 +1863,35 @@ export default function WebExplorerPage() {
                   >
                     <X className="h-3 w-3" />
                   </button>
+                </div>
+              )}
+
+              {/* Explore live step log */}
+              {(isExploring || exploreSteps.length > 0) && (
+                <div className="absolute bottom-4 left-4 z-40 w-96 max-h-64 bg-cream border border-line rounded-xl shadow-[0_12px_24px_rgba(20,20,19,0.15)] flex flex-col overflow-hidden">
+                  <div className="px-3 py-2 border-b border-line bg-panel flex items-center justify-between flex-shrink-0">
+                    <span className="text-xs font-semibold uppercase tracking-[0.08em] text-ink flex items-center gap-2">
+                      <Sparkles className="h-3.5 w-3.5 text-clay" />
+                      {isExploring ? "Exploring…" : "Exploration finished"} ({exploreSteps.length} steps)
+                    </span>
+                    {!isExploring && (
+                      <button
+                        onClick={() => setExploreSteps([])}
+                        className="h-5 w-5 rounded-md hover:bg-line flex items-center justify-center transition-colors"
+                      >
+                        <X className="h-3.5 w-3.5 text-mute hover:text-graphite" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex-1 overflow-y-auto px-3 py-2 text-[11px] font-mono flex flex-col gap-1">
+                    {exploreSteps.map((s, i) => (
+                      <div key={i} className={s.success === false ? "text-red-600" : "text-graphite"}>
+                        #{s.step} {s.action}
+                        {s.elementSummary ? `: ${s.elementSummary}` : ""}
+                        {s.success === false && s.error ? ` — ${s.error}` : ""}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -1911,13 +2072,28 @@ export default function WebExplorerPage() {
                         className="h-8 px-2.5 rounded-md text-xs text-ink bg-cream"
                         options={[
                           { value: "click", label: "Click" },
-                          { value: "fill", label: "Fill / Type" },
+                          { value: "fill", label: "Fill" },
+                          { value: "type", label: "Type" },
                           { value: "hover", label: "Hover" },
                           { value: "check", label: "Check" },
                           { value: "select_option", label: "Select option" },
+                          { value: "getText", label: "Get Text" },
                         ]}
                       />
                     </div>
+
+                    {["fill", "type", "select_option"].includes(selectedElementAction) && (
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">Test value</label>
+                        <input
+                          type="text"
+                          value={selectedElementTestValue}
+                          onChange={(e) => setSelectedElementTestValue(e.target.value)}
+                          placeholder={selectedElementAction === "select_option" ? "option value attribute" : "sample value to type/fill"}
+                          className="h-8 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay font-mono"
+                        />
+                      </div>
+                    )}
 
                     <div className="flex flex-col gap-1">
                       <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">Locator strategy</label>
@@ -1956,12 +2132,38 @@ export default function WebExplorerPage() {
                         <Anchor className="h-3.5 w-3.5 text-green-600" /> Set as Anchor
                       </button>
                       <button
+                        onClick={handleVerifyElement}
+                        disabled={isVerifying}
+                        title="Try this action + locator live against the browser before recording it"
+                        className="flex-1 h-9 bg-panel border border-line hover:border-blue-500 rounded-lg text-xs font-semibold text-ink transition-colors flex items-center justify-center gap-1.5 disabled:opacity-60"
+                      >
+                        {isVerifying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5 text-blue-600" />}
+                        {isVerifying ? "Verifying…" : "Verify"}
+                      </button>
+                      <button
                         onClick={handleRecordElementToPOM}
                         className="flex-1 h-9 bg-clay hover:bg-clay-dark rounded-lg text-xs font-semibold text-white transition-colors shadow-sm flex items-center justify-center gap-1.5"
                       >
                         <Save className="h-3.5 w-3.5" /> Record
                       </button>
                     </div>
+
+                    {(verifyAttempts.length > 0 || verifyResult) && (
+                      <div className="px-3 py-2 bg-panel rounded-lg border border-line text-[11px] font-mono max-h-28 overflow-y-auto">
+                        {verifyAttempts.map((a, i) => (
+                          <div key={i} className={a.status === "success" ? "text-green-700" : "text-mute"}>
+                            {a.source === "llm" ? "🤖 " : ""}{a.strategy}: {a.status}{a.error ? ` — ${a.error}` : ""}
+                          </div>
+                        ))}
+                        {verifyResult && (
+                          <div className={verifyResult.success ? "text-green-700 font-semibold mt-1" : "text-red-600 font-semibold mt-1"}>
+                            {verifyResult.success
+                              ? `✅ Verified${verifyResult.resultText ? `: "${verifyResult.resultText}"` : ""}`
+                              : "❌ All candidates failed"}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

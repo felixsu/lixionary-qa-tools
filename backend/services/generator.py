@@ -13,10 +13,14 @@ class {{ class_name }}:
         {% if parent_locator %}self._frame = self.page.frame_locator('{{ parent_locator }}'){% endif %}
 
     {% for method in methods %}
-    def {{ method.name }}(self, {% if method.action == 'fill' %}value: str{% endif %}) -> None:
+    def {{ method.name }}(self, {% if method.action in ('fill', 'type') %}value: str{% endif %}) -> {% if method.action == 'getText' %}str{% else %}None{% endif %}:
         \"\"\"{{ method.docstring if method.docstring else 'Perform action on element.' }}\"\"\"
         {% set target = "self._frame" if parent_locator else "self.page" %}
-        {{ target }}{{ method.frame_chain }}.{{ method.strategy }}({% if method.strategy_args %}{{ method.strategy_args }}{% else %}"{{ method.selector }}"{% endif %}).{{ method.action }}({% if method.action == 'fill' %}value{% endif %})
+        {% if method.action == 'getText' %}
+        return {{ target }}{{ method.frame_chain }}.{{ method.strategy }}({% if method.strategy_args %}{{ method.strategy_args }}{% else %}"{{ method.selector }}"{% endif %}).{{ method.playwright_call }}()
+        {% else %}
+        {{ target }}{{ method.frame_chain }}.{{ method.strategy }}({% if method.strategy_args %}{{ method.strategy_args }}{% else %}"{{ method.selector }}"{% endif %}).{{ method.playwright_call }}({% if method.action in ('fill', 'type') %}value{% endif %})
+        {% endif %}
 
     {% endfor %}
 """
@@ -52,13 +56,21 @@ def build_pom_method_code(method_name: str, action: str, strategy: str, selector
         docstring += f" (inside iframe: {' -> '.join(frame_locators)})"
 
     sig_args = "self"
-    if action == "fill":
+    if action in ("fill", "type"):
         sig_args += ", value: str"
 
-    method_body = f"    def {method_name}({sig_args}) -> None:\n"
+    return_type = "str" if action == "getText" else "None"
+    # type maps to Playwright's press_sequentially (real key-by-key input,
+    # unlike fill()); getText maps to inner_text() and returns its result.
+    playwright_call = {"type": "press_sequentially", "getText": "inner_text"}.get(action, action)
+
+    method_body = f"    def {method_name}({sig_args}) -> {return_type}:\n"
     method_body += f'        """{docstring}"""\n'
-    call_args = 'value' if action == 'fill' else ''
-    method_body += f'        self.page{frame_chain}.{strategy}({strategy_args}).{action}({call_args})\n'
+    if action == "getText":
+        method_body += f'        return self.page{frame_chain}.{strategy}({strategy_args}).{playwright_call}()\n'
+    else:
+        call_args = 'value' if action in ('fill', 'type') else ''
+        method_body += f'        self.page{frame_chain}.{strategy}({strategy_args}).{playwright_call}({call_args})\n'
     return method_body
 
 
@@ -118,7 +130,8 @@ def generate_pom_class(class_name: str, url: str, parent_locator: str, elements:
             "selector": selector,
             "strategy_args": strategy_args,
             "frame_chain": frame_chain,
-            "docstring": docstring
+            "docstring": docstring,
+            "playwright_call": {"type": "press_sequentially", "getText": "inner_text"}.get(action, action),
         })
 
     t = Template(POM_TEMPLATE)

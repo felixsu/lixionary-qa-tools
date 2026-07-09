@@ -331,6 +331,19 @@ interface AppContextType {
   setSelectedElementAction: (action: string) => void;
   selectedElementMethodName: string;
   setSelectedElementMethodName: (name: string) => void;
+  selectedElementTestValue: string;
+  setSelectedElementTestValue: (value: string) => void;
+  isVerifying: boolean;
+  verifyAttempts: any[];
+  verifyResult: { success: boolean; resultText?: string } | null;
+  handleVerifyElement: () => void;
+  isExploring: boolean;
+  exploreSteps: any[];
+  setExploreSteps: React.Dispatch<React.SetStateAction<any[]>>;
+  explorePrompt: string;
+  setExplorePrompt: (prompt: string) => void;
+  handleStartExplore: (scope?: "page" | "selected") => void;
+  handleStopExplore: () => void;
   activeGenCodeTab: "pom" | "client";
   setActiveGenCodeTab: (tab: "pom" | "client") => void;
   generatedPomCode: string;
@@ -500,6 +513,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [pageScanScopeLabel, setPageScanScopeLabel] = useState<string | null>(null);
   const [selectedElementAction, setSelectedElementAction] = useState("click");
   const [selectedElementMethodName, setSelectedElementMethodName] = useState("");
+  const [selectedElementTestValue, setSelectedElementTestValue] = useState("");
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verifyAttempts, setVerifyAttempts] = useState<any[]>([]);
+  const [verifyResult, setVerifyResult] = useState<{ success: boolean; resultText?: string } | null>(null);
+  const [isExploring, setIsExploring] = useState(false);
+  const [exploreSteps, setExploreSteps] = useState<any[]>([]);
+  const [explorePrompt, setExplorePrompt] = useState("");
   const [anchorElement, setAnchorElement] = useState<{ tagName: string; id: string; text: string } | null>(null);
   const [activeGenCodeTab, setActiveGenCodeTab] = useState<"pom" | "client">("pom");
   const [generatedPomCode, setGeneratedPomCode] = useState("");
@@ -878,16 +898,47 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             )
           );
           break;
-        case "element_selected":
+        case "element_selected": {
           setSelectedElement(msg.data.element);
           setSelectedElementLocators(msg.data.locators);
           setSelectedElementStale({ stale: !!msg.data.stale, reason: msg.data.staleReason || null });
+          setSelectedElementTestValue("");
+          setIsVerifying(false);
+          setVerifyAttempts([]);
+          setVerifyResult(null);
           if (msg.data.locators.length) {
-            setSelectedElementMethodName(`click_${msg.data.element.tagName}_${msg.data.locators[0].strategy}`);
+            const actionPrefixes: Record<string, string> = {
+              click: "click", fill: "fill", type: "type", check: "check",
+              select_option: "select", hover: "hover", getText: "get",
+            };
+            const prefix = actionPrefixes[selectedElementAction] || "click";
+            setSelectedElementMethodName(`${prefix}_${msg.data.element.tagName}_${msg.data.locators[0].strategy}`);
           }
           break;
+        }
         case "element_selected_error":
           setInspectError(msg.data.message || "Failed to inspect element");
+          break;
+        case "verify_started":
+          setIsVerifying(true);
+          setVerifyAttempts([]);
+          setVerifyResult(null);
+          break;
+        case "verify_attempt":
+          setVerifyAttempts((prev) => [...prev, msg.data]);
+          break;
+        case "verify_result":
+          setIsVerifying(false);
+          setVerifyResult({ success: msg.data.success, resultText: msg.data.resultText });
+          if (msg.data.success && msg.data.winningLocator) {
+            const winner = msg.data.winningLocator;
+            setSelectedElementLocators((prev) => {
+              const idx = prev.findIndex((l) => l.strategy === winner.strategy && l.selector === winner.selector);
+              if (idx > 0) return [prev[idx], ...prev.filter((_, i) => i !== idx)];
+              if (idx === -1) return [winner, ...prev];
+              return prev;
+            });
+          }
           break;
         case "page_scan_started":
           setPageScanStatus("scanning");
@@ -900,6 +951,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           break;
         case "page_scan_error":
           setPageScanError(msg.data.message || "Page scan failed");
+          setPageScanStatus("error");
+          break;
+        case "explore_started":
+          setIsExploring(true);
+          setExploreSteps([]);
+          setPageScanResults(null);
+          setPageScanScopeLabel(null);
+          setPageScanError(null);
+          setPageScanStatus("scanning");
+          break;
+        case "explore_step":
+          setExploreSteps((prev) => [...prev, msg.data]);
+          break;
+        case "explore_result":
+          setIsExploring(false);
+          // Reuse the Scan result slots so the existing review drawer picks this up unchanged.
+          setPageScanResults(msg.data.elements);
+          setPageScanScopeLabel(msg.data.scopeLabel || null);
+          setPageScanStatus("done");
+          break;
+        case "explore_error":
+          setIsExploring(false);
+          setPageScanError(msg.data.message || "Exploration failed");
           setPageScanStatus("error");
           break;
         case "anchor_set":
@@ -924,6 +998,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setPageScanError(null);
       setPageScanResults(null);
       setPageScanScopeLabel(null);
+      // Don't leave the VNC view stuck watch-only if the connection drops
+      // mid-Verify/Explore — there'd be no other signal left to clear these.
+      setIsVerifying(false);
+      setIsExploring(false);
       fetchUserSessions();
     };
 
@@ -1093,11 +1171,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const handleVerifyElement = () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!selectedElementLocators.length) return;
+    wsRef.current.send(JSON.stringify({
+      action: "verify",
+      verifyAction: selectedElementAction,
+      locators: selectedElementLocators.map((l) => ({ strategy: l.strategy, selector: l.selector })),
+      value: ["fill", "type", "select_option"].includes(selectedElementAction) ? selectedElementTestValue : undefined,
+      element: selectedElement,
+    }));
+  };
+
   const resetPageScan = () => {
     setPageScanStatus("idle");
     setPageScanError(null);
     setPageScanResults(null);
     setPageScanScopeLabel(null);
+  };
+
+  const handleStartExplore = (scope: "page" | "selected" = "page") => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ action: "explore", prompt: explorePrompt, scope }));
+  };
+
+  const handleStopExplore = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action: "stop-explore" }));
+    }
+    // Unlock the VNC view and toolbar immediately rather than waiting for the
+    // backend's finalization pass (resolving + naming every discovered element,
+    // which can take several seconds) to send explore_result/explore_error.
+    // Finalization only counts/reads locators and calls Gemini — it never
+    // drives the live page — so it's safe to hand control back to the user
+    // right away; pageScanStatus stays "scanning" until the real result lands,
+    // which still keeps the Scan button disabled to avoid a result-overwrite race.
+    setIsExploring(false);
   };
 
   const handleClearNetworkLogs = () => {
@@ -1869,6 +1978,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setSelectedElementAction,
         selectedElementMethodName,
         setSelectedElementMethodName,
+        selectedElementTestValue,
+        setSelectedElementTestValue,
+        isVerifying,
+        verifyAttempts,
+        verifyResult,
+        handleVerifyElement,
+        isExploring,
+        exploreSteps,
+        setExploreSteps,
+        explorePrompt,
+        setExplorePrompt,
+        handleStartExplore,
+        handleStopExplore,
         activeGenCodeTab,
         setActiveGenCodeTab,
         generatedPomCode,
