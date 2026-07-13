@@ -29,40 +29,6 @@ const statusStyle = (status: number | null): React.CSSProperties => {
   if (status < 400) return { background: "#e3f5e9", color: "#276749" };
   return { background: "#fde8e8", color: "#c64545" };
 };
-
-const DEFAULT_PROFILE_COOKIES = `[
-  {
-    "name": "ninja_access_token",
-    "value": "YOUR_TOKEN",
-    "domain": ".ninjavan.co",
-    "path": "/",
-    "secure": true,
-    "sameSite": "Lax"
-  },
-  {
-    "name": "user",
-    "value": "%7B%22thirdPartyId%...",
-    "domain": ".ninjavan.co",
-    "path": "/",
-    "secure": true,
-    "sameSite": "Lax"
-  }
-]`;
-
-const DEFAULT_PROFILE_LOCAL_STORAGE = `{
-  "origins": [
-    {
-      "origin": "https://operatorv2-qa.ninjavan.co",
-      "localStorage": [
-        {
-          "name": "acceptedTnC",
-          "value": "true"
-        }
-      ]
-    }
-  ]
-}`;
-
 export default function WebExplorerPage() {
   const {
     browserUrl,
@@ -133,7 +99,6 @@ export default function WebExplorerPage() {
     profiles,
     selectedProfileId,
     setSelectedProfileId,
-    authFunctions,
     token,
     apiCall,
     handleBrowserNavigate,
@@ -145,8 +110,6 @@ export default function WebExplorerPage() {
     handleStartBrowser,
     handleDisconnectBrowser,
     handleLogClick,
-    handleSaveProfile,
-    handleDeleteProfile,
     userSessions,
     fetchUserSessions,
     handleCloseSession,
@@ -737,21 +700,6 @@ export default function WebExplorerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedWorkspaceFile]);
 
-  // Profile manager modal states
-  const [showProfileModal, setShowProfileModal] = useState(false);
-  const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
-  const [isCreatingProfile, setIsCreatingProfile] = useState(false);
-  const [profileName, setProfileName] = useState("");
-  const [profileCookies, setProfileCookies] = useState("");
-  const [profileLocalStorage, setProfileLocalStorage] = useState("");
-  const [rawLsOrigin, setRawLsOrigin] = useState("");
-  const [rawLsKey, setRawLsKey] = useState("");
-  const [rawLsValue, setRawLsValue] = useState("");
-  const [profileAuthFunctionId, setProfileAuthFunctionId] = useState<string>("");
-  const [profileAuthInjectionType, setProfileAuthInjectionType] = useState<"cookie" | "localStorage">("cookie");
-  const [profileAuthInjectionKey, setProfileAuthInjectionKey] = useState("");
-  const [profileAuthInjectionDomainOrOrigin, setProfileAuthInjectionDomainOrOrigin] = useState("");
-  const [profileDefaultUrl, setProfileDefaultUrl] = useState("");
   const [showNewClassModal, setShowNewClassModal] = useState(false);
   const [newClassName, setNewClassName] = useState("");
 
@@ -898,133 +846,6 @@ export default function WebExplorerPage() {
     setNewClassName("");
     setShowNewClassModal(false);
   };
-
-  // Lets users paste a raw target value (e.g. a transit/JSON blob that already
-  // contains literal backslashes) without hand-escaping it. Hand-typing such a
-  // value directly into the JSON textarea below is error-prone: JSON.parse
-  // (both the validation above and the backend's json.loads) treats `\"` as an
-  // escaped quote and silently drops the backslash. JSON.stringify here does
-  // the escaping correctly so the raw value round-trips byte-for-byte.
-  const handleInsertRawLocalStorageValue = () => {
-    if (!rawLsOrigin || !rawLsKey) {
-      alert("Origin and key are required.");
-      return;
-    }
-    let parsed: any;
-    try {
-      parsed = profileLocalStorage ? JSON.parse(profileLocalStorage) : { origins: [] };
-    } catch {
-      alert("The localStorage JSON above is currently invalid — fix or clear it before inserting.");
-      return;
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) parsed = { origins: [] };
-    if (!Array.isArray(parsed.origins)) parsed.origins = [];
-
-    const targetOrigin = rawLsOrigin.toLowerCase().replace(/\/$/, "");
-    let originEntry = parsed.origins.find(
-      (o: any) => (o?.origin || "").toLowerCase().replace(/\/$/, "") === targetOrigin
-    );
-    if (!originEntry) {
-      originEntry = { origin: rawLsOrigin, localStorage: [] };
-      parsed.origins.push(originEntry);
-    }
-    if (!Array.isArray(originEntry.localStorage)) originEntry.localStorage = [];
-    originEntry.localStorage = originEntry.localStorage.filter((kv: any) => kv?.name !== rawLsKey);
-    originEntry.localStorage.push({ name: rawLsKey, value: rawLsValue });
-
-    setProfileLocalStorage(JSON.stringify(parsed, null, 2));
-    setRawLsKey("");
-    setRawLsValue("");
-  };
-
-  const handleSaveProfileSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!profileName) return;
-    if (profileCookies) {
-      try { JSON.parse(profileCookies); } catch { alert("Cookies must be a valid JSON array or empty."); return; }
-    }
-    if (profileLocalStorage) {
-      try { JSON.parse(profileLocalStorage); } catch { alert("LocalStorage must be a valid JSON object or empty."); return; }
-    }
-    if (profileDefaultUrl) {
-      if (!profileDefaultUrl.startsWith("http://") && !profileDefaultUrl.startsWith("https://")) {
-        alert("Default URL must start with http:// or https://");
-        return;
-      }
-      try {
-        new URL(profileDefaultUrl);
-      } catch {
-        alert("Default URL must be a valid URL format.");
-        return;
-      }
-    }
-    try {
-      const authInjectionVal = profileAuthFunctionId
-        ? { type: profileAuthInjectionType, key: profileAuthInjectionKey, domainOrOrigin: profileAuthInjectionDomainOrOrigin }
-        : null;
-      await handleSaveProfile(profileName, profileCookies, profileLocalStorage, profileAuthFunctionId || null, authInjectionVal, profileDefaultUrl, editingProfileId);
-      handleClearProfileForm();
-      alert("Browser profile saved successfully!");
-    } catch (err: any) {
-      alert(err.message);
-    }
-  };
-
-  const handleOpenEditProfile = (profile: any) => {
-    setIsCreatingProfile(false);
-    setEditingProfileId(profile.id);
-    setProfileName(profile.name);
-    setProfileCookies(profile.cookies || "");
-    setProfileLocalStorage(profile.localStorage || "");
-    setProfileAuthFunctionId(profile.authFunctionId || "");
-    setProfileDefaultUrl(profile.defaultUrl || "");
-    if (profile.authInjection) {
-      setProfileAuthInjectionType(profile.authInjection.type || "cookie");
-      setProfileAuthInjectionKey(profile.authInjection.key || "");
-      setProfileAuthInjectionDomainOrOrigin(profile.authInjection.domainOrOrigin || "");
-    } else {
-      setProfileAuthInjectionType("cookie");
-      setProfileAuthInjectionKey("");
-      setProfileAuthInjectionDomainOrOrigin("");
-    }
-  };
-
-  const handleClearProfileForm = () => {
-    setEditingProfileId(null);
-    setIsCreatingProfile(false);
-    setProfileName("");
-    setProfileCookies("");
-    setProfileLocalStorage("");
-    setProfileAuthFunctionId("");
-    setProfileDefaultUrl("");
-    setProfileAuthInjectionType("cookie");
-    setProfileAuthInjectionKey("");
-    setProfileAuthInjectionDomainOrOrigin("");
-  };
-
-  const handleOpenCreateProfile = () => {
-    setEditingProfileId(null);
-    setProfileName("");
-    setProfileCookies(DEFAULT_PROFILE_COOKIES);
-    setProfileLocalStorage(DEFAULT_PROFILE_LOCAL_STORAGE);
-    setProfileAuthFunctionId("");
-    setProfileDefaultUrl("");
-    setProfileAuthInjectionType("cookie");
-    setProfileAuthInjectionKey("");
-    setProfileAuthInjectionDomainOrOrigin("");
-    setIsCreatingProfile(true);
-  };
-
-  useEffect(() => {
-    if (showProfileModal) {
-      if (profiles.length > 0) {
-        handleOpenEditProfile(profiles[0]);
-      } else {
-        handleClearProfileForm();
-      }
-    }
-  }, [showProfileModal]);
-
   const downloadFile = (content: string, filename: string) => {
     const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -1707,12 +1528,6 @@ export default function WebExplorerPage() {
                 ...profiles.map((p) => ({ value: p.id, label: p.name })),
               ]}
             />
-            <button
-              onClick={() => setShowProfileModal(true)}
-              className="h-[34px] px-3 bg-cream border border-line rounded-lg text-[13px] text-graphite hover:bg-panel transition-colors"
-            >
-              Manage profiles
-            </button>
             {/* Pre-connect: show existing sessions to reconnect */}
             {userSessions.length > 0 && (
               <div className="flex flex-col gap-1 border border-line rounded-lg px-3 py-2 max-w-[240px]">
@@ -2407,253 +2222,7 @@ export default function WebExplorerPage() {
         </ModalShell>
       )}
 
-      {/* Profiles manager modal */}
-      {showProfileModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(20,20,19,0.5)", backdropFilter: "blur(2px)" }}>
-          <div className="bg-cream rounded-2xl p-7 w-full max-w-4xl h-[620px] shadow-[0_24px_48px_-12px_rgba(20,20,19,0.18)] flex flex-col overflow-hidden">
-            <div className="flex items-center justify-between border-b border-line pb-4 flex-shrink-0">
-              <h2 className="m-0 font-serif text-xl font-medium text-ink">Browser profiles</h2>
-              <button
-                onClick={() => { setShowProfileModal(false); handleClearProfileForm(); }}
-                className="h-8 w-8 rounded-lg border border-line flex items-center justify-center hover:bg-panel transition-colors"
-              >
-                <X className="h-4 w-4 text-graphite" />
-              </button>
-            </div>
 
-            <div className="flex flex-1 overflow-hidden gap-6 pt-4">
-              {/* List */}
-              <div className="w-1/3 border-r border-line pr-4 flex flex-col overflow-hidden">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-mute">Profiles list</span>
-                  <button type="button" onClick={handleOpenCreateProfile} className="text-[10px] font-medium text-clay hover:text-clay-dark">
-                    Create
-                  </button>
-                </div>
-                <div className="flex-1 overflow-y-auto flex flex-col gap-2 pr-1">
-                  {profiles.length ? (
-                    profiles.map((p) => {
-                      const active = editingProfileId === p.id;
-                      return (
-                        <div
-                          key={p.id}
-                          className="p-3 rounded-xl border flex flex-col gap-2 transition-colors"
-                          style={active ? { background: "var(--color-hover)", borderColor: "var(--color-clay)" } : { background: "var(--color-cream)", borderColor: "var(--color-line)" }}
-                        >
-                          <div className="cursor-pointer" onClick={() => handleOpenEditProfile(p)}>
-                            <p className="text-xs font-medium text-ink">{p.name}</p>
-                            <p className="text-[10px] text-mute mt-1 font-mono truncate">ID: {p.id}</p>
-                          </div>
-                          <div className="flex justify-end gap-3 border-t border-line pt-2">
-                            <button onClick={() => handleOpenEditProfile(p)} className="text-[10px] font-medium text-clay hover:text-clay-dark">Edit</button>
-                            <button
-                              onClick={async () => {
-                                if (confirm("Delete this profile?")) {
-                                  await handleDeleteProfile(p.id);
-                                  if (editingProfileId === p.id) handleClearProfileForm();
-                                }
-                              }}
-                              className="text-[10px] font-medium text-danger hover:opacity-80"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <div className="text-center py-6 text-mute text-xs">No profiles configured.</div>
-                  )}
-                </div>
-              </div>
-
-              {/* Form */}
-              {editingProfileId || isCreatingProfile ? (
-              <form onSubmit={handleSaveProfileSubmit} className="w-2/3 flex flex-col overflow-hidden gap-4">
-                <div className="flex items-center justify-between flex-shrink-0">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-mute">
-                    {editingProfileId ? "Edit profile settings" : "Configure new profile"}
-                  </span>
-                  {editingProfileId && (
-                    <button type="button" onClick={handleOpenCreateProfile} className="text-[10px] font-medium text-clay hover:text-clay-dark">
-                      Create
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex-1 overflow-y-auto flex flex-col gap-4 pr-1">
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-[13px] font-medium text-graphite">Profile name</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Authenticated admin session"
-                      value={profileName}
-                      onChange={(e) => setProfileName(e.target.value)}
-                      required
-                      className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay"
-                    />
-                  </div>
-
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-[13px] font-medium text-graphite">Default URL</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. https://admin.ninjavan.co/orders"
-                      value={profileDefaultUrl}
-                      onChange={(e) => setProfileDefaultUrl(e.target.value)}
-                      className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay"
-                    />
-                  </div>
-
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-[13px] font-medium text-graphite">Inject cookies (JSON array)</label>
-                    <textarea
-                      rows={4}
-                      value={profileCookies}
-                      onChange={(e) => setProfileCookies(e.target.value)}
-                      placeholder='[{"name": "session", "value": "xyz", "domain": "example.com", "path": "/"}]'
-                      className="bg-cream border border-line rounded-lg p-3 font-mono text-xs text-graphite outline-none focus:border-clay resize-none"
-                    />
-                  </div>
-
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-[13px] font-medium text-graphite">Inject localStorage (JSON)</label>
-                    <textarea
-                      rows={5}
-                      value={profileLocalStorage}
-                      onChange={(e) => setProfileLocalStorage(e.target.value)}
-                      placeholder={'{\n  "origins": [\n    { "origin": "https://example.com", "localStorage": [{"name": "k", "value": "v"}] }\n  ]\n}'}
-                      className="bg-cream border border-line rounded-lg p-3 font-mono text-xs text-graphite outline-none focus:border-clay resize-none"
-                    />
-                    <div className="bg-panel p-3 rounded-lg border border-line flex flex-col gap-2">
-                      <span className="text-[11px] font-medium text-mute">
-                        Add a raw value (paste it literally — backslashes and quotes are escaped for you automatically)
-                      </span>
-                      <div className="grid grid-cols-2 gap-2">
-                        <input
-                          type="text"
-                          placeholder="Origin, e.g. https://example.com"
-                          value={rawLsOrigin}
-                          onChange={(e) => setRawLsOrigin(e.target.value)}
-                          className="h-8 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay"
-                        />
-                        <input
-                          type="text"
-                          placeholder="Key name"
-                          value={rawLsKey}
-                          onChange={(e) => setRawLsKey(e.target.value)}
-                          className="h-8 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay"
-                        />
-                      </div>
-                      <textarea
-                        rows={3}
-                        placeholder="Raw value, exactly as it should appear in localStorage"
-                        value={rawLsValue}
-                        onChange={(e) => setRawLsValue(e.target.value)}
-                        className="bg-cream border border-line rounded-md p-2.5 font-mono text-xs text-graphite outline-none focus:border-clay resize-none"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleInsertRawLocalStorageValue}
-                        className="self-end h-8 px-3 rounded-md border border-line text-xs font-medium text-graphite hover:border-clay hover:text-ink transition-colors"
-                      >
-                        Insert into JSON above
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="border-t border-line pt-3 flex flex-col gap-4">
-                    <h4 className="text-[11px] font-semibold text-clay uppercase tracking-[0.08em]">Auth hook integration</h4>
-                    <div className="flex flex-col gap-1.5">
-                      <label className="text-[13px] font-medium text-graphite">Link auth hook</label>
-                      <Dropdown
-                        value={profileAuthFunctionId}
-                        onChange={setProfileAuthFunctionId}
-                        placeholder="— No auth hook linked —"
-                        className="h-10 px-3 rounded-lg text-sm text-ink"
-                        options={[
-                          { value: "", label: "— No auth hook linked —" },
-                          ...authFunctions.map((f) => ({
-                            value: f.id,
-                            label: `${f.name} ${f.expires_in ? `(${f.expires_in}s TTL)` : "(default TTL)"}`,
-                          })),
-                        ]}
-                      />
-                    </div>
-
-                    {profileAuthFunctionId && (
-                      <div className="bg-panel p-3.5 rounded-xl border border-line flex flex-col gap-3">
-                        <div className="grid grid-cols-2 gap-3">
-                          <div className="flex flex-col gap-1.5">
-                            <label className="text-[13px] font-medium text-graphite">Injection type</label>
-                            <Dropdown
-                              value={profileAuthInjectionType}
-                              onChange={(v) => setProfileAuthInjectionType(v as "cookie" | "localStorage")}
-                              widthClass="w-full"
-                              className="h-9 px-2.5 rounded-md text-xs text-ink"
-                              options={[
-                                { value: "cookie", label: "Cookie" },
-                                { value: "localStorage", label: "Local storage" },
-                              ]}
-                            />
-                          </div>
-                          <div className="flex flex-col gap-1.5">
-                            <label className="text-[13px] font-medium text-graphite">Target key / name</label>
-                            <input
-                              type="text"
-                              placeholder="e.g. auth_token"
-                              value={profileAuthInjectionKey}
-                              onChange={(e) => setProfileAuthInjectionKey(e.target.value)}
-                              required={!!profileAuthFunctionId}
-                              className="h-9 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay"
-                            />
-                          </div>
-                        </div>
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-[13px] font-medium text-graphite">
-                            {profileAuthInjectionType === "cookie" ? "Domain (cookie)" : "Origin (local storage)"}
-                          </label>
-                          <input
-                            type="text"
-                            placeholder={profileAuthInjectionType === "cookie" ? "e.g. .example.com" : "e.g. https://example.com"}
-                            value={profileAuthInjectionDomainOrOrigin}
-                            onChange={(e) => setProfileAuthInjectionDomainOrOrigin(e.target.value)}
-                            required={!!profileAuthFunctionId}
-                            className="h-9 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay"
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex justify-end flex-shrink-0 border-t border-line pt-3">
-                  <button
-                    type="submit"
-                    className="h-10 px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors"
-                  >
-                    {editingProfileId ? "Update profile" : "Save profile"}
-                  </button>
-                </div>
-              </form>
-              ) : (
-                <div className="w-2/3 flex flex-col items-center justify-center gap-3">
-                  <p className="text-sm text-mute">
-                    {profiles.length === 0 ? "No profile yet — create a new one." : "Select a profile or create a new one."}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleOpenCreateProfile}
-                    className="h-10 px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors"
-                  >
-                    Create
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Resource Limit Exceeded Modal */}
       {limitExceededModalOpen && (

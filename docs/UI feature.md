@@ -123,7 +123,7 @@ Before a session starts, the body shows a centered placeholder: a Globe icon, "B
 
 **Control bar (always at top):**
 - Globe icon + URL input (disabled until connected).
-- When disconnected: a **Profile selector** dropdown ("No Profile (Clean Session)" or a saved profile), a **"Manage Profiles"** button, and a **"Connect VNC Browser"** primary button (Play icon).
+- When disconnected: a **Profile selector** dropdown ("No Profile (Clean Session)" or a saved profile) and a **"Connect VNC Browser"** primary button (Play icon).
 
 ### 5b. Active Session — Split Workspace
 Once connected, the area splits into two columns:

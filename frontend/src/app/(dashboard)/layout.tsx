@@ -4,7 +4,7 @@ import React, { useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen } from "lucide-react";
+import { Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import Dropdown from "../components/Dropdown";
 
@@ -20,6 +20,7 @@ const NAV: NavEntry[] = [
   { type: "section", label: "Configuration" },
   { type: "item", href: "/environments", icon: Database, label: "Environments", badge: "env" },
   { type: "item", href: "/auth-functions", icon: Key, label: "Auth functions" },
+  { type: "item", href: "/browser-profiles", icon: Fingerprint, label: "Browser profiles" },
 ];
 
 export default function DashboardLayout({
@@ -95,6 +96,8 @@ export default function DashboardLayout({
         return "Variable environments";
       case "/auth-functions":
         return "Self-refreshing auth functions";
+      case "/browser-profiles":
+        return "Browser session profiles";
       case "/admin-console":
         return "Admin console";
       case "/user-management":
