@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev -p 8481 --webpack",
     "build": "next build",
+    "build:desktop": "cross-env NEXT_PUBLIC_VPS_API_URL=https://api-lixionary-qa-tools.qa.tech.nv NEXT_PUBLIC_IAM_CLIENT_ID=e9800b6d-2acc-4eda-bc65-b1994f107bde NEXT_PUBLIC_IAM_FRONTEND_URL=https://iam.lixionary.com NEXT_PUBLIC_REDIRECT_URI=http://localhost:8481/callback next build",
     "start": "next start",
     "lint": "eslint",
     "tauri": "tauri"
@@ -26,6 +27,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "cross-env": "^10.1.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",

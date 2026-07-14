@@ -1,14 +1,17 @@
+import io
 import os
 import sys
 import json
 import uuid
 import asyncio
+import zipfile
 import subprocess
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response as FastAPIResponse
 from playwright.async_api import async_playwright, Page, Request, Response
 
 # Add current directory to path so naming/generator services can be imported
@@ -1476,6 +1479,29 @@ async def send_extension_request(req_type: str, payload: Any = None, timeout: fl
 @app.get("/api/browser-helper/status")
 async def get_helper_status():
     return {"connected": _extension_ws is not None}
+
+# The chrome-extension directory sits next to backend/ both in the repo and in
+# the Tauri bundle's resource directory (see tauri.conf.json bundle.resources).
+EXTENSION_SRC_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "chrome-extension")
+)
+
+@app.get("/api/browser-helper/extension")
+async def download_extension_zip():
+    if not os.path.isdir(EXTENSION_SRC_DIR):
+        raise HTTPException(status_code=404, detail="Chrome extension source not found next to the sidecar")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, _, files in os.walk(EXTENSION_SRC_DIR):
+            for fname in files:
+                full = os.path.join(root, fname)
+                rel = os.path.relpath(full, EXTENSION_SRC_DIR)
+                zf.write(full, os.path.join("automation-explorer-helper", rel))
+    return FastAPIResponse(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=automation-explorer-helper.zip"},
+    )
 
 @app.get("/api/browser-helper/tabs")
 async def get_helper_tabs():
