@@ -6,6 +6,8 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: [
     "lixionary-qa-tools.qa.tech.nv",
     "api-lixionary-qa-tools.qa.tech.nv",
+    "qa-tools.lixionary.com",
+    "qa-tools-api.lixionary.com",
     "127.0.0.1",
     "localhost",
   ],
