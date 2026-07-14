@@ -4,8 +4,6 @@ services:
   mongodb:
     image: mongo:6.0
     container_name: lixionary-mongodb
-    # Host port 8483 (host) -> 27017 (container). Picked to avoid collision with
-    # other stacks already on the box (reportportal :27017).
     ports:
       - "8483:27017"
     volumes:
@@ -16,24 +14,10 @@ services:
   redis:
     image: redis:7.0-alpine
     container_name: lixionary-redis
-    # Host port 8482 (host) -> 6379 (container). Picked to avoid collision with
-    # other stacks already on the box (nvqa-redis :6379).
     ports:
       - "8482:6379"
     volumes:
       - redis_data:/data
-    networks:
-      - lixionary-network
-
-  vnc-browser:
-    build:
-      context: ./browser
-      dockerfile: Dockerfile
-    container_name: lixionary-vnc-browser
-    ports:
-      - "8080:8080" # noVNC web interface
-      - "9222:9222" # CDP Remote Debugging
-    shm_size: '2gb' # Prevent browser crashes
     networks:
       - lixionary-network
 
@@ -42,14 +26,11 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: lixionary-backend
-    # Host port 8480 (host) -> 8000 (container). Picked to avoid collision with
-    # other stacks already on the box (reportportal :8000).
     ports:
       - "8480:8000"
     environment:
       - MONGODB_URI=mongodb://mongodb:27017/lixionary
       - REDIS_URL=redis://redis:6379/0
-      - BROWSER_CDP_URL=http://vnc-browser:9222
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - JWT_SECRET=${JWT_SECRET:-supersecretjwttokenkey12345}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
@@ -62,37 +43,9 @@ services:
     volumes:
       - ./backend:/app
       - ./workspaces:/workspaces
-      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - mongodb
       - redis
-      - vnc-browser
-    networks:
-      - lixionary-network
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: lixionary-frontend
-    # Host port 8481 (host) -> 3000 (container). Picked to avoid collision with
-    # other stacks already on the box (testsaurus :3000).
-    ports:
-      - "8481:3000"
-    environment:
-      - BACKEND_URL=http://backend:8000
-      - NEXT_PUBLIC_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-      - NEXT_PUBLIC_IAM_CLIENT_ID=${IAM_CLIENT_ID:-ca4d16ef-9a5c-43df-811c-ea9cda47b19a}
-      - NEXT_PUBLIC_IAM_FRONTEND_URL=${IAM_FRONTEND_URL:-http://localhost:8081}
-      - NEXT_PUBLIC_REDIRECT_URI=${REDIRECT_URI:-http://localhost:8481/callback}
-      - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    depends_on:
-      - backend
     networks:
       - lixionary-network
 

@@ -90,11 +90,11 @@ async def lifespan(app: FastAPI):
         if res.modified_count > 0:
             print(f"Seeded/promoted {res.modified_count} users to admin role.")
             
-        # Clean up dynamic browser containers from previous runs
-        await cleanup_dangling_containers()
+        # Clean up dynamic browser containers from previous runs (Disabled for Local Playwright transition)
+        # await cleanup_dangling_containers()
         
-        # Start background task to monitor idle sessions
-        asyncio.create_task(monitor_idle_sessions())
+        # Start background task to monitor idle sessions (Disabled for Local Playwright transition)
+        # asyncio.create_task(monitor_idle_sessions())
     except Exception as e:
         print(f"ERROR: Failed to connect to services or seed on boot: {e}")
     

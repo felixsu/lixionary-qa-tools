@@ -3,6 +3,11 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 
+const VPS_API_URL = process.env.NEXT_PUBLIC_VPS_API_URL || 
+  (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://api-lixionary-qa-tools.qa.tech.nv');
+const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8484';
+
+
 // Types
 export interface Environment {
   id: string;
@@ -304,6 +309,8 @@ interface AppContextType {
   setInspectMode: (inspect: boolean) => void;
   vncUrl: string;
   setVncUrl: (url: string) => void;
+  latestFrame: string | null;
+  setLatestFrame: (frame: string | null) => void;
   sessionId: string;
   setSessionId: (id: string) => void;
   networkLogs: NetworkLog[];
@@ -317,6 +324,8 @@ interface AppContextType {
   networkPillFilter: "all" | "api";
   setNetworkPillFilter: (filter: "all" | "api") => void;
   handleClearNetworkLogs: () => void;
+  sendBrowserMouseEvent: (type: "click" | "move" | "down" | "up", x: number, y: number) => void;
+  sendBrowserKeyboardEvent: (key: string) => void;
   activePomClass: string;
   setActivePomClass: (className: string) => void;
   pomClasses: string[];
@@ -505,6 +514,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [isBrowserConnected, setIsBrowserConnected] = useState(false);
   const [inspectMode, setInspectMode] = useState(false);
   const [vncUrl, setVncUrl] = useState("");
+  const [latestFrame, setLatestFrame] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState("");
   const [networkLogs, setNetworkLogs] = useState<NetworkLog[]>([]);
   const [networkFilter, setNetworkFilter] = useState("");
@@ -673,7 +683,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ...(tok ? { "Authorization": `Bearer ${tok}` } : {}),
         ...(options.headers || {})
       };
-      return await fetch(path, { ...options, headers });
+      const isLocal = path.startsWith("/api/browser") || path.startsWith("/api/executor") || path.startsWith("/api/workspace");
+      const baseUrl = isLocal ? LOCAL_API_URL : VPS_API_URL;
+      const fullUrl = `${baseUrl}${path}`;
+      return await fetch(fullUrl, { ...options, headers });
     };
 
     let response = await makeRequest(currentToken);
@@ -859,7 +872,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    let wsUrl = `${wsHost}/api/browser/ws/browser-session/${sessId}?token=${token}`;
+    const localWsHost = LOCAL_API_URL.replace(/^http(s)?:\/\//, "ws$1://");
+    let wsUrl = `${localWsHost}/api/browser/ws/browser-session/${sessId}?token=${token}`;
     if (profileId) {
       wsUrl += `&profileId=${profileId}`;
     }
@@ -871,6 +885,65 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
+    ws.onopen = async () => {
+      console.log("WebSocket browser stream opened. Sending init data...");
+      const profile = profiles.find((p) => p.id === profileId);
+      let cookies: any[] = [];
+      let localStorageData: any = null;
+      let defaultUrl = "";
+
+      if (profile) {
+        defaultUrl = profile.defaultUrl || "";
+        try {
+          cookies = profile.cookies ? JSON.parse(profile.cookies) : [];
+        } catch {}
+        try {
+          localStorageData = profile.localStorage ? JSON.parse(profile.localStorage) : null;
+        } catch {}
+
+        if (profile.authFunctionId && profile.authInjection) {
+          try {
+            const authRes = await apiCall(`/api/auth-functions/${profile.authFunctionId}/token?envId=${selectedEnvId}`);
+            if (authRes.ok) {
+              const tokenData = await authRes.json();
+              const tokenVal = tokenData.token;
+
+              const injType = profile.authInjection.type;
+              const injKey = profile.authInjection.key;
+              const domainOrOrigin = profile.authInjection.domainOrOrigin;
+
+              if (injType === "cookie") {
+                cookies = cookies.filter((c: any) => c.name !== injKey);
+                cookies.push({ name: injKey, value: tokenVal, domain: domainOrOrigin, path: "/" });
+              } else if (injType === "localStorage") {
+                if (!localStorageData) localStorageData = { origins: [] };
+                if (!localStorageData.origins) localStorageData.origins = [];
+                const targetOrigin = domainOrOrigin.toLowerCase().replace(/\/$/, "");
+                let originEntry = localStorageData.origins.find(
+                  (e: any) => e.origin.toLowerCase().replace(/\/$/, "") === targetOrigin
+                );
+                if (!originEntry) {
+                  originEntry = { origin: domainOrOrigin, localStorage: [] };
+                  localStorageData.origins.push(originEntry);
+                }
+                originEntry.localStorage = originEntry.localStorage.filter((kv: any) => kv.name !== injKey);
+                originEntry.localStorage.push({ name: injKey, value: tokenVal });
+              }
+            }
+          } catch (err) {
+            console.error("Failed to resolve auth function hook on frontend:", err);
+          }
+        }
+      }
+
+      ws.send(JSON.stringify({
+        action: "init",
+        cookies,
+        localStorage: localStorageData,
+        defaultUrl
+      }));
+    };
+
     ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
       console.log("WS Event:", msg.type, msg);
@@ -881,12 +954,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setBrowserUrl(msg.data.url);
           setBrowserTabs([{ index: 0, url: msg.data.url }]);
           setActiveTabIndex(0);
-          
-          // Compute VNC HTTP and WebSocket URLs using the dynamic wsHost proxy endpoints
-          const httpHost = wsHost.replace(/^ws(s)?:\/\//, "http$1://");
-          // Use path query parameter in noVNC to route WebSocket connections through the backend proxy
-          const vncPath = `api/browser/vnc-ws/${sessId}`;
-          setVncUrl(`${httpHost}/api/browser/vnc/${sessId}/vnc.html?autoconnect=true&resize=scale&path=${vncPath}&password=`);
+          setVncUrl("");
+          break;
+        case "screencast_frame":
+          setLatestFrame(msg.data.image);
           break;
         case "navigation":
           const navUrl = msg.data?.url || msg.url;
@@ -1049,6 +1120,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setIsBrowserConnected(false);
         setInspectMode(false);
         setVncUrl("");
+        setLatestFrame(null);
         setSessionId("");
       }
       await fetchUserSessions();
@@ -1070,6 +1142,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setBrowserTabs([]);
     setActiveTabIndex(0);
     setVncUrl(""); // Empty initially; will be populated dynamically by the WebSocket status message
+    setLatestFrame(null);
     connectBrowserSession(sessId, profileId);
   };
 
@@ -1094,6 +1167,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setBrowserTabs([]);
       setActiveTabIndex(0);
       setVncUrl(""); // Empty initially; will be populated dynamically by the WebSocket status message
+      setLatestFrame(null);
       connectBrowserSession(sessId, profileId);
       await fetchUserSessions();
     } catch (e: any) {
@@ -1111,6 +1185,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setIsBrowserConnected(false);
     setInspectMode(false);
     setVncUrl("");
+    setLatestFrame(null);
     setBrowserTabs([]);
     setActiveTabIndex(0);
     // Keep sessionId so the UI can show the disconnected state and offer reconnect.
@@ -1237,6 +1312,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setNetworkPillFilter("all");
   };
 
+  const sendBrowserMouseEvent = (type: "click" | "move" | "down" | "up", x: number, y: number) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        action: `mouse_${type}`,
+        x,
+        y
+      }));
+    }
+  };
+
+  const sendBrowserKeyboardEvent = (key: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        action: "keyboard_press",
+        key
+      }));
+    }
+  };
+
   const handleClearAnchor = () => {
     setAnchorElement(null);
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -1255,8 +1349,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const fetchNetworkLogs = async (sessId: string) => {
     try {
-      const res = await fetch(`/api/browser/network/${sessId}/logs`, {
-        headers: { "Authorization": `Bearer ${token}` }
+       const res = await fetch(`${LOCAL_API_URL}/api/browser/network/${sessId}/logs`, {
+         headers: { "Authorization": `Bearer ${token}` }
       });
       if (res.ok) {
         const data = await res.json();
@@ -1271,8 +1365,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelectedLogId(logId);
     setLogDetails(null);
     try {
-      const res = await fetch(`/api/browser/network/${sessionId}/details/${encodeURIComponent(logId)}`, {
-        headers: { "Authorization": `Bearer ${token}` }
+       const res = await fetch(`${LOCAL_API_URL}/api/browser/network/${sessionId}/details/${encodeURIComponent(logId)}`, {
+         headers: { "Authorization": `Bearer ${token}` }
       });
       if (res.ok) {
         const data = await res.json();
@@ -1964,6 +2058,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setInspectMode,
         vncUrl,
         setVncUrl,
+        latestFrame,
+        setLatestFrame,
         sessionId,
         setSessionId,
         networkLogs,
@@ -1977,6 +2073,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         networkPillFilter,
         setNetworkPillFilter,
         handleClearNetworkLogs,
+        sendBrowserMouseEvent,
+        sendBrowserKeyboardEvent,
         activePomClass,
         setActivePomClass,
         pomClasses,

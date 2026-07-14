@@ -97,6 +97,15 @@ async def delete_auth_function(id: str, current_user: dict = Depends(get_current
     await col.delete_one({"_id": ObjectId(id)})
     return {"message": "Auth function deleted successfully"}
 
+@router.get("/{id}/token")
+async def resolve_auth_function_token(id: str, envId: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    from services.executor import get_valid_auth_token
+    try:
+        token = await get_valid_auth_token(id, envId)
+        return {"token": token}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to resolve auth function token: {str(e)}")
+
 class AuthFunctionTest(BaseModel):
     script: str
     environment_id: Optional[str] = None
