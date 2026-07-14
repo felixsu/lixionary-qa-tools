@@ -683,7 +683,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ...(tok ? { "Authorization": `Bearer ${tok}` } : {}),
         ...(options.headers || {})
       };
-      const isLocal = path.startsWith("/api/browser") || path.startsWith("/api/executor") || path.startsWith("/api/workspace");
+      const isLocal = path.startsWith("/api/browser") || path.startsWith("/api/workspace");
       const baseUrl = isLocal ? LOCAL_API_URL : VPS_API_URL;
       const fullUrl = `${baseUrl}${path}`;
       return await fetch(fullUrl, { ...options, headers });
