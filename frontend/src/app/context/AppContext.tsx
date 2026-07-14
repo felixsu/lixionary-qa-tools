@@ -4,7 +4,7 @@ import React, { createContext, useContext, useState, useEffect, useRef } from "r
 import { useRouter } from "next/navigation";
 
 const VPS_API_URL = process.env.NEXT_PUBLIC_VPS_API_URL || 
-  (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://api-lixionary-qa-tools.qa.tech.nv');
+  (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://qa-tools-api.lixionary.com');
 const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8484';
 
 

@@ -5,6 +5,8 @@ import { Plus, Trash2, Pencil, X, Key, Globe, RefreshCw, Layers } from "lucide-r
 import { useAppContext, BrowserProfile } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
 
+const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || "http://localhost:8484";
+
 const DEFAULT_PROFILE_COOKIES = `[
   {
     "name": "ninja_access_token",
@@ -353,6 +355,23 @@ export default function BrowserProfilesPage() {
     setProfileLocalStorage(JSON.stringify(parsed, null, 2));
     setRawLsKey("");
     setRawLsValue("");
+  };
+
+  // The zip is served by the local sidecar (which ships with the extension
+  // source). Open it in the system browser: downloads initiated inside the
+  // Tauri webview itself are unreliable across platforms.
+  const handleDownloadExtension = async () => {
+    const url = `${LOCAL_API_URL}/api/browser-helper/extension`;
+    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("open_external", { url });
+        return;
+      } catch (e) {
+        console.error("Tauri open_external failed, falling back to window.open", e);
+      }
+    }
+    window.open(url, "_blank");
   };
 
   const handleRemoveLsEntry = (originVal: string, keyName: string) => {
@@ -709,28 +728,37 @@ export default function BrowserProfilesPage() {
                 {!helperActive ? (
                   <div className="flex flex-col gap-2.5">
                     <p className="text-xs text-mute leading-relaxed m-0 font-normal">
-                      Install the <strong>Automation Explorer Helper</strong> Chrome extension to import cookies & localStorage directly from any open browser page. See instructions in <code>chrome-extension/README.md</code>.
+                      Install the <strong>Automation Explorer Helper</strong> Chrome extension to import cookies & localStorage directly from any open browser page: download the zip below, unzip it, then load the folder via <code>chrome://extensions</code> → enable <strong>Developer mode</strong> → <strong>Load unpacked</strong>.
                     </p>
                     <p className="text-xs text-mute leading-relaxed m-0 font-medium" style={{ color: "#c05621" }}>
                       ⚠️ Note: If you just installed/loaded the extension, you MUST <strong>reload this browser tab</strong> to inject the content script.
                     </p>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        // Trigger direct check
-                        window.postMessage({ source: "ae-web-app", type: "PING_EXTENSION" }, "*");
-                        // Trigger sidecar check
-                        try {
-                          const res = await apiCall("/api/browser-helper/status");
-                          setHelperConnected(res?.connected || false);
-                        } catch (e) {
-                          setHelperConnected(false);
-                        }
-                      }}
-                      className="self-start h-8 px-3 bg-cream hover:bg-panel border border-line rounded-lg text-xs font-medium text-graphite transition-colors"
-                    >
-                      Check connection again
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleDownloadExtension}
+                        className="h-8 px-3 bg-clay hover:bg-clay-dark rounded-lg text-xs font-medium text-white transition-colors"
+                      >
+                        Download helper extension (.zip)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          // Trigger direct check
+                          window.postMessage({ source: "ae-web-app", type: "PING_EXTENSION" }, "*");
+                          // Trigger sidecar check
+                          try {
+                            const res = await apiCall("/api/browser-helper/status");
+                            setHelperConnected(res?.connected || false);
+                          } catch (e) {
+                            setHelperConnected(false);
+                          }
+                        }}
+                        className="h-8 px-3 bg-cream hover:bg-panel border border-line rounded-lg text-xs font-medium text-graphite transition-colors"
+                      >
+                        Check connection again
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div className="flex flex-col gap-3">

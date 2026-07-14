@@ -1,9 +1,9 @@
-version: '3.8'
+name: lixionary-qa-tools
 
 services:
   mongodb:
     image: mongo:6.0
-    container_name: lixionary-mongodb
+    container_name: lixionary-qa-tools-mongodb
     ports:
       - "8483:27017"
     volumes:
@@ -13,7 +13,7 @@ services:
 
   redis:
     image: redis:7.0-alpine
-    container_name: lixionary-redis
+    container_name: lixionary-qa-tools-redis
     ports:
       - "8482:6379"
     volumes:
@@ -25,7 +25,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: lixionary-backend
+    container_name: lixionary-qa-tools-backend
     ports:
       - "8480:8000"
     environment:

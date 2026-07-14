@@ -6,11 +6,12 @@ This extension enables the **Lixionary Automation Explorer** web app to query th
 
 To load this extension in Google Chrome:
 
-1. Open a new tab in Chrome and navigate to **`chrome://extensions/`**.
-2. In the top-right corner of the Extensions page, toggle the **Developer mode** switch to **ON**.
-3. In the top-left corner, click the **Load unpacked** button.
-4. Select the `chrome-extension` directory located in the root of this project repository:
-   `/Users/felix/workspace/nv/random/nv-automation-explorer/chrome-extension`
+1. Get the extension source:
+   - **From the app** (recommended for teammates): open *Browser profiles* → *Create browser profile* → *Use Chrome Extension Helper* and click **Download helper extension (.zip)**, then unzip it somewhere permanent (Chrome loads the folder in place — don't delete it afterwards).
+   - **From the repo**: use the `chrome-extension` directory at the project root directly.
+2. Open a new tab in Chrome and navigate to **`chrome://extensions/`**.
+3. In the top-right corner of the Extensions page, toggle the **Developer mode** switch to **ON**.
+4. In the top-left corner, click the **Load unpacked** button and select the extension folder.
 5. The extension "Automation Explorer Helper" will appear in your installed extension list and is active immediately!
 
 ## How it Works
