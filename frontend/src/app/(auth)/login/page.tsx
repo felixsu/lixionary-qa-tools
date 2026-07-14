@@ -1,15 +1,27 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Cpu, ArrowRight, AlertCircle, Shield } from "lucide-react";
 import { useAppContext } from "../../context/AppContext";
 import { useRouter } from "next/navigation";
 
+const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || "http://localhost:8484";
+
+const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
 export default function LoginPage() {
-  const { token, handleGuestLogin, isLoadingAuth } = useAppContext();
+  const { token, handleLogin, handleGuestLogin, isLoadingAuth } = useAppContext();
   const [errorMsg, setErrorMsg] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isWaitingExternal, setIsWaitingExternal] = useState(false);
+  const pollCancelledRef = useRef(false);
   const router = useRouter();
+
+  useEffect(() => {
+    return () => {
+      pollCancelledRef.current = true;
+    };
+  }, []);
 
   // Redirect if already logged in
   useEffect(() => {
@@ -18,20 +30,68 @@ export default function LoginPage() {
     }
   }, [token, isLoadingAuth, router]);
 
-  const onIamLogin = () => {
+  const onIamLogin = async () => {
     setErrorMsg("");
     try {
       const clientId = process.env.NEXT_PUBLIC_IAM_CLIENT_ID || "ca4d16ef-9a5c-43df-811c-ea9cda47b19a";
       const iamFrontendUrl = process.env.NEXT_PUBLIC_IAM_FRONTEND_URL || "http://localhost:8081";
       const redirectUri = process.env.NEXT_PUBLIC_REDIRECT_URI || "http://localhost:8481/callback";
       const scope = "openid profile email";
-      const state = Math.random().toString(36).substring(2, 15);
-      
+      const desktop = isTauri();
+      // The .desktop suffix tells the callback page (opened in the system
+      // browser) to relay the code to the local sidecar instead of exchanging
+      // it in that browser.
+      const state = Math.random().toString(36).substring(2, 15) + (desktop ? ".desktop" : "");
+
       localStorage.setItem("oauth_state", state);
 
-      window.location.href = `${iamFrontendUrl}/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${state}`;
+      const authUrl = `${iamFrontendUrl}/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${state}`;
+
+      if (!desktop) {
+        window.location.href = authUrl;
+        return;
+      }
+
+      // Desktop: Google Identity Services popups don't work inside the Tauri
+      // webview, so run the whole IAM flow in the system browser and poll the
+      // sidecar for the code the callback page relays back.
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("open_external", { url: authUrl });
+
+      setIsWaitingExternal(true);
+      pollCancelledRef.current = false;
+      const deadline = Date.now() + 180_000;
+      let picked: { code: string; state?: string } | null = null;
+
+      while (Date.now() < deadline && !pollCancelledRef.current) {
+        await new Promise((r) => setTimeout(r, 2000));
+        try {
+          const res = await fetch(`${LOCAL_API_URL}/api/auth-bridge/code`);
+          if (res.ok) {
+            const data = await res.json();
+            if (!data.pending && data.code) {
+              picked = data;
+              break;
+            }
+          }
+        } catch {
+          // sidecar may still be booting — keep polling
+        }
+      }
+
+      if (pollCancelledRef.current) return;
+      if (!picked) {
+        throw new Error("Timed out waiting for the browser sign-in to complete. Please try again.");
+      }
+      if (picked.state !== localStorage.getItem("oauth_state")) {
+        throw new Error("Sign-in state mismatch — please try signing in again.");
+      }
+
+      await handleLogin(picked.code);
     } catch (err: any) {
       setErrorMsg(err.message || "Failed to initialize IAM Login redirect.");
+    } finally {
+      setIsWaitingExternal(false);
     }
   };
 
@@ -92,14 +152,35 @@ export default function LoginPage() {
             Sign in with your organisation account
           </p>
 
-          <button
-            onClick={onIamLogin}
-            disabled={isSubmitting}
-            className="flex w-full items-center justify-center gap-2.5 rounded-xl bg-clay hover:bg-clay-dark text-white px-4 py-3 text-sm font-semibold transition-colors disabled:opacity-50 active:scale-[0.99]"
-          >
-            <Shield className="h-4.5 w-4.5" />
-            Sign in with Lixionary IAM
-          </button>
+          {isWaitingExternal ? (
+            <div className="flex flex-col items-center gap-3 rounded-xl border border-line bg-panel px-4 py-4">
+              <div
+                className="h-5 w-5 rounded-full border-2 border-line border-t-clay"
+                style={{ animation: "spin 0.8s linear infinite" }}
+              />
+              <p className="m-0 text-center text-xs text-graphite leading-relaxed">
+                Complete the sign-in in your browser, then return here.
+              </p>
+              <button
+                onClick={() => {
+                  pollCancelledRef.current = true;
+                  setIsWaitingExternal(false);
+                }}
+                className="text-xs font-medium text-mute hover:text-ink transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onIamLogin}
+              disabled={isSubmitting}
+              className="flex w-full items-center justify-center gap-2.5 rounded-xl bg-clay hover:bg-clay-dark text-white px-4 py-3 text-sm font-semibold transition-colors disabled:opacity-50 active:scale-[0.99]"
+            >
+              <Shield className="h-4.5 w-4.5" />
+              Sign in with Lixionary IAM
+            </button>
+          )}
         </div>
 
         <div className="relative flex py-2 items-center">

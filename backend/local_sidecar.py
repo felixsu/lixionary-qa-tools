@@ -1425,6 +1425,35 @@ async def git_pull_directory(rootDir: str = Query(...), dirName: str = Query(...
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to execute git pull: {str(e)}")
 
+# Desktop OAuth relay: in the packaged app the IAM/Google sign-in must run in
+# the system browser (Google Identity Services popups don't work inside the
+# webview). The browser lands on the callback page, which drops the auth code
+# here; the app polls to pick it up. Single slot, consumed on read, short TTL.
+_auth_bridge_slot: Optional[Dict[str, Any]] = None
+
+class AuthBridgeCode(BaseModel):
+    code: str
+    state: Optional[str] = None
+
+@app.post("/api/auth-bridge/code")
+async def push_auth_bridge_code(payload: AuthBridgeCode):
+    global _auth_bridge_slot
+    _auth_bridge_slot = {
+        "code": payload.code,
+        "state": payload.state,
+        "ts": datetime.now(timezone.utc).timestamp(),
+    }
+    return {"ok": True}
+
+@app.get("/api/auth-bridge/code")
+async def pop_auth_bridge_code():
+    global _auth_bridge_slot
+    slot = _auth_bridge_slot
+    _auth_bridge_slot = None
+    if not slot or datetime.now(timezone.utc).timestamp() - slot["ts"] > 180:
+        return {"pending": True}
+    return {"pending": False, "code": slot["code"], "state": slot["state"]}
+
 # Chrome extension helper WebSocket globals
 _extension_ws: Optional[WebSocket] = None
 _extension_requests: Dict[str, asyncio.Future] = {}
