@@ -465,10 +465,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
   // Authentication State
-  const [token, setToken] = useState<string | null>(null);
-  const [refreshToken, setRefreshToken] = useState<string | null>(null);
+  const [token, setTokenState] = useState<string | null>(null);
+  const [refreshToken, setRefreshTokenState] = useState<string | null>(null);
   const [user, setUser] = useState<any>(null);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+
+  const tokenRef = useRef<string | null>(null);
+  const refreshTokenRef = useRef<string | null>(null);
+
+  const setToken = (t: string | null) => {
+    tokenRef.current = t;
+    setTokenState(t);
+  };
+
+  const setRefreshToken = (rt: string | null) => {
+    refreshTokenRef.current = rt;
+    setRefreshTokenState(rt);
+  };
+
+  const refreshPromiseRef = useRef<Promise<string> | null>(null);
 
   // Databases & Shared States
   const [environments, setEnvironments] = useState<Environment[]>([]);
@@ -676,7 +691,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // REST API helpers
   const apiCall = async (path: string, options: RequestInit = {}) => {
-    let currentToken = token;
     const makeRequest = async (tok: string | null) => {
       const headers = {
         "Content-Type": "application/json",
@@ -689,26 +703,52 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return await fetch(fullUrl, { ...options, headers });
     };
 
-    let response = await makeRequest(currentToken);
+    let response = await makeRequest(tokenRef.current);
 
-    if (response.status === 401 && refreshToken && path !== "/api/auth/refresh" && path !== "/api/auth/oauth-token") {
+    const currentRefreshToken = refreshTokenRef.current;
+    if (response.status === 401 && currentRefreshToken && path !== "/api/auth/refresh" && path !== "/api/auth/oauth-token") {
       try {
-        const refreshRes = await fetch("/api/auth/refresh", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ refresh_token: refreshToken })
-        });
-        if (refreshRes.ok) {
-          const refreshData = await refreshRes.json();
-          const newAccessToken = refreshData.access_token;
-          setToken(newAccessToken);
-          localStorage.setItem("lixionary_token", newAccessToken);
-          
-          // Retry the request with the new access token
-          response = await makeRequest(newAccessToken);
-        } else {
-          handleLogout();
+        let newAccessToken: string;
+
+        if (!refreshPromiseRef.current) {
+          refreshPromiseRef.current = (async () => {
+            try {
+              const refreshRes = await fetch(`${VPS_API_URL}/api/auth/refresh`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ refresh_token: currentRefreshToken })
+              });
+
+              if (!refreshRes.ok) {
+                throw new Error("Refresh response was not OK");
+              }
+
+              const refreshData = await refreshRes.json();
+              const tokenVal = refreshData.access_token;
+              
+              setToken(tokenVal);
+              localStorage.setItem("lixionary_token", tokenVal);
+              
+              if (refreshData.refresh_token) {
+                setRefreshToken(refreshData.refresh_token);
+                localStorage.setItem("lixionary_refresh_token", refreshData.refresh_token);
+              }
+              
+              return tokenVal;
+            } finally {
+              // Reset the promise on the next tick so future token expirations can trigger a new refresh,
+              // while concurrent requests on the same tick all share this single promise.
+              setTimeout(() => {
+                refreshPromiseRef.current = null;
+              }, 1000);
+            }
+          })();
         }
+
+        newAccessToken = await refreshPromiseRef.current;
+
+        // Retry the request with the new access token
+        response = await makeRequest(newAccessToken);
       } catch (e) {
         console.error("Token refresh failed:", e);
         handleLogout();
