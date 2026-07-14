@@ -6,7 +6,6 @@ from bson import ObjectId
 
 from db.mongo import MongoDB
 from routes.auth import require_admin
-from services.browser import BrowserSessionManager
 
 router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
@@ -61,49 +60,7 @@ def serialize_collection(doc) -> dict:
     return serialize_collection_node(doc_copy)
 
 
-# --- BROWSER SESSIONS MANAGEMENT ---
 
-@router.get("/sessions")
-async def list_active_sessions():
-    """
-    List all active browser sessions across all users.
-    """
-    sessions_col = MongoDB.get_collection("browser_sessions")
-    users_col = MongoDB.get_collection("users")
-    
-    sessions = await sessions_col.find(
-        {"status": {"$ne": "closed"}}
-    ).sort("created_at", -1).to_list(None)
-    
-    # Retrieve all users to associate their details
-    users = await users_col.find({}).to_list(None)
-    user_map = {str(u["_id"]): serialize_user(u) for u in users}
-    
-    result = []
-    for s in sessions:
-        uid = s.get("user_id")
-        result.append({
-            "session_id": s["session_id"],
-            "status": s["status"],
-            "created_at": s["created_at"].isoformat() if isinstance(s.get("created_at"), datetime) else s.get("created_at", ""),
-            "profile_id": s.get("profile_id"),
-            "user": user_map.get(uid, {"id": uid, "email": "unknown@lixionary.com", "name": "Unknown User"})
-        })
-    return result
-
-@router.delete("/sessions/{session_id}")
-async def force_close_session(session_id: str):
-    """
-    Force close any active browser session in the system.
-    """
-    sessions_col = MongoDB.get_collection("browser_sessions")
-    session = await sessions_col.find_one({"session_id": session_id})
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-        
-    await BrowserSessionManager.close_session(session_id)
-    await sessions_col.delete_one({"session_id": session_id})
-    return {"message": f"Session {session_id} successfully closed by admin"}
 
 
 # --- COLLECTIONS COLLABORATION MANAGEMENT ---
@@ -237,13 +194,7 @@ async def update_user_status(user_id: str, payload: UpdateUserStatusPayload, cur
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
         
-    # If deactivating, terminate active sessions
-    if payload.disabled:
-        sessions_col = MongoDB.get_collection("browser_sessions")
-        sessions = await sessions_col.find({"user_id": user_id, "status": {"$ne": "closed"}}).to_list(None)
-        for s in sessions:
-            await BrowserSessionManager.close_session(s["session_id"])
-            await sessions_col.delete_one({"session_id": s["session_id"]})
+
             
     status_str = "disabled" if payload.disabled else "enabled"
     return {"message": f"User account has been {status_str}"}
@@ -268,11 +219,6 @@ async def delete_user(user_id: str, current_user: dict = Depends(require_admin))
     # Delete user profile
     await users_col.delete_one({"_id": ObjectId(user_id)})
     
-    # Close running browser sessions
-    sessions_col = MongoDB.get_collection("browser_sessions")
-    sessions = await sessions_col.find({"user_id": user_id, "status": {"$ne": "closed"}}).to_list(None)
-    for s in sessions:
-        await BrowserSessionManager.close_session(s["session_id"])
-        await sessions_col.delete_one({"session_id": s["session_id"]})
+
         
     return {"message": "User successfully deleted"}
