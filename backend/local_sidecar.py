@@ -264,8 +264,11 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
             args=["--start-maximized", "--remote-debugging-port=9222"]
         )
         
-        # Define context with standard viewport
-        context = await browser.new_context(viewport={"width": 1280, "height": 720})
+        # Define context with standard viewport and auto-granted permissions to avoid prompt overlays
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 720},
+            permissions=["geolocation", "notifications", "camera", "microphone", "clipboard-read", "clipboard-write"]
+        )
 
         if cookies:
             try:
