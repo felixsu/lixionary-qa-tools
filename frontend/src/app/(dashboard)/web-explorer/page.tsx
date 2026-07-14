@@ -143,16 +143,43 @@ export default function WebExplorerPage() {
   const previewContainerRef = useRef<HTMLDivElement>(null);
 
   const handlePreviewMouseEvent = (e: React.MouseEvent, type: "click" | "move" | "down" | "up") => {
-    if (inspectMode || isVerifying || isExploring) return;
+    if (isVerifying || isExploring) return;
     if (!previewContainerRef.current || !isBrowserConnected) return;
 
-    if (type === "move" && e.buttons !== 1) return;
+    if (type === "move" && e.buttons !== 1 && !inspectMode) return;
 
     const rect = previewContainerRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-
-    sendBrowserMouseEvent(type, x, y);
+    const containerWidth = rect.width;
+    const containerHeight = rect.height;
+    
+    // Viewport aspect ratio is 1280 / 720 (16/9)
+    const imageAspectRatio = 1280 / 720;
+    const containerAspectRatio = containerWidth / containerHeight;
+    
+    let renderedWidth = containerWidth;
+    let renderedHeight = containerHeight;
+    let offsetX = 0;
+    let offsetY = 0;
+    
+    if (containerAspectRatio > imageAspectRatio) {
+      // Container is wider than the image: black bars on left/right
+      renderedWidth = containerHeight * imageAspectRatio;
+      offsetX = (containerWidth - renderedWidth) / 2;
+    } else {
+      // Container is taller than the image: black bars on top/bottom
+      renderedHeight = containerWidth / imageAspectRatio;
+      offsetY = (containerHeight - renderedHeight) / 2;
+    }
+    
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+    
+    const x = (clickX - offsetX) / renderedWidth;
+    const y = (clickY - offsetY) / renderedHeight;
+    
+    if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
+      sendBrowserMouseEvent(type, x, y);
+    }
   };
 
   const handlePreviewKeyDown = (e: React.KeyboardEvent) => {
