@@ -457,8 +457,12 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
             "active_page_index": 0,
             "inspect_enabled": False,
             "last_clicked_frame": None,
-            "anchor_frame": None
+            "anchor_frame": None,
+            "callback": send_to_client
         }
+
+        # Register in the shared BrowserSessionManager class registry so background services (e.g. exploration) can locate it
+        BrowserSessionManager._sessions[session_id] = _active_sessions[session_id]
 
         # Start Screencast frame capture via CDP
         cdp_session = await context.new_cdp_session(page)
@@ -705,6 +709,18 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                 text = cmd.get("text", "")
                 if text:
                     await active_page.keyboard.insert_text(text)
+            elif action == "explore":
+                if session and (session.get("verify_in_progress") or session.get("explore_in_progress")):
+                    continue
+                explore_prompt = cmd.get("prompt")
+                explore_scope = cmd.get("scope", "page")
+                await send_to_client({"type": "explore_started", "data": {}})
+                asyncio.create_task(
+                    BrowserSessionManager.run_page_exploration(session_id, explore_prompt, explore_scope)
+                )
+            elif action == "stop-explore":
+                if session:
+                    session["explore_cancelled"] = True
 
     except WebSocketDisconnect:
         print(f"WebSocket disconnected: {session_id}")
@@ -725,6 +741,8 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
             except Exception:
                 pass
             del _active_sessions[session_id]
+            if session_id in BrowserSessionManager._sessions:
+                del BrowserSessionManager._sessions[session_id]
         print(f"Local browser session terminated: {session_id}")
 
 @app.get("/api/browser/sessions")
