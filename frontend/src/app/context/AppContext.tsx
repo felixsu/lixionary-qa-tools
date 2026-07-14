@@ -325,6 +325,7 @@ interface AppContextType {
   setNetworkPillFilter: (filter: "all" | "api") => void;
   handleClearNetworkLogs: () => void;
   sendBrowserMouseEvent: (type: "click" | "move" | "down" | "up", x: number, y: number) => void;
+  sendBrowserWheelEvent: (deltaX: number, deltaY: number) => void;
   sendBrowserKeyboardEvent: (key: string) => void;
   activePomClass: string;
   setActivePomClass: (className: string) => void;
@@ -1367,6 +1368,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const sendBrowserWheelEvent = (deltaX: number, deltaY: number) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        action: "mouse_wheel",
+        deltaX,
+        deltaY
+      }));
+    }
+  };
+
   const sendBrowserKeyboardEvent = (key: string) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
@@ -2119,6 +2130,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setNetworkPillFilter,
         handleClearNetworkLogs,
         sendBrowserMouseEvent,
+        sendBrowserWheelEvent,
         sendBrowserKeyboardEvent,
         activePomClass,
         setActivePomClass,

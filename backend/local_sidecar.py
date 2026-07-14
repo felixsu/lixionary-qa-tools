@@ -701,6 +701,10 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                 y = cmd.get("y", 0.5)
                 viewport = active_page.viewport_size or {"width": 1280, "height": 720}
                 await active_page.mouse.move(x * viewport["width"], y * viewport["height"])
+            elif action == "mouse_wheel":
+                delta_x = cmd.get("deltaX", 0)
+                delta_y = cmd.get("deltaY", 0)
+                await active_page.mouse.wheel(delta_x, delta_y)
             elif action == "keyboard_press":
                 key = cmd.get("key")
                 if key:

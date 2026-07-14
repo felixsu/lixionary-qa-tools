@@ -41,6 +41,7 @@ export default function WebExplorerPage() {
     latestFrame,
     sessionId,
     sendBrowserMouseEvent,
+    sendBrowserWheelEvent,
     sendBrowserKeyboardEvent,
     networkLogs,
     networkFilter,
@@ -186,12 +187,17 @@ export default function WebExplorerPage() {
     if (inspectMode || isVerifying || isExploring) return;
     if (!isBrowserConnected) return;
 
-    const keysToPrevent = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", "PageUp", "PageDown"];
-    if (keysToPrevent.includes(e.code) || e.key === " ") {
-      e.preventDefault();
-    }
+    e.preventDefault();
+    e.stopPropagation();
 
     sendBrowserKeyboardEvent(e.key);
+  };
+
+  const handlePreviewWheel = (e: React.WheelEvent) => {
+    if (isVerifying || isExploring) return;
+    if (!isBrowserConnected) return;
+
+    sendBrowserWheelEvent(e.deltaX, e.deltaY);
   };
 
   const [workspaceFiles, setWorkspaceFiles] = useState<{ name: string; size: number; updatedAt: string }[]>([]);
@@ -1680,6 +1686,7 @@ export default function WebExplorerPage() {
                         className="relative w-full h-full flex items-center justify-center bg-black overflow-hidden focus:outline-none"
                         tabIndex={0}
                         onKeyDown={handlePreviewKeyDown}
+                        onWheel={handlePreviewWheel}
                         onMouseDown={(e) => handlePreviewMouseEvent(e, "down")}
                         onMouseUp={(e) => handlePreviewMouseEvent(e, "up")}
                         onMouseMove={(e) => handlePreviewMouseEvent(e, "move")}
@@ -1749,6 +1756,7 @@ export default function WebExplorerPage() {
                           className="relative w-full h-full flex items-center justify-center bg-black overflow-hidden focus:outline-none"
                           tabIndex={0}
                           onKeyDown={handlePreviewKeyDown}
+                          onWheel={handlePreviewWheel}
                           onMouseDown={(e) => handlePreviewMouseEvent(e, "down")}
                           onMouseUp={(e) => handlePreviewMouseEvent(e, "up")}
                           onMouseMove={(e) => handlePreviewMouseEvent(e, "move")}
