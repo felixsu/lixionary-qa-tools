@@ -1083,6 +1083,344 @@ async def stop_workspace_script(session_id: str = Query(...)):
         return {"message": "Process terminated successfully"}
     return {"message": "No running script found for this session"}
 
+# --- Local Repository Scanner Endpoints ---
+
+CONFIG_FILE = os.path.join(BASE_DIR, "scanner_config.json")
+
+class ScannerConfig(BaseModel):
+    rootDir: str
+    trackedDirs: List[Dict[str, Any]]
+
+@app.post("/api/workspace/scanner/browse")
+async def browse_directory():
+    # Spawns a tkinter folder selector in a non-blocking subprocess
+    script = """
+import tkinter as tk
+from tkinter import filedialog
+import sys
+root = tk.Tk()
+root.withdraw()
+root.attributes('-topmost', True)
+path = filedialog.askdirectory(title="Select Root Directory")
+print(path, end="")
+"""
+    try:
+        # Run python in a separate process to avoid blocking async event loop
+        python_bin = os.path.join(VENV_DIR, "bin", "python") if os.name != "nt" else os.path.join(VENV_DIR, "Scripts", "python")
+        if not os.path.exists(python_bin):
+            python_bin = sys.executable or "python3"
+        
+        proc = await asyncio.create_subprocess_exec(
+            python_bin, "-c", script,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+        selected_path = stdout.decode().strip()
+        if not selected_path:
+            return {"status": "cancelled", "path": ""}
+        return {"status": "success", "path": selected_path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to launch folder browser: {str(e)}")
+
+@app.post("/api/workspace/scanner/save-config")
+async def save_scanner_config(config: ScannerConfig):
+    try:
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(config.dict(), f, indent=2)
+        return {"message": "Configuration saved successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save configuration: {str(e)}")
+
+@app.get("/api/workspace/scanner/load-config")
+async def load_scanner_config():
+    if not os.path.exists(CONFIG_FILE):
+        return {"rootDir": "", "trackedDirs": []}
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load configuration: {str(e)}")
+
+@app.get("/api/workspace/scanner/scan-root")
+async def scan_root_dir(rootDir: str = Query(...)):
+    if not rootDir or not os.path.exists(rootDir) or not os.path.isdir(rootDir):
+        raise HTTPException(status_code=400, detail="Invalid root directory path")
+    try:
+        subdirs = []
+        for name in os.listdir(rootDir):
+            full_path = os.path.join(rootDir, name)
+            if os.path.isdir(full_path) and not name.startswith('.'):
+                subdirs.append(name)
+        subdirs.sort()
+        return {"subdirs": subdirs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to scan root directory: {str(e)}")
+
+@app.get("/api/workspace/scanner/scan-directory")
+async def scan_directory(rootDir: str = Query(...), dirName: str = Query(...), relativePath: str = Query(".")):
+    dir_path = os.path.join(rootDir, dirName)
+    if not os.path.exists(dir_path) or not os.path.isdir(dir_path):
+        raise HTTPException(status_code=404, detail="Directory not found")
+    
+    target_scan_path = os.path.abspath(os.path.join(dir_path, relativePath))
+    # Safety check: make sure target_scan_path is inside dir_path to prevent path traversal
+    if not target_scan_path.startswith(os.path.abspath(dir_path)):
+        raise HTTPException(status_code=400, detail="Path traversal detected")
+        
+    if not os.path.exists(target_scan_path) or not os.path.isdir(target_scan_path):
+        raise HTTPException(status_code=404, detail=f"Sub-path '{relativePath}' not found or is not a directory")
+    
+    # 1. Scan for Python files only (flat list and tree)
+    python_files = []
+    file_tree = []
+    
+    def build_tree(current_dir_path: str, base_scan_path: str) -> List[Dict[str, Any]]:
+        nodes = []
+        try:
+            items = os.listdir(current_dir_path)
+        except Exception:
+            return []
+            
+        for item in items:
+            if item.startswith('.'):
+                continue
+            full_path = os.path.join(current_dir_path, item)
+            rel_path = os.path.relpath(full_path, base_scan_path)
+            
+            if os.path.isdir(full_path):
+                children = build_tree(full_path, base_scan_path)
+                if children:
+                    nodes.append({
+                        "name": item,
+                        "relativePath": rel_path,
+                        "isDir": True,
+                        "children": children
+                    })
+            elif os.path.isfile(full_path) and item.endswith('.py'):
+                try:
+                    stat_info = os.stat(full_path)
+                    size = stat_info.st_size
+                    mtime = datetime.fromtimestamp(stat_info.st_mtime, tz=timezone.utc).isoformat()
+                except Exception:
+                    size = 0
+                    mtime = ""
+                file_node = {
+                    "name": item,
+                    "relativePath": rel_path,
+                    "isDir": False,
+                    "size": size,
+                    "modified": mtime
+                }
+                nodes.append(file_node)
+                python_files.append(file_node)
+                
+        # Sort nodes: directories first, then files, both alphabetically
+        nodes.sort(key=lambda x: (not x["isDir"], x["name"].lower()))
+        return nodes
+
+    try:
+        file_tree = build_tree(target_scan_path, target_scan_path)
+        python_files.sort(key=lambda x: x["relativePath"])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to scan Python files: {str(e)}")
+        
+    # 2. Get Git branch status
+    is_git_repo = False
+    git_branch = None
+    git_dir = os.path.join(dir_path, ".git")
+    if os.path.exists(git_dir) and os.path.isdir(git_dir):
+        is_git_repo = True
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "rev-parse", "--abbrev-ref", "HEAD",
+                cwd=dir_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0:
+                git_branch = stdout.decode().strip()
+            else:
+                git_branch = "UNKNOWN"
+        except Exception:
+            git_branch = "UNKNOWN"
+            
+    return {
+        "dirName": dirName,
+        "isGitRepo": is_git_repo,
+        "gitBranch": git_branch,
+        "pythonFiles": python_files,
+        "fileTree": file_tree
+    }
+
+@app.get("/api/workspace/scanner/scan-steps")
+async def scan_steps(rootDir: str = Query(...), dirName: str = Query(...), relativePath: str = Query(".")):
+    import ast
+    dir_path = os.path.join(rootDir, dirName)
+    if not os.path.exists(dir_path) or not os.path.isdir(dir_path):
+        raise HTTPException(status_code=404, detail="Directory not found")
+    
+    target_scan_path = os.path.abspath(os.path.join(dir_path, relativePath))
+    # Safety check: make sure target_scan_path is inside dir_path to prevent path traversal
+    if not target_scan_path.startswith(os.path.abspath(dir_path)):
+        raise HTTPException(status_code=400, detail="Path traversal detected")
+        
+    if not os.path.exists(target_scan_path) or not os.path.isdir(target_scan_path):
+        raise HTTPException(status_code=404, detail=f"Sub-path '{relativePath}' not found or is not a directory")
+        
+    def extract_pattern_arg(node):
+        if isinstance(node, ast.Constant):
+            return str(node.value)
+        elif isinstance(node, (ast.Str, ast.Bytes)):
+            return str(node.s)
+        elif isinstance(node, ast.Call):
+            if node.args:
+                return extract_pattern_arg(node.args[0])
+        return ""
+
+    def unparse_annotation(node):
+        try:
+            return ast.unparse(node).strip()
+        except Exception:
+            return "Any"
+
+    all_steps = []
+    
+    try:
+        for root, dirs, files in os.walk(target_scan_path):
+            # Skip hidden folders
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            for file in files:
+                if file.endswith('.py'):
+                    full_file_path = os.path.join(root, file)
+                    rel_file_path = os.path.relpath(full_file_path, target_scan_path)
+                    
+                    try:
+                        with open(full_file_path, "r", encoding="utf-8") as f:
+                            content = f.read()
+                        # Quick check to skip files without given/when/then decorators
+                        if not any(kw in content for kw in ["given", "when", "then"]):
+                            continue
+                            
+                        tree = ast.parse(content, filename=full_file_path)
+                    except Exception:
+                        continue
+                        
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.FunctionDef):
+                            for dec in node.decorator_list:
+                                step_type = None
+                                step_pattern = None
+                                
+                                # Case 1: Call decorator like @then("...") or @then(parsers.cfparse("..."))
+                                if isinstance(dec, ast.Call):
+                                    func_node = dec.func
+                                    if isinstance(func_node, ast.Name) and func_node.id in ['given', 'when', 'then']:
+                                        step_type = func_node.id.capitalize()
+                                        if dec.args:
+                                            step_pattern = extract_pattern_arg(dec.args[0])
+                                    elif isinstance(func_node, ast.Attribute) and func_node.attr in ['given', 'when', 'then']:
+                                        step_type = func_node.attr.capitalize()
+                                        if dec.args:
+                                            step_pattern = extract_pattern_arg(dec.args[0])
+                                
+                                if step_type and step_pattern:
+                                    params = []
+                                    for arg in node.args.args:
+                                        arg_name = arg.arg
+                                        if arg_name in ['nv_context', 'self', 'context']:
+                                            continue
+                                        arg_type = "Any"
+                                        if arg.annotation:
+                                            arg_type = unparse_annotation(arg.annotation)
+                                        params.append({
+                                            "name": arg_name,
+                                            "type": arg_type
+                                        })
+                                    
+                                    try:
+                                        start_line = dec.lineno
+                                        if node.decorator_list:
+                                            start_line = min(d.lineno for d in node.decorator_list)
+                                        else:
+                                            start_line = node.lineno
+                                        
+                                        end_line = node.end_lineno
+                                        lines = content.splitlines()
+                                        func_code = "\n".join(lines[start_line - 1 : end_line])
+                                    except Exception:
+                                        func_code = ""
+
+                                    all_steps.append({
+                                        "stepType": step_type,
+                                        "pattern": step_pattern,
+                                        "functionName": node.name,
+                                        "parameters": params,
+                                        "fileName": file,
+                                        "relativePath": rel_file_path,
+                                        "code": func_code
+                                    })
+        # Sort steps by type then pattern
+        all_steps.sort(key=lambda x: (x["stepType"], x["pattern"].lower()))
+        return {"steps": all_steps}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to scan BDD steps: {str(e)}")
+
+@app.get("/api/workspace/scanner/read-file")
+async def read_python_file(rootDir: str = Query(...), dirName: str = Query(...), relativePath: str = Query(...), filePath: str = Query(...)):
+    dir_path = os.path.join(rootDir, dirName)
+    if not os.path.exists(dir_path) or not os.path.isdir(dir_path):
+        raise HTTPException(status_code=404, detail="Directory not found")
+        
+    target_scan_path = os.path.abspath(os.path.join(dir_path, relativePath))
+    if not target_scan_path.startswith(os.path.abspath(dir_path)):
+        raise HTTPException(status_code=400, detail="Path traversal detected")
+        
+    file_full_path = os.path.abspath(os.path.join(target_scan_path, filePath))
+    if not file_full_path.startswith(target_scan_path):
+        raise HTTPException(status_code=400, detail="Path traversal detected")
+        
+    if not os.path.exists(file_full_path) or os.path.isdir(file_full_path):
+        raise HTTPException(status_code=404, detail="File not found")
+        
+    if not file_full_path.endswith('.py'):
+        raise HTTPException(status_code=400, detail="Only python files can be read")
+        
+    try:
+        with open(file_full_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+        return {"content": content, "filePath": filePath}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read file: {str(e)}")
+
+@app.post("/api/workspace/scanner/git-pull")
+async def git_pull_directory(rootDir: str = Query(...), dirName: str = Query(...)):
+    dir_path = os.path.join(rootDir, dirName)
+    if not os.path.exists(dir_path) or not os.path.isdir(dir_path):
+        raise HTTPException(status_code=404, detail="Directory not found")
+        
+    git_dir = os.path.join(dir_path, ".git")
+    if not os.path.exists(git_dir) or not os.path.isdir(git_dir):
+        raise HTTPException(status_code=400, detail="Not a Git repository")
+        
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "pull",
+            cwd=dir_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT
+        )
+        stdout, _ = await proc.communicate()
+        output = stdout.decode(errors="replace")
+        return {
+            "success": proc.returncode == 0,
+            "exitCode": proc.returncode,
+            "output": output
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to execute git pull: {str(e)}")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8484)

@@ -4,7 +4,7 @@ import React, { useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint } from "lucide-react";
+import { Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint, FolderOpen } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import Dropdown from "../components/Dropdown";
 
@@ -17,6 +17,7 @@ const NAV: NavEntry[] = [
   { type: "section", label: "QA Tools" },
   { type: "item", href: "/api-explorer", icon: Send, label: "API explorer" },
   { type: "item", href: "/web-explorer", icon: Globe, label: "Web explorer" },
+  { type: "item", href: "/local-scanner", icon: FolderOpen, label: "Local scanner" },
   { type: "section", label: "Configuration" },
   { type: "item", href: "/environments", icon: Database, label: "Environments", badge: "env" },
   { type: "item", href: "/auth-functions", icon: Key, label: "Auth functions" },
@@ -65,7 +66,7 @@ export default function DashboardLayout({
   if (isLoadingAuth || !token) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-cream text-ink">
-        <div className="flex flex-col items-center gap-4">
+         <div className="flex flex-col items-center gap-4">
           <div
             className="h-8 w-8 rounded-full border-2 border-line border-t-clay"
             style={{ animation: "spin 0.8s linear infinite" }}
@@ -93,6 +94,8 @@ export default function DashboardLayout({
         return "API Automation Engine";
       case "/web-explorer":
         return "Web automation & POM generator";
+      case "/local-scanner":
+        return "Local Repository Scanner";
       case "/environments":
         return "Variable environments";
       case "/auth-functions":

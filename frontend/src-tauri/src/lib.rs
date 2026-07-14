@@ -72,6 +72,15 @@ pub fn run() {
         }
       }
     })
+    .invoke_handler(tauri::generate_handler![select_directory])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
+}
+
+#[tauri::command]
+fn select_directory() -> Option<String> {
+  let folder = rfd::FileDialog::new()
+    .set_title("Select Root Directory")
+    .pick_folder();
+  folder.map(|p| p.to_string_lossy().into_owned())
 }
