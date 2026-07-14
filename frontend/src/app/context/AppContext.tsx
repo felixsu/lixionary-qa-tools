@@ -1134,7 +1134,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // mid-Verify/Explore — there'd be no other signal left to clear these.
       setIsVerifying(false);
       setIsExploring(false);
-      fetchUserSessions();
+      
+      // Auto-terminate the session on WebSocket close since the browser was shut down or connection dropped/errored.
+      setTimeout(() => {
+        handleCloseSession(sessId);
+      }, 100);
     };
 
     ws.onerror = (err) => {
@@ -1220,6 +1224,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Close the WebSocket only — the browser session stays alive in the backend
     // so the user can reconnect later. Use handleCloseSession to fully terminate.
     if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.onerror = null;
       wsRef.current.close();
     }
     setIsBrowserConnected(false);
