@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Automation Explorer Helper",
+  "version": "1.0.0",
+  "description": "Helper extension to import cookies and local storage values from open tabs into Automation Explorer Profiles.",
+  "permissions": [
+    "cookies",
+    "tabs",
+    "scripting",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

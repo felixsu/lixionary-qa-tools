@@ -26,6 +26,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_origin_regex=r"(chrome-extension://.*|tauri://.*|http://tauri\.localhost)",
 )
 
 # Shared Local Workspace directory: ~/Documents/AutomationExplorer/workspaces
@@ -1420,6 +1421,75 @@ async def git_pull_directory(rootDir: str = Query(...), dirName: str = Query(...
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to execute git pull: {str(e)}")
+
+# Chrome extension helper WebSocket globals
+_extension_ws: Optional[WebSocket] = None
+_extension_requests: Dict[str, asyncio.Future] = {}
+
+@app.websocket("/api/browser-helper/ws")
+async def extension_helper_websocket(websocket: WebSocket):
+    global _extension_ws
+    await websocket.accept()
+    _extension_ws = websocket
+    print("Chrome Extension Helper connected to sidecar WebSocket.")
+    try:
+        while True:
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            if message.get("type") == "PING":
+                # Keepalive from the extension's MV3 service worker
+                await websocket.send_json({"type": "PONG"})
+                continue
+            req_id = message.get("requestId")
+            if req_id and req_id in _extension_requests:
+                _extension_requests[req_id].set_result(message)
+    except WebSocketDisconnect:
+        print("Chrome Extension Helper disconnected from sidecar.")
+    finally:
+        if _extension_ws == websocket:
+            _extension_ws = None
+
+async def send_extension_request(req_type: str, payload: Any = None, timeout: float = 5.0) -> Dict[str, Any]:
+    global _extension_ws
+    if not _extension_ws:
+        raise HTTPException(status_code=503, detail="Chrome Extension Helper is not connected to sidecar")
+    
+    req_id = str(uuid.uuid4())
+    future = asyncio.get_event_loop().create_future()
+    _extension_requests[req_id] = future
+    
+    try:
+        await _extension_ws.send_json({
+            "type": req_type,
+            "payload": payload,
+            "requestId": req_id
+        })
+        response = await asyncio.wait_for(future, timeout=timeout)
+        if not response.get("success"):
+            raise HTTPException(status_code=500, detail=response.get("error", "Unknown error from extension"))
+        return response
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Request to Chrome Extension Helper timed out")
+    finally:
+        _extension_requests.pop(req_id, None)
+
+@app.get("/api/browser-helper/status")
+async def get_helper_status():
+    return {"connected": _extension_ws is not None}
+
+@app.get("/api/browser-helper/tabs")
+async def get_helper_tabs():
+    res = await send_extension_request("GET_TABS")
+    return res.get("payload", [])
+
+class HelperDataRequest(BaseModel):
+    tabId: int
+    url: str
+
+@app.post("/api/browser-helper/data")
+async def get_helper_data(payload: HelperDataRequest):
+    res = await send_extension_request("GET_DATA", payload.dict())
+    return res.get("payload", {})
 
 if __name__ == "__main__":
     import uvicorn
