@@ -41,8 +41,7 @@ def bootstrap():
             packages = ["fastapi", "uvicorn", "playwright", "httpx", "pydantic", "websockets", "quickjs", "google-genai", "jinja2", "pyjwt", "bcrypt", "python-multipart", "redis", "motor", "pymongo"]
             subprocess.run([pip_bin, "install"] + packages, env=pip_env, check=True)
     except Exception as e:
-        print(f"ERROR: Failed to install requirements: {e}")
-        sys.exit(1)
+        print(f"WARNING: Failed to install or verify requirements: {e}. Attempting to launch sidecar anyway...")
 
     # 4. Install Playwright browsers inside venv
     print("Installing Playwright Chromium browser...")
