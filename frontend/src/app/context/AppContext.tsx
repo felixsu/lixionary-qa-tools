@@ -943,9 +943,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         if (profile.authFunctionId && profile.authInjection) {
           try {
-            const authRes = await apiCall(`/api/auth-functions/${profile.authFunctionId}/token?envId=${selectedEnvId}`);
-            if (authRes.ok) {
-              const tokenData = await authRes.json();
+            const tokenData = await apiCall(`/api/auth-functions/${profile.authFunctionId}/token?envId=${selectedEnvId}`);
+            if (tokenData && tokenData.token) {
               const tokenVal = tokenData.token;
 
               const injType = profile.authInjection.type;

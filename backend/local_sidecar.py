@@ -684,12 +684,14 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                 x = cmd.get("x", 0.5)
                 y = cmd.get("y", 0.5)
                 viewport = active_page.viewport_size or {"width": 1280, "height": 720}
-                await active_page.mouse.down({"x": x * viewport["width"], "y": y * viewport["height"]})
+                await active_page.mouse.move(x * viewport["width"], y * viewport["height"])
+                await active_page.mouse.down(button=cmd.get("button", "left"))
             elif action == "mouse_up":
                 x = cmd.get("x", 0.5)
                 y = cmd.get("y", 0.5)
                 viewport = active_page.viewport_size or {"width": 1280, "height": 720}
-                await active_page.mouse.up({"x": x * viewport["width"], "y": y * viewport["height"]})
+                await active_page.mouse.move(x * viewport["width"], y * viewport["height"])
+                await active_page.mouse.up(button=cmd.get("button", "left"))
             elif action == "mouse_move":
                 x = cmd.get("x", 0.5)
                 y = cmd.get("y", 0.5)
