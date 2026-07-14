@@ -2,8 +2,10 @@
 
 import React, { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { RefreshCw, AlertCircle } from "lucide-react";
+import { RefreshCw, AlertCircle, CheckCircle } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
+
+const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || "http://localhost:8484";
 
 function CallbackContent() {
   const searchParams = useSearchParams();
@@ -11,13 +13,18 @@ function CallbackContent() {
   const { handleLogin, token } = useAppContext();
   const [errorMsg, setErrorMsg] = useState("");
   const [isProcessing, setIsProcessing] = useState(true);
+  const [relayDone, setRelayDone] = useState(false);
 
-  // If already logged in, redirect directly to api-explorer
+  const state = searchParams.get("state");
+  const isDesktopRelay = !!state && state.endsWith(".desktop");
+
+  // If already logged in, redirect directly to api-explorer — but never for a
+  // desktop relay, which runs in the user's own browser, not the app webview.
   useEffect(() => {
-    if (token) {
+    if (token && !isDesktopRelay) {
       router.replace("/api-explorer");
     }
-  }, [token, router]);
+  }, [token, isDesktopRelay, router]);
 
   useEffect(() => {
     const code = searchParams.get("code");
@@ -35,6 +42,30 @@ function CallbackContent() {
       return;
     }
 
+    if (isDesktopRelay) {
+      // Desktop sign-in: this page is open in the system browser. Hand the
+      // code to the local sidecar for the app to pick up instead of
+      // exchanging it here.
+      const relay = async () => {
+        try {
+          const res = await fetch(`${LOCAL_API_URL}/api/auth-bridge/code`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code, state }),
+          });
+          if (!res.ok) throw new Error(`Local sidecar responded with ${res.status}`);
+          setRelayDone(true);
+        } catch (err: any) {
+          console.error("Auth code relay failed:", err);
+          setErrorMsg("Could not hand the sign-in back to the desktop app. Make sure the Automation Explorer app is running, then try again.");
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+      relay();
+      return;
+    }
+
     const exchangeCode = async () => {
       try {
         await handleLogin(code);
@@ -46,7 +77,23 @@ function CallbackContent() {
     };
 
     exchangeCode();
-  }, [searchParams, handleLogin]);
+  }, [searchParams, handleLogin, isDesktopRelay, state]);
+
+  if (relayDone) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-slate-950 px-4">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl flex flex-col items-center gap-4 text-center">
+          <div className="h-12 w-12 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-500 mb-2">
+            <CheckCircle className="h-6 w-6" />
+          </div>
+          <h2 className="text-xl font-semibold text-slate-100">Sign-in complete</h2>
+          <p className="text-sm text-slate-400">
+            Return to the <strong>Automation Explorer</strong> app to continue. You can close this tab.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (isProcessing) {
     return (
