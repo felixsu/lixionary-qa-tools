@@ -26,7 +26,7 @@ export default function UserGuidesPage() {
             {userGuides.map((guide) => (
               <Link
                 key={guide.id}
-                href={`/user-guides/${guide.id}`}
+                href={`/user-guides/detail?id=${guide.id}`}
                 className="group bg-cream border border-line rounded-xl px-5 py-4 flex items-start gap-3 hover:border-clay/50 hover:bg-panel/40 transition-colors"
               >
                 <div className="h-9 w-9 rounded-lg bg-panel border border-line flex items-center justify-center flex-shrink-0">

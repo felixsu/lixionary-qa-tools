@@ -132,6 +132,12 @@ async def run_unsafe_response_parser(response_body: str, response_headers: Dict[
         "headers": response_headers
     }
 
+    # Merge parsed JSON body keys directly into response_obj to support direct access (e.g. response.data)
+    if isinstance(parsed_body, dict):
+        for k, v in parsed_body.items():
+            if k not in response_obj:
+                response_obj[k] = v
+
     # Inject response context
     ctx.eval(f"const response = {json.dumps(response_obj)};")
 

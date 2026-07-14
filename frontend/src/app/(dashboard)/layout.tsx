@@ -79,8 +79,9 @@ export default function DashboardLayout({
   const isActive = (path: string) => pathname === path;
 
   const getHeaderTitle = () => {
-    if (pathname.startsWith("/user-guides/")) {
-      const guide = userGuides.find((g) => `/user-guides/${g.id}` === pathname);
+    if (pathname === "/user-guides/detail") {
+      const guideId = searchParams.get("id");
+      const guide = userGuides.find((g) => g.id === guideId);
       return guide ? guide.title : "User guide";
     }
     switch (pathname) {
@@ -117,7 +118,7 @@ export default function DashboardLayout({
       href: "/user-guides",
       icon: BookOpen,
       label: "User guide",
-      children: userGuides.map((g) => ({ href: `/user-guides/${g.id}`, label: g.title })),
+      children: userGuides.map((g) => ({ href: `/user-guides/detail?id=${g.id}`, label: g.title })),
     },
   ];
   if (user?.role === "admin") {
@@ -204,7 +205,9 @@ export default function DashboardLayout({
                   </Link>
                   {expanded && !collapsed &&
                     entry.children.map((child) => {
-                      const childActive = pathname === child.href;
+                      const childActive = child.href.includes("?")
+                        ? (pathname === child.href.split("?")[0] && searchParams.get("id") === new URLSearchParams(child.href.split("?")[1]).get("id"))
+                        : pathname === child.href;
                       return (
                         <Link
                           key={child.href}

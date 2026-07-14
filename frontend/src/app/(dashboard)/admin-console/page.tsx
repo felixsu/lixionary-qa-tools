@@ -44,8 +44,6 @@ export default function AdminConsolePage() {
   const { user, apiCall } = useAppContext();
   const router = useRouter();
 
-  const [activeTab, setActiveTab] = useState<"sessions" | "collections">("sessions");
-  const [sessions, setSessions] = useState<ActiveSession[]>([]);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
@@ -59,18 +57,13 @@ export default function AdminConsolePage() {
   const [collabError, setCollabError] = useState("");
   const [isCollabSubmitting, setIsCollabSubmitting] = useState(false);
 
-  // Load active tab data
+  // Load collections data
   const loadData = async () => {
     setIsLoading(true);
     setErrorMsg("");
     try {
-      if (activeTab === "sessions") {
-        const data = await apiCall("/api/admin/sessions");
-        setSessions(data);
-      } else {
-        const data = await apiCall("/api/admin/collections");
-        setCollections(data);
-      }
+      const data = await apiCall("/api/admin/collections");
+      setCollections(data);
     } catch (e: any) {
       setErrorMsg(e.message || "Failed to load administration data.");
     } finally {
@@ -82,24 +75,13 @@ export default function AdminConsolePage() {
     if (user?.role === "admin") {
       loadData();
     }
-  }, [activeTab, user]);
+  }, [user]);
 
   const toggleCollection = (colId: string) => {
     setExpandedCollections((prev) => ({
       ...prev,
       [colId]: !prev[colId],
     }));
-  };
-
-  // Close user session
-  const handleCloseSession = async (sessId: string) => {
-    if (!confirm("Are you sure you want to force terminate this browser session?")) return;
-    try {
-      await apiCall(`/api/admin/sessions/${sessId}`, { method: "DELETE" });
-      setSessions((prev) => prev.filter((s) => s.session_id !== sessId));
-    } catch (e: any) {
-      alert(e.message || "Failed to close session.");
-    }
   };
 
   // Add collaborator
@@ -176,28 +158,9 @@ export default function AdminConsolePage() {
     <div className="h-full flex flex-col overflow-hidden bg-cream">
       {/* Header Tabs */}
       <div className="h-14 flex items-center justify-between px-6 border-b border-line flex-shrink-0 bg-cream">
-        <div className="flex gap-4">
-          <button
-            onClick={() => setActiveTab("sessions")}
-            className={`h-14 px-2 border-b-2 text-[13px] font-semibold transition-all ${
-              activeTab === "sessions"
-                ? "border-clay text-clay"
-                : "border-transparent text-stone hover:text-ink"
-            }`}
-          >
-            Browser Sessions
-          </button>
-          <button
-            onClick={() => setActiveTab("collections")}
-            className={`h-14 px-2 border-b-2 text-[13px] font-semibold transition-all ${
-              activeTab === "collections"
-                ? "border-clay text-clay"
-                : "border-transparent text-stone hover:text-ink"
-            }`}
-          >
-            Collection Management
-          </button>
-        </div>
+        <h2 className="text-[13px] font-semibold text-graphite uppercase tracking-wider">
+          Collection Management
+        </h2>
 
         <button
           onClick={loadData}
@@ -226,81 +189,16 @@ export default function AdminConsolePage() {
             />
             <p className="text-xs text-stone">Loading directory details...</p>
           </div>
-        ) : activeTab === "sessions" ? (
-          /* Browser Sessions Tab */
-          sessions.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-24 text-center">
-              <Play className="h-10 w-10 text-stone/50 mb-3" />
-              <div className="text-sm font-semibold text-graphite">No active sessions</div>
-              <p className="text-xs text-mute max-w-sm mt-1">
-                There are currently no active browser runner sessions connected to the server.
-              </p>
-            </div>
-          ) : (
-            <div className="border border-line rounded-xl overflow-hidden bg-cream max-w-6xl shadow-sm">
-              <table className="w-full border-collapse text-left text-xs">
-                <thead>
-                  <tr className="bg-panel border-b border-line text-stone font-semibold uppercase tracking-wider">
-                    <th className="px-5 py-3.5">Session ID</th>
-                    <th className="px-5 py-3.5">User / Owner</th>
-                    <th className="px-5 py-3.5">Started At</th>
-                    <th className="px-5 py-3.5">Status</th>
-                    <th className="px-5 py-3.5 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-line-soft">
-                  {sessions.map((sess) => {
-                    const formattedDate = new Date(sess.created_at).toLocaleString();
-                    return (
-                      <tr key={sess.session_id} className="hover:bg-hover transition-colors">
-                        <td className="px-5 py-4 font-mono font-medium text-graphite">
-                          {sess.session_id}
-                        </td>
-                        <td className="px-5 py-4">
-                          <div>
-                            <div className="font-semibold text-ink">{sess.user.name || "Developer"}</div>
-                            <div className="text-[11px] text-mute">{sess.user.email}</div>
-                          </div>
-                        </td>
-                        <td className="px-5 py-4 text-stone">{formattedDate}</td>
-                        <td className="px-5 py-4">
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              sess.status === "connected"
-                                ? "bg-sage/10 text-sage"
-                                : "bg-clay/10 text-clay"
-                            }`}
-                          >
-                            {sess.status.toUpperCase()}
-                          </span>
-                        </td>
-                        <td className="px-5 py-4 text-right">
-                          <button
-                            onClick={() => handleCloseSession(sess.session_id)}
-                            className="px-2.5 py-1.5 border border-danger/30 hover:border-danger bg-danger-soft hover:bg-danger text-danger hover:text-white rounded-lg transition-all text-[11px] font-bold"
-                          >
-                            Terminate
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )
+        ) : collections.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-24 text-center">
+            <Users className="h-10 w-10 text-stone/50 mb-3" />
+            <div className="text-sm font-semibold text-graphite">No collections created</div>
+            <p className="text-xs text-mute max-w-sm mt-1">
+              When users create collection workspaces, they will appear here.
+            </p>
+          </div>
         ) : (
-          /* Collection Management Tab */
-          collections.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-24 text-center">
-              <Users className="h-10 w-10 text-stone/50 mb-3" />
-              <div className="text-sm font-semibold text-graphite">No collections created</div>
-              <p className="text-xs text-mute max-w-sm mt-1">
-                When users create collection workspaces, they will appear here.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-3 max-w-4xl">
+          <div className="space-y-3 max-w-4xl">
               {collections.map((col) => {
                 const isExpanded = !!expandedCollections[col.id];
                 return (
@@ -377,7 +275,6 @@ export default function AdminConsolePage() {
                 );
               })}
             </div>
-          )
         )}
       </div>
 

@@ -12,6 +12,8 @@ import { useAppContext } from "../../context/AppContext";
 import type { NetworkLog, NetworkDetails } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
 
+const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8484';
+
 const methodStyle = (m: string): React.CSSProperties => {
   const map: Record<string, { bg: string; c: string }> = {
     GET: { bg: "#e3f5e9", c: "#276749" },
@@ -36,7 +38,11 @@ export default function WebExplorerPage() {
     isBrowserConnected,
     inspectMode,
     vncUrl,
+    latestFrame,
     sessionId,
+    sendBrowserMouseEvent,
+    sendBrowserWheelEvent,
+    sendBrowserKeyboardEvent,
     networkLogs,
     networkFilter,
     setNetworkFilter,
@@ -134,6 +140,65 @@ export default function WebExplorerPage() {
   // inherits whatever was last stored, permanently wedging every future
   // session read-only until that stale localStorage entry is overwritten.
   const effectiveVncUrl = vncUrl ? `${vncUrl}&view_only=${(isVerifying || isExploring) ? 1 : 0}` : vncUrl;
+
+  const previewContainerRef = useRef<HTMLDivElement>(null);
+
+  const handlePreviewMouseEvent = (e: React.MouseEvent, type: "click" | "move" | "down" | "up") => {
+    if (isVerifying || isExploring) return;
+    if (!previewContainerRef.current || !isBrowserConnected) return;
+
+    if (type === "move" && e.buttons !== 1 && !inspectMode) return;
+
+    const rect = previewContainerRef.current.getBoundingClientRect();
+    const containerWidth = rect.width;
+    const containerHeight = rect.height;
+    
+    // Viewport aspect ratio is 1280 / 720 (16/9)
+    const imageAspectRatio = 1280 / 720;
+    const containerAspectRatio = containerWidth / containerHeight;
+    
+    let renderedWidth = containerWidth;
+    let renderedHeight = containerHeight;
+    let offsetX = 0;
+    let offsetY = 0;
+    
+    if (containerAspectRatio > imageAspectRatio) {
+      // Container is wider than the image: black bars on left/right
+      renderedWidth = containerHeight * imageAspectRatio;
+      offsetX = (containerWidth - renderedWidth) / 2;
+    } else {
+      // Container is taller than the image: black bars on top/bottom
+      renderedHeight = containerWidth / imageAspectRatio;
+      offsetY = (containerHeight - renderedHeight) / 2;
+    }
+    
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+    
+    const x = (clickX - offsetX) / renderedWidth;
+    const y = (clickY - offsetY) / renderedHeight;
+    
+    if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
+      sendBrowserMouseEvent(type, x, y);
+    }
+  };
+
+  const handlePreviewKeyDown = (e: React.KeyboardEvent) => {
+    if (inspectMode || isVerifying || isExploring) return;
+    if (!isBrowserConnected) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    sendBrowserKeyboardEvent(e.key);
+  };
+
+  const handlePreviewWheel = (e: React.WheelEvent) => {
+    if (isVerifying || isExploring) return;
+    if (!isBrowserConnected) return;
+
+    sendBrowserWheelEvent(e.deltaX, e.deltaY);
+  };
 
   const [workspaceFiles, setWorkspaceFiles] = useState<{ name: string; size: number; updatedAt: string }[]>([]);
   const [limitExceededModalOpen, setLimitExceededModalOpen] = useState(false);
@@ -641,7 +706,7 @@ export default function WebExplorerPage() {
       console.warn("Failed to auto-save file before running", e);
     }
     try {
-      const response = await fetch(`/api/workspace/run`, {
+      const response = await fetch(`${LOCAL_API_URL}/api/workspace/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ filename: selectedWorkspaceFile, session_id: sessionId }),
@@ -1615,11 +1680,35 @@ export default function WebExplorerPage() {
                     </div>
                   )}
                   <div className="relative flex-1 w-full overflow-hidden">
-                    {vncUrl ? (
-                      <iframe src={effectiveVncUrl} className="w-full h-full border-none" title="VNC Browser Frame" />
+                    {isBrowserConnected ? (
+                      <div 
+                        ref={previewContainerRef}
+                        className="relative w-full h-full flex items-center justify-center bg-black overflow-hidden focus:outline-none"
+                        tabIndex={0}
+                        onKeyDown={handlePreviewKeyDown}
+                        onWheel={handlePreviewWheel}
+                        onMouseDown={(e) => handlePreviewMouseEvent(e, "down")}
+                        onMouseUp={(e) => handlePreviewMouseEvent(e, "up")}
+                        onMouseMove={(e) => handlePreviewMouseEvent(e, "move")}
+                        onClick={(e) => handlePreviewMouseEvent(e, "click")}
+                      >
+                        {latestFrame ? (
+                          <img 
+                            src={`data:image/jpeg;base64,${latestFrame}`} 
+                            alt="Browser Screencast" 
+                            className="w-full h-full object-contain pointer-events-none select-none"
+                            draggable={false}
+                          />
+                        ) : (
+                          <div className="flex flex-col items-center justify-center text-cream/40 text-xs gap-2">
+                            <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
+                            Session started. Streaming native browser window...
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <div className="flex h-full w-full items-center justify-center text-cream/40 text-xs">
-                        VNC session initialized. Loading canvas…
+                        Select a profile and click Connect browser to start a session.
                       </div>
                     )}
                     {(isDraggingSplit || isDraggingSidebar) && (
@@ -1661,11 +1750,35 @@ export default function WebExplorerPage() {
                       </div>
                     )}
                     <div className="relative flex-1 w-full overflow-hidden">
-                      {vncUrl ? (
-                        <iframe src={effectiveVncUrl} className="w-full h-full border-none" title="VNC Browser Frame" />
+                      {isBrowserConnected ? (
+                        <div 
+                          ref={previewContainerRef}
+                          className="relative w-full h-full flex items-center justify-center bg-black overflow-hidden focus:outline-none"
+                          tabIndex={0}
+                          onKeyDown={handlePreviewKeyDown}
+                          onWheel={handlePreviewWheel}
+                          onMouseDown={(e) => handlePreviewMouseEvent(e, "down")}
+                          onMouseUp={(e) => handlePreviewMouseEvent(e, "up")}
+                          onMouseMove={(e) => handlePreviewMouseEvent(e, "move")}
+                          onClick={(e) => handlePreviewMouseEvent(e, "click")}
+                        >
+                          {latestFrame ? (
+                            <img 
+                              src={`data:image/jpeg;base64,${latestFrame}`} 
+                              alt="Browser Screencast" 
+                              className="w-full h-full object-contain pointer-events-none select-none"
+                              draggable={false}
+                            />
+                          ) : (
+                            <div className="flex flex-col items-center justify-center text-cream/40 text-xs gap-2">
+                              <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
+                              Session started. Streaming native browser window...
+                            </div>
+                          )}
+                        </div>
                       ) : (
                         <div className="flex h-full w-full items-center justify-center text-cream/40 text-xs">
-                          VNC session initialized. Loading canvas…
+                          Select a profile and click Connect browser to start a session.
                         </div>
                       )}
                       {(isDraggingSplit || isDraggingSidebar) && (

@@ -2,10 +2,10 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { ArrowLeft, BookOpen } from "lucide-react";
-import { useAppContext } from "../../../context/AppContext";
-import GuideBlockRenderer, { GuideBlock } from "../../../components/guide/GuideBlockRenderer";
+import { useAppContext } from "../../context/AppContext";
+import GuideBlockRenderer, { GuideBlock } from "../../components/guide/GuideBlockRenderer";
 
 interface UserGuideDetail {
   id: string;
@@ -17,7 +17,8 @@ interface UserGuideDetail {
 }
 
 export default function UserGuideDetailPage() {
-  const { guideId } = useParams<{ guideId: string }>();
+  const searchParams = useSearchParams();
+  const guideId = searchParams.get("id");
   const { token, apiCall } = useAppContext();
 
   const [guide, setGuide] = useState<UserGuideDetail | null>(null);
