@@ -5,9 +5,16 @@
   "windows": [
     "main"
   ],
+  "remote": {
+    "urls": [
+      "http://localhost:8481"
+    ]
+  },
   "permissions": [
     "core:default",
     "updater:default",
-    "process:default"
+    "process:default",
+    "allow-select-directory",
+    "allow-open-external"
   ]
 }
