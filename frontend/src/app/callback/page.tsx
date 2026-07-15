@@ -45,22 +45,30 @@ function CallbackContent() {
     if (isDesktopRelay) {
       // Desktop sign-in: this page is open in the system browser. Hand the
       // code to the local sidecar for the app to pick up instead of
-      // exchanging it here.
+      // exchanging it here. Retry for a while — on the app's first launch the
+      // sidecar spends minutes bootstrapping its venv and may not be
+      // listening yet, and the app itself polls for the code for 3 minutes.
       const relay = async () => {
-        try {
-          const res = await fetch(`${LOCAL_API_URL}/api/auth-bridge/code`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ code, state }),
-          });
-          if (!res.ok) throw new Error(`Local sidecar responded with ${res.status}`);
-          setRelayDone(true);
-        } catch (err: any) {
-          console.error("Auth code relay failed:", err);
-          setErrorMsg("Could not hand the sign-in back to the desktop app. Make sure the Automation Explorer app is running, then try again.");
-        } finally {
-          setIsProcessing(false);
+        const deadline = Date.now() + 90_000;
+        while (Date.now() < deadline) {
+          try {
+            const res = await fetch(`${LOCAL_API_URL}/api/auth-bridge/code`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ code, state }),
+            });
+            if (res.ok) {
+              setRelayDone(true);
+              setIsProcessing(false);
+              return;
+            }
+          } catch {
+            // sidecar not reachable yet — keep retrying
+          }
+          await new Promise((r) => setTimeout(r, 3000));
         }
+        setErrorMsg("Could not hand the sign-in back to the desktop app. Make sure the Automation Explorer app is running and finished its first-launch setup, then try signing in again.");
+        setIsProcessing(false);
       };
       relay();
       return;
@@ -100,7 +108,11 @@ function CallbackContent() {
       <div className="flex h-screen w-screen items-center justify-center bg-slate-950 text-slate-200">
         <div className="flex flex-col items-center gap-4">
           <RefreshCw className="h-10 w-10 animate-spin text-indigo-500" />
-          <p className="text-sm font-medium">Verifying authorization code with Lixionary IAM...</p>
+          <p className="text-sm font-medium">
+            {isDesktopRelay
+              ? "Handing the sign-in to the Automation Explorer app..."
+              : "Verifying authorization code with Lixionary IAM..."}
+          </p>
         </div>
       </div>
     );

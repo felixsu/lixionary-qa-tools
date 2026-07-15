@@ -55,6 +55,20 @@ export default function LoginPage() {
       // Desktop: Google Identity Services popups don't work inside the Tauri
       // webview, so run the whole IAM flow in the system browser and poll the
       // sidecar for the code the callback page relays back.
+
+      // Preflight: the relay depends on the local sidecar. Fail fast with an
+      // actionable message instead of a browser round-trip that can't land.
+      try {
+        const health = await fetch(`${LOCAL_API_URL}/api/browser-helper/status`, {
+          signal: AbortSignal.timeout(3000),
+        });
+        if (!health.ok) throw new Error();
+      } catch {
+        throw new Error(
+          "The app's local service isn't running yet. On first launch it needs a few minutes to set itself up (requires Python 3 and an internet connection) — please try again shortly. If this keeps happening, check that Python 3 is installed."
+        );
+      }
+
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("open_external", { url: authUrl });
 
