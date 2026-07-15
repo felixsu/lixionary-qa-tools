@@ -12,7 +12,30 @@ permissions:
   contents: write
 
 jobs:
+  # Create the draft release once up front — when the matrix jobs each try to
+  # find-or-create it by tag, they race and produce duplicate drafts with
+  # split assets and partial latest.json manifests.
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.result }}
+    steps:
+      - uses: actions/github-script@v7
+        id: create
+        with:
+          script: |
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: process.env.GITHUB_REF_NAME,
+              name: `Automation Explorer ${process.env.GITHUB_REF_NAME}`,
+              body: "See the assets below to download and install this version.",
+              draft: true,
+            });
+            return data.id;
+
   build:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -57,8 +80,5 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: frontend
-          tagName: ${{ github.ref_name }}
-          releaseName: "Automation Explorer ${{ github.ref_name }}"
-          releaseBody: "See the assets below to download and install this version."
-          releaseDraft: true
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
