@@ -29,7 +29,16 @@ jobs:
               repo: context.repo.repo,
               tag_name: process.env.GITHUB_REF_NAME,
               name: `Automation Explorer ${process.env.GITHUB_REF_NAME}`,
-              body: "See the assets below to download and install this version.",
+              body: [
+                "See the assets below to download and install this version.",
+                "",
+                "### macOS install note",
+                "The app is not notarized with Apple yet. After moving it to Applications, either:",
+                "- approve it under **System Settings → Privacy & Security → Open Anyway**, or",
+                "- run `xattr -cr /Applications/automation-explorer.app` in Terminal.",
+                "",
+                "Requirements: Python 3 and Google Chrome. First launch downloads sidecar dependencies (needs internet, ~2 minutes).",
+              ].join("\n"),
               draft: true,
             });
             return data.id;
@@ -78,6 +87,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Full ad-hoc codesign: seals bundle resources so quarantined
+          # downloads get the standard "unverified developer" flow instead of
+          # Gatekeeper's misleading "damaged and can't be opened" error.
+          # Replace with a real Developer ID + notarization when available.
+          APPLE_SIGNING_IDENTITY: "-"
         with:
           projectPath: frontend
           releaseId: ${{ needs.create-release.outputs.release_id }}
