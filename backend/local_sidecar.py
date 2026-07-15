@@ -17,7 +17,7 @@ from playwright.async_api import async_playwright, Page, Request, Response
 # Add current directory to path so naming/generator services can be imported
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from services.browser import BrowserSessionManager, rank_locators
+from services.browser import BrowserSessionManager, rank_locators, sanitize_cookies
 from services.naming import polish_method_names, dedupe_names, heuristic_method_name, propose_locator_fix
 from services.generator import generate_pom_class, generate_http_client, build_pom_method_code
 
@@ -276,7 +276,7 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
 
         if cookies:
             try:
-                await context.add_cookies(cookies)
+                await context.add_cookies(sanitize_cookies(cookies))
                 print(f"Injected {len(cookies)} cookies into local browser session")
             except Exception as e:
                 print(f"Failed to inject cookies locally: {e}")

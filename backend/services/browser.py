@@ -6,6 +6,35 @@ from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 from config import settings
 from db.redis_client import RedisClient
 
+_ALLOWED_COOKIE_KEYS = {"name", "value", "url", "domain", "path", "expires", "httpOnly", "secure", "sameSite"}
+_SAME_SITE_MAP = {
+    "strict": "Strict",
+    "lax": "Lax",
+    "none": "None",
+    "no_restriction": "None",
+}
+
+def sanitize_cookies(cookies) -> list:
+    """Normalize profile cookies into the shape Playwright's add_cookies accepts.
+
+    Cookies imported via the Chrome extension carry Chrome's raw sameSite
+    values ("unspecified", "no_restriction", lowercase "lax"/"strict") which
+    Playwright rejects — and one bad cookie aborts the entire injection batch.
+    Unknown sameSite values are dropped so the browser applies its default.
+    """
+    sanitized = []
+    for c in cookies or []:
+        if not isinstance(c, dict) or not c.get("name"):
+            continue
+        cookie = {k: v for k, v in c.items() if k in _ALLOWED_COOKIE_KEYS}
+        same_site = _SAME_SITE_MAP.get(str(cookie.get("sameSite", "")).lower())
+        if same_site:
+            cookie["sameSite"] = same_site
+        else:
+            cookie.pop("sameSite", None)
+        sanitized.append(cookie)
+    return sanitized
+
 class BrowserSessionManager:
     # Dictionary to keep active sessions: {session_id: {"browser": browser, "context": context, "page": page}}
     _sessions = {}
@@ -29,7 +58,7 @@ class BrowserSessionManager:
                 if cookies:
                     try:
                         if isinstance(cookies, list) and cookies:
-                            await session["context"].add_cookies(cookies)
+                            await session["context"].add_cookies(sanitize_cookies(cookies))
                     except Exception as e:
                         print(f"Failed to re-inject cookies on reconnect: {e}")
 
@@ -154,7 +183,7 @@ class BrowserSessionManager:
         if cookies:
             try:
                 if isinstance(cookies, list) and cookies:
-                    await context.add_cookies(cookies)
+                    await context.add_cookies(sanitize_cookies(cookies))
                     print(f"Successfully injected {len(cookies)} cookies into browser session {session_id}")
             except Exception as e:
                 print(f"Failed to inject cookies into context: {e}")

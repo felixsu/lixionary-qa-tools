@@ -194,17 +194,23 @@ export default function BrowserProfilesPage() {
       return;
     }
 
-    // 1. Process cookies
+    // 1. Process cookies. Chrome reports sameSite as unspecified/no_restriction/
+    // lax/strict; Playwright's add_cookies only accepts Strict/Lax/None, so map
+    // here and drop unknowns (browser default applies).
+    const sameSiteMap: Record<string, string> = { strict: "Strict", lax: "Lax", none: "None", no_restriction: "None" };
     const importedCookies = (fetchedData.cookies || [])
       .filter((c: any) => selectedCookies.includes(c.name))
-      .map((c: any) => ({
-        name: c.name,
-        value: c.value,
-        domain: c.domain,
-        path: c.path,
-        secure: c.secure,
-        sameSite: c.sameSite
-      }));
+      .map((c: any) => {
+        const sameSite = sameSiteMap[String(c.sameSite || "").toLowerCase()];
+        return {
+          name: c.name,
+          value: c.value,
+          domain: c.domain,
+          path: c.path,
+          secure: c.secure,
+          ...(sameSite ? { sameSite } : {})
+        };
+      });
 
     let currentCookies: any[] = [];
     if (profileCookies) {
