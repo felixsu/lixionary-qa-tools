@@ -6,6 +6,11 @@ on:
       - "v*"
   workflow_dispatch:
 
+# The default GITHUB_TOKEN is read-only; tauri-action needs write to create
+# the release and upload installer assets.
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
