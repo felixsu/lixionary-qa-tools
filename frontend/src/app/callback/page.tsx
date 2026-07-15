@@ -67,7 +67,7 @@ function CallbackContent() {
           }
           await new Promise((r) => setTimeout(r, 3000));
         }
-        setErrorMsg("Could not hand the sign-in back to the desktop app. Make sure the Automation Explorer app is running and finished its first-launch setup, then try signing in again.");
+        setErrorMsg("Could not hand the sign-in back to the desktop app. Make sure the Lixionary QA Tools app is running and finished its first-launch setup, then try signing in again.");
         setIsProcessing(false);
       };
       relay();
@@ -96,7 +96,7 @@ function CallbackContent() {
           </div>
           <h2 className="text-xl font-semibold text-slate-100">Sign-in complete</h2>
           <p className="text-sm text-slate-400">
-            Return to the <strong>Automation Explorer</strong> app to continue. You can close this tab.
+            Return to the <strong>Lixionary QA Tools</strong> app to continue. You can close this tab.
           </p>
         </div>
       </div>
@@ -110,7 +110,7 @@ function CallbackContent() {
           <RefreshCw className="h-10 w-10 animate-spin text-indigo-500" />
           <p className="text-sm font-medium">
             {isDesktopRelay
-              ? "Handing the sign-in to the Automation Explorer app..."
+              ? "Handing the sign-in to the Lixionary QA Tools app..."
               : "Verifying authorization code with Lixionary IAM..."}
           </p>
         </div>

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "automation-explorer",
+  "productName": "Lixionary QA Tools",
   "version": "0.1.4",
   "identifier": "com.lixionary.automation-explorer",
   "build": {

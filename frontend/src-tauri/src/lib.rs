@@ -68,7 +68,7 @@ pub fn run() {
       };
 
       WebviewWindowBuilder::new(app, "main", window_url)
-        .title("Lixionary Automation Explorer")
+        .title("Lixionary QA Tools")
         .inner_size(800.0, 600.0)
         .resizable(true)
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
