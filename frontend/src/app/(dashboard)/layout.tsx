@@ -7,6 +7,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint, FolderOpen } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import Dropdown from "../components/Dropdown";
+import UpdateBanner from "../components/UpdateBanner";
 
 type NavEntry =
   | { type: "section"; label: string }
@@ -341,6 +342,8 @@ export default function DashboardLayout({
             </>
           )}
         </header>
+
+        <UpdateBanner />
 
         {/* Content */}
         <main className="flex-1 overflow-hidden relative">
