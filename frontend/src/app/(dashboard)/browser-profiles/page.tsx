@@ -1053,16 +1053,25 @@ export default function BrowserProfilesPage() {
                   </button>
                 )}
                 {currentStep !== "details" ? (
+                  // key + preventDefault: React flushes the step change during
+                  // the click, morphing this button into the submit button
+                  // before the browser runs the default action — which then
+                  // submits the form and saves/closes the wizard mid-flow.
                   <button
+                    key="wizard-next"
                     type="button"
                     disabled={nextDisabled}
-                    onClick={() => setWizardStep((s) => s + 1)}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setWizardStep((s) => s + 1);
+                    }}
                     className="h-10 px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Next
                   </button>
                 ) : (
                   <button
+                    key="wizard-submit"
                     type="submit"
                     className="h-10 px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors"
                   >
