@@ -5,12 +5,14 @@ import { Cpu, ArrowRight, AlertCircle, Shield } from "lucide-react";
 import { useAppContext } from "../../context/AppContext";
 import { useRouter } from "next/navigation";
 import { isTauri } from "../../utils/tauri";
+import { useAppVersion } from "../../utils/useAppVersion";
 import BackendStatusIndicator from "../../components/BackendStatusIndicator";
 
 const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || "http://localhost:8484";
 
 export default function LoginPage() {
   const { token, handleLogin, handleGuestLogin, isLoadingAuth } = useAppContext();
+  const appVersion = useAppVersion();
   const [errorMsg, setErrorMsg] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isWaitingExternal, setIsWaitingExternal] = useState(false);
@@ -219,6 +221,10 @@ export default function LoginPage() {
         <div className="mt-6 text-center text-xs text-mute">
           Guest mode uses a shared read-only sandbox account.
         </div>
+
+        {appVersion && (
+          <div className="text-center text-[11px] text-mute/70">v{appVersion}</div>
+        )}
       </div>
     </div>
   );

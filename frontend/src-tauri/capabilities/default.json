@@ -12,6 +12,7 @@
   },
   "permissions": [
     "core:default",
+    "core:app:allow-version",
     "updater:default",
     "process:default",
     "dialog:default",

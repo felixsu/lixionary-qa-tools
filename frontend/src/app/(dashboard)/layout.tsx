@@ -11,6 +11,7 @@ import UpdateBanner from "../components/UpdateBanner";
 import SyncConflictModal from "../components/SyncConflictModal";
 import BackendStatusIndicator from "../components/BackendStatusIndicator";
 import { useNowTick } from "../utils/useNowTick";
+import { useAppVersion } from "../utils/useAppVersion";
 
 type NavEntry =
   | { type: "section"; label: string }
@@ -74,6 +75,7 @@ export default function DashboardLayout({
 
   // Drives the "Synced Xm ago" label.
   const nowTick = useNowTick(15000);
+  const appVersion = useAppVersion();
 
   if (isLoadingAuth || !token) {
     return (
@@ -371,6 +373,10 @@ export default function DashboardLayout({
               </>
             )}
           </div>
+
+          {!collapsed && appVersion && (
+            <div className="text-center text-[11px] text-mute/70">v{appVersion}</div>
+          )}
         </div>
       </aside>
 
