@@ -30,11 +30,10 @@ export default function LoginPage() {
     }
   }, [token, isLoadingAuth, router]);
 
-  const onIamLogin = async () => {
+  const onGoogleLogin = async () => {
     setErrorMsg("");
     try {
-      const clientId = process.env.NEXT_PUBLIC_IAM_CLIENT_ID || "ca4d16ef-9a5c-43df-811c-ea9cda47b19a";
-      const iamFrontendUrl = process.env.NEXT_PUBLIC_IAM_FRONTEND_URL || "http://localhost:8081";
+      const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
       const redirectUri = process.env.NEXT_PUBLIC_REDIRECT_URI || "http://localhost:8481/callback";
       const scope = "openid profile email";
       const desktop = isTauri();
@@ -45,7 +44,7 @@ export default function LoginPage() {
 
       localStorage.setItem("oauth_state", state);
 
-      const authUrl = `${iamFrontendUrl}/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${state}`;
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${state}&prompt=select_account`;
 
       if (!desktop) {
         window.location.href = authUrl;
@@ -53,8 +52,8 @@ export default function LoginPage() {
       }
 
       // Desktop: Google Identity Services popups don't work inside the Tauri
-      // webview, so run the whole IAM flow in the system browser and poll the
-      // sidecar for the code the callback page relays back.
+      // webview, so run the whole OAuth flow in the system browser and poll
+      // the sidecar for the code the callback page relays back.
 
       // Preflight: the relay depends on the local sidecar. Fail fast with an
       // actionable message instead of a browser round-trip that can't land.
@@ -103,7 +102,7 @@ export default function LoginPage() {
 
       await handleLogin(picked.code);
     } catch (err: any) {
-      setErrorMsg(err.message || "Failed to initialize IAM Login redirect.");
+      setErrorMsg(err.message || "Failed to initialize Google sign-in redirect.");
     } finally {
       setIsWaitingExternal(false);
     }
@@ -164,10 +163,10 @@ export default function LoginPage() {
           </div>
         )}
 
-        {/* Lixionary IAM Auth Button */}
+        {/* Google Auth Button */}
         <div className="space-y-4">
           <p className="text-center text-xs font-semibold uppercase tracking-wider text-mute">
-            Sign in with your organisation account
+            Sign in with your Google account
           </p>
 
           {isWaitingExternal ? (
@@ -191,12 +190,12 @@ export default function LoginPage() {
             </div>
           ) : (
             <button
-              onClick={onIamLogin}
+              onClick={onGoogleLogin}
               disabled={isSubmitting}
               className="flex w-full items-center justify-center gap-2.5 rounded-xl bg-clay hover:bg-clay-dark text-white px-4 py-3 text-sm font-semibold transition-colors disabled:opacity-50 active:scale-[0.99]"
             >
               <Shield className="h-4.5 w-4.5" />
-              Sign in with Lixionary IAM
+              Sign in with Google
             </button>
           )}
         </div>

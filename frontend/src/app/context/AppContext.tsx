@@ -891,15 +891,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const handleLogin = async (code: string) => {
     try {
-      const data = await apiCall("/api/auth/oauth-token", {
+      const data = await apiCall("/api/auth/google/exchange", {
         method: "POST",
         body: JSON.stringify({ code, redirect_uri: process.env.NEXT_PUBLIC_REDIRECT_URI || "http://localhost:8481/callback" })
       });
-      setToken(data.access_token);
-      setRefreshToken(data.refresh_token);
+      // Direct Google sign-in issues a flat JWT with no refresh token — the
+      // session simply expires after JWT_EXPIRY_MINUTES and requires a fresh
+      // login, rather than the old IAM flow's silent access/refresh pair.
+      setToken(data.token);
       setUser(data.user);
-      localStorage.setItem("lixionary_token", data.access_token);
-      localStorage.setItem("lixionary_refresh_token", data.refresh_token);
+      localStorage.setItem("lixionary_token", data.token);
       localStorage.setItem("lixionary_user", JSON.stringify(data.user));
       router.push("/api-explorer");
     } catch (e: any) {

@@ -111,7 +111,7 @@ function CallbackContent() {
           <p className="text-sm font-medium">
             {isDesktopRelay
               ? "Handing the sign-in to the Lixionary QA Tools app..."
-              : "Verifying authorization code with Lixionary IAM..."}
+              : "Verifying authorization code with Google..."}
           </p>
         </div>
       </div>

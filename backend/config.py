@@ -29,6 +29,7 @@ class Settings:
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRY_MINUTES: int = 1440 # 24 hours
     GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
+    GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
     DEV_MODE: bool = os.getenv("DEV_MODE", "true").lower() == "true"
 
     # Lixionary IAM OAuth configuration

@@ -169,6 +169,50 @@ async def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
     return current_user
 
 
+async def _issue_session_for_google_user(google_id: str, email: str, name: str, avatar_url: str) -> dict:
+    """
+    Finds or creates the local user record for a verified Google identity and
+    issues a local JWT session token. Shared by both the direct ID-token
+    login (browser GIS) and the authorization-code exchange (desktop relay).
+    """
+    users_col = MongoDB.get_collection("users")
+    is_db_empty = await users_col.count_documents({}) == 0
+    user = await users_col.find_one({"googleId": google_id})
+
+    if not user:
+        new_user = {
+            "googleId": google_id,
+            "email": email,
+            "name": name,
+            "avatarUrl": avatar_url,
+            "role": "admin" if is_db_empty else "member",
+            "disabled": False,
+            "createdAt": datetime.now(timezone.utc),
+            "updatedAt": datetime.now(timezone.utc)
+        }
+        res = await users_col.insert_one(new_user)
+        user_id = str(res.inserted_id)
+        user = new_user
+    else:
+        user_id = str(user["_id"])
+
+    if user.get("disabled", False):
+        raise HTTPException(status_code=403, detail="User account is disabled")
+
+    jwt_token = create_jwt_token(user_id, email)
+
+    return {
+        "token": jwt_token,
+        "user": {
+            "id": user_id,
+            "email": email,
+            "name": name,
+            "avatarUrl": avatar_url,
+            "role": user.get("role", "member"),
+            "disabled": user.get("disabled", False)
+        }
+    }
+
 @router.post("/google", response_model=TokenResponse)
 async def google_login(payload: GoogleLoginRequest):
     """
@@ -199,46 +243,57 @@ async def google_login(payload: GoogleLoginRequest):
             email = payload.idToken
             name = email.split("@")[0].capitalize()
 
-    users_col = MongoDB.get_collection("users")
-    is_db_empty = await users_col.count_documents({}) == 0
-    user = await users_col.find_one({"googleId": google_id})
+    return await _issue_session_for_google_user(google_id, email, name, avatar_url)
 
-    if not user:
-        # Create new user profile
-        new_user = {
-            "googleId": google_id,
-            "email": email,
-            "name": name,
-            "avatarUrl": avatar_url,
-            "role": "admin" if is_db_empty else "member",
-            "disabled": False,
-            "createdAt": datetime.now(timezone.utc),
-            "updatedAt": datetime.now(timezone.utc)
-        }
-        res = await users_col.insert_one(new_user)
-        user_id = str(res.inserted_id)
-        user = new_user
-    else:
-        user_id = str(user["_id"])
+@router.post("/google/exchange", response_model=TokenResponse)
+async def google_oauth_exchange(payload: OAuthExchangeRequest):
+    """
+    Exchanges a Google OAuth authorization code (from the redirect-based
+    consent flow used by both the browser tab and the desktop system-browser
+    relay) for tokens, verifies the resulting ID token, and issues a local
+    JWT session — the direct-Google-SSO replacement for the old
+    Lixionary-IAM-mediated /oauth-token flow.
+    """
+    async with httpx.AsyncClient() as client:
+        try:
+            res = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "grant_type": "authorization_code",
+                    "client_id": settings.GOOGLE_CLIENT_ID,
+                    "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                    "code": payload.code,
+                    "redirect_uri": payload.redirect_uri,
+                },
+            )
+            if res.status_code != 200:
+                try:
+                    err_data = res.json()
+                    detail = err_data.get("error", "Failed to exchange authorization code")
+                    if "error_description" in err_data:
+                        detail += f": {err_data['error_description']}"
+                except Exception:
+                    detail = f"Failed to exchange authorization code (Status: {res.status_code}): {res.text[:200]}"
+                raise HTTPException(status_code=res.status_code, detail=detail)
 
-    # Double-check that we do not let a disabled user login
-    if user.get("disabled", False):
-        raise HTTPException(status_code=403, detail="User account is disabled")
+            tokens = res.json()
+            id_token_str = tokens.get("id_token")
+            if not id_token_str:
+                raise HTTPException(status_code=400, detail="Google token response is missing an ID token")
 
-    # Issue local JWT
-    jwt_token = create_jwt_token(user_id, email)
-    
-    return {
-        "token": jwt_token,
-        "user": {
-            "id": user_id,
-            "email": email,
-            "name": name,
-            "avatarUrl": avatar_url,
-            "role": user.get("role", "member"),
-            "disabled": user.get("disabled", False)
-        }
-    }
+            from google.oauth2 import id_token as google_id_token
+            from google.auth.transport import requests as google_requests
+            idinfo = google_id_token.verify_oauth2_token(id_token_str, google_requests.Request(), settings.GOOGLE_CLIENT_ID)
+
+            email = idinfo.get("email", "")
+            if not email:
+                raise HTTPException(status_code=400, detail="Google ID token is missing an email claim")
+
+            return await _issue_session_for_google_user(
+                idinfo["sub"], email, idinfo.get("name", email.split("@")[0].capitalize()), idinfo.get("picture", "")
+            )
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=503, detail=f"Google OAuth connection error: {exc}")
 
 @router.post("/guest", response_model=TokenResponse)
 async def guest_login():
