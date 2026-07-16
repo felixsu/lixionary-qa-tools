@@ -34,6 +34,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - JWT_SECRET=${JWT_SECRET:-supersecretjwttokenkey12345}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
       - DEV_MODE=${DEV_MODE:-true}
       - IAM_CLIENT_ID=${IAM_CLIENT_ID:-ca4d16ef-9a5c-43df-811c-ea9cda47b19a}
       - IAM_CLIENT_SECRET=${IAM_CLIENT_SECRET:-automation_explorer_secret_key_123}
