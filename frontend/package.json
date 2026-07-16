@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev -p 8481 --webpack",
     "build": "next build",
-    "build:desktop": "cross-env NEXT_PUBLIC_VPS_API_URL=https://qa-tools-api.lixionary.com NEXT_PUBLIC_GOOGLE_CLIENT_ID=471959538569-n39p0cha1hghp62skvc49old2k717nfk.apps.googleusercontent.com NEXT_PUBLIC_REDIRECT_URI=http://localhost:8481/callback next build",
+    "build:desktop": "cross-env NEXT_PUBLIC_VPS_API_URL=https://qa-tools-api.lixionary.com NEXT_PUBLIC_GOOGLE_CLIENT_ID=471959538569-q04u1ugg1bvkcf641npa1qo4mekknjvp.apps.googleusercontent.com NEXT_PUBLIC_REDIRECT_URI=http://localhost:8481/callback next build",
     "start": "next start",
     "lint": "eslint",
     "tauri": "tauri"
