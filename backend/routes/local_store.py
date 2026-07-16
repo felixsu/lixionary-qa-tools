@@ -56,9 +56,21 @@ class PullRequest(BaseModel):
     entries: List[PullEntry]
 
 
+class SetActiveUserRequest(BaseModel):
+    userId: str
+
+
 @router.get("/device-id")
 async def get_device_id():
     return {"deviceId": LocalStore.device_id()}
+
+
+@router.post("/active-user")
+async def set_active_user(body: SetActiveUserRequest):
+    """Called right after login, before any sync pass — wipes the local
+    cache if a different cloud user than last time is now signed in."""
+    switched = LocalStore.set_active_user(body.userId)
+    return {"switched": switched}
 
 
 @router.get("/{entity_type}")

@@ -102,6 +102,33 @@ class LocalStore:
         return row["value"]
 
     @classmethod
+    def active_user_id(cls) -> Optional[str]:
+        row = _dict_row(cls._conn.execute("SELECT value FROM meta WHERE key = 'active_user_id'"), ["value"])
+        return row["value"] if row else None
+
+    @classmethod
+    def set_active_user(cls, user_id: str) -> bool:
+        """Records which cloud user this device's local sync cache currently
+        belongs to. The cache is device-wide, not per-user — if a different
+        user signs in (e.g. someone with two Google accounts on the same
+        machine), their local records would otherwise still carry the
+        previous user's cloudIds and the sidecar has no way to tell the two
+        apart. Wipes the cache on a genuine switch so the app re-pulls fresh
+        from the new user's cloud data instead of leaking the old user's
+        browser profiles/environments/etc. into view. Returns True if a wipe
+        happened."""
+        previous = cls.active_user_id()
+        switched = previous is not None and previous != user_id
+        if switched:
+            cls._conn.execute("DELETE FROM entities")
+        cls._conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('active_user_id', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (user_id,),
+        )
+        return switched
+
+    @classmethod
     def _now(cls) -> str:
         return datetime.now(timezone.utc).isoformat()
 

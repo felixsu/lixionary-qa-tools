@@ -653,14 +653,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Fetch data when authenticated
   useEffect(() => {
-    if (token) {
-      fetchEnvironments();
-      fetchAuthFunctions();
-      fetchCollections();
-      fetchProfiles();
-      fetchUserSessions();
-      fetchUserGuides();
-      triggerSync();
+    if (token && user) {
+      (async () => {
+        // The local sync cache is device-wide, not per-user — if a different
+        // account than last time just signed in (e.g. someone with two
+        // Google accounts on this machine), wipe it before syncing so the
+        // previous account's browser profiles/environments/etc. never leak
+        // into view. Best-effort: if the sidecar isn't up yet, sync below
+        // already tolerates that and will just retry later.
+        try {
+          await apiCall("/api/local-store/active-user", {
+            method: "POST",
+            body: JSON.stringify({ userId: user.id }),
+          });
+        } catch {
+          // ignored — see comment above
+        }
+        fetchEnvironments();
+        fetchAuthFunctions();
+        fetchCollections();
+        fetchProfiles();
+        fetchUserSessions();
+        fetchUserGuides();
+        triggerSync();
+      })();
     }
   }, [token]);
 
