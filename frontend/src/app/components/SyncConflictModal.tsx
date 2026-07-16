@@ -10,6 +10,7 @@ const ENTITY_LABEL: Record<SyncConflict["entityType"], string> = {
   auth_function: "Auth function",
   browser_profile: "Browser profile",
   collection: "Collection",
+  flow: "Flow",
 };
 
 function conflictTitle(conflict: SyncConflict): string {

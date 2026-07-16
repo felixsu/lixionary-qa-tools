@@ -16,6 +16,7 @@ from tests.test_executor import test_interpolate_variables, test_resolve_input_b
 from tests.test_generator import test_generate_pom_class_strategies
 from tests.test_workspace import test_sanitize_filename
 from tests.test_admin import test_serialize_user, test_serialize_collection
+from tests.test_flows import test_serialize_flow_doc
 
 def run():
     print("Running tests...")
@@ -59,6 +60,9 @@ def run():
         
         test_serialize_collection()
         print("✓ test_serialize_collection passed")
+
+        test_serialize_flow_doc()
+        print("✓ test_serialize_flow_doc passed")
         
         print("\nAll tests passed successfully!")
     except AssertionError as e:

@@ -10,7 +10,7 @@ USER_HOME = os.path.expanduser("~")
 BASE_DIR = os.path.join(USER_HOME, "Documents", "AutomationExplorer")
 DB_PATH = os.path.join(BASE_DIR, "local.db")
 
-ENTITY_TYPES = {"collection", "environment", "auth_function", "browser_profile"}
+ENTITY_TYPES = {"collection", "environment", "auth_function", "browser_profile", "flow"}
 
 # NOTE: Python's stdlib `sqlite3` module ships without extension-loading support
 # on Python.org's official macOS builds (no `enable_load_extension` at all), which

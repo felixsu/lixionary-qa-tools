@@ -3,19 +3,24 @@
 // plans/unified-soaring-bentley.md for the full design (diff table, conflict
 // algorithm, phasing).
 
-export type EntityType = "environment" | "auth_function" | "browser_profile" | "collection";
+export type EntityType = "environment" | "auth_function" | "browser_profile" | "collection" | "flow";
 
 export type ApiCallFn = (path: string, options?: RequestInit) => Promise<any>;
 
 // Fixed push order matters once collections/browser_profiles start referencing
 // auth_function ids (Phase 2's FK remap) — auth functions must sync first.
-const SYNC_ORDER: EntityType[] = ["auth_function", "environment", "browser_profile", "collection"];
+// Flows sync after collections: they reference requests that live inside
+// collection payloads. No id remap is needed for flows (request ids are
+// stable strings embedded verbatim in the collection blob, identical on
+// every device and in the cloud; flows store no collection/auth-function ids).
+const SYNC_ORDER: EntityType[] = ["auth_function", "environment", "browser_profile", "collection", "flow"];
 
 const CLOUD_PATH: Record<EntityType, string> = {
   environment: "/api/environments",
   auth_function: "/api/auth-functions",
   browser_profile: "/api/profiles",
   collection: "/api/collections",
+  flow: "/api/flows",
 };
 
 interface LocalSyncRow {
