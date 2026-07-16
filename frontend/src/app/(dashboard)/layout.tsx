@@ -4,7 +4,7 @@ import React, { useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint, FolderOpen, Cloud, CloudOff, RefreshCw, AlertTriangle } from "lucide-react";
+import { Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint, FolderOpen, Cloud, CloudOff, RefreshCw, AlertTriangle, Workflow } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import Dropdown from "../components/Dropdown";
 import UpdateBanner from "../components/UpdateBanner";
@@ -21,6 +21,7 @@ type NavEntry =
 const NAV: NavEntry[] = [
   { type: "section", label: "QA Tools" },
   { type: "item", href: "/api-explorer", icon: Send, label: "API explorer" },
+  { type: "item", href: "/api-studio", icon: Workflow, label: "API Studio" },
   { type: "item", href: "/web-explorer", icon: Globe, label: "Web explorer" },
   { type: "item", href: "/nv-common-lib-explorer", icon: FolderOpen, label: "NV Common Lib Explorer" },
   { type: "section", label: "Configuration" },
@@ -117,6 +118,8 @@ export default function DashboardLayout({
         return "User guide studio";
       case "/api-explorer":
         return "API Automation Engine";
+      case "/api-studio":
+        return "API Studio";
       case "/web-explorer":
         return "Web automation & POM generator";
       case "/nv-common-lib-explorer":
@@ -136,7 +139,7 @@ export default function DashboardLayout({
     }
   };
 
-  const showEnvPill = pathname === "/api-explorer" || pathname === "/web-explorer";
+  const showEnvPill = pathname === "/api-explorer" || pathname === "/api-studio" || pathname === "/web-explorer";
   const userInitial = (user?.name || user?.email || "D").charAt(0).toUpperCase();
 
   const sidebarNavItems: NavEntry[] = [
