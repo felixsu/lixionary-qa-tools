@@ -14,6 +14,7 @@
     "core:default",
     "updater:default",
     "process:default",
+    "dialog:default",
     "allow-select-directory",
     "allow-open-external",
     "allow-sidecar-process-alive"

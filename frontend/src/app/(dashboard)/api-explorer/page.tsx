@@ -11,6 +11,7 @@ import {
 import Editor from "@monaco-editor/react";
 import { useAppContext, findRequestInTree, findRequestOwnerCollection, findAncestorPathToRequest } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
+import { confirmDialog } from "../../utils/confirmDialog";
 
 type ConfigTab = "headers" | "params" | "auth" | "variables" | "body";
 
@@ -332,10 +333,10 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
                 e.stopPropagation();
                 const count = countRequestsInTree(node);
                 if (count > 0) {
-                  const yes = window.confirm(`This collection contains ${count} request(s). Are you sure you want to delete it and all its contents?`);
+                  const yes = await confirmDialog(`This collection contains ${count} request(s). Are you sure you want to delete it and all its contents?`);
                   if (!yes) return;
                 } else {
-                  const yes = window.confirm(`Are you sure you want to delete the collection "${node.name}"?`);
+                  const yes = await confirmDialog(`Are you sure you want to delete the collection "${node.name}"?`);
                   if (!yes) return;
                 }
                 try {
@@ -461,7 +462,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
                       <button
                         onClick={async (e) => {
                           e.stopPropagation();
-                          const yes = window.confirm(`Are you sure you want to delete the request "${req.name}"?`);
+                          const yes = await confirmDialog(`Are you sure you want to delete the request "${req.name}"?`);
                           if (!yes) return;
                           try {
                             await handleDeleteNode(req.id, "request");

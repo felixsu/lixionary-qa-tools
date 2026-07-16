@@ -5,6 +5,7 @@ import { Plus, Trash2, Pencil, X, Key, Globe, RefreshCw, Layers } from "lucide-r
 import { useAppContext, BrowserProfile } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
 import { isTauri } from "../../utils/tauri";
+import { confirmDialog } from "../../utils/confirmDialog";
 
 const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || "http://localhost:8484";
 
@@ -512,7 +513,7 @@ export default function BrowserProfilesPage() {
                     </button>
                     <button
                       onClick={async () => {
-                        if (confirm("Delete this profile?")) await handleDeleteProfile(p.id);
+                        if (await confirmDialog("Delete this profile?")) await handleDeleteProfile(p.id);
                       }}
                       className="h-7 w-7 rounded-md border border-line flex items-center justify-center hover:bg-danger-soft hover:text-danger transition-colors flex-shrink-0"
                       title="Delete"

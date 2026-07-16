@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Shield, RefreshCw, Trash2, ShieldCheck, UserCheck, AlertCircle } from "lucide-react";
 import { useAppContext } from "../../context/AppContext";
+import { confirmDialog } from "../../utils/confirmDialog";
 
 interface UserProfile {
   id: string;
@@ -50,7 +51,7 @@ export default function UserManagementPage() {
       alert("You cannot change your own role to prevent locking yourself out of administration functions.");
       return;
     }
-    if (!confirm(`Are you sure you want to change ${targetUser.name || targetUser.email}'s role to ${newRole}?`)) return;
+    if (!(await confirmDialog(`Are you sure you want to change ${targetUser.name || targetUser.email}'s role to ${newRole}?`))) return;
 
     setActionLoadingId(targetUser.id);
     try {
@@ -76,7 +77,7 @@ export default function UserManagementPage() {
       return;
     }
     const actionWord = newDisabled ? "disable" : "enable";
-    if (!confirm(`Are you sure you want to ${actionWord} this user account?${newDisabled ? " This will immediately close all their active browser sessions." : ""}`)) return;
+    if (!(await confirmDialog(`Are you sure you want to ${actionWord} this user account?${newDisabled ? " This will immediately close all their active browser sessions." : ""}`))) return;
 
     setActionLoadingId(targetUser.id);
     try {
@@ -100,7 +101,7 @@ export default function UserManagementPage() {
       alert("You cannot delete your own account.");
       return;
     }
-    if (!confirm(`CAUTION: Are you sure you want to permanently delete the user account for ${targetUser.name || targetUser.email}? This action is irreversible and will close all their active browser sessions.`)) return;
+    if (!(await confirmDialog(`CAUTION: Are you sure you want to permanently delete the user account for ${targetUser.name || targetUser.email}? This action is irreversible and will close all their active browser sessions.`))) return;
 
     setActionLoadingId(targetUser.id);
     try {
