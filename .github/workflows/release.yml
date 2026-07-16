@@ -2,33 +2,80 @@ name: Release Desktop App
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
   workflow_dispatch:
 
-# The default GITHUB_TOKEN is read-only; tauri-action needs write to create
-# the release and upload installer assets.
+# The default GITHUB_TOKEN is read-only; the bump-version job needs write to
+# push the version-bump commit and tag, and tauri-action needs write to
+# create the release and upload installer assets.
 permissions:
   contents: write
 
 jobs:
+  # Every push to main ships a release: bump the patch version in
+  # tauri.conf.json, commit it, and tag it. Guarded against the bump commit
+  # itself re-triggering this job (belt-and-suspenders — pushes made with
+  # GITHUB_TOKEN don't normally re-trigger workflows anyway).
+  bump-version:
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: bump version to') }}"
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag_name: ${{ steps.bump.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump patch version and tag
+        id: bump
+        run: |
+          set -euo pipefail
+          CONF=frontend/src-tauri/tauri.conf.json
+          CURRENT=$(node -p "require('./$CONF').version")
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          NEXT="$MAJOR.$MINOR.$((PATCH + 1))"
+
+          node -e "
+            const fs = require('fs');
+            const path = '$CONF';
+            const conf = JSON.parse(fs.readFileSync(path, 'utf8'));
+            conf.version = '$NEXT';
+            fs.writeFileSync(path, JSON.stringify(conf, null, 2) + '\n');
+          "
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$CONF"
+          git commit -m "chore: bump version to $NEXT"
+          git tag "v$NEXT"
+          git push origin HEAD:main
+          git push origin "v$NEXT"
+
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "tag_name=v$NEXT" >> "$GITHUB_OUTPUT"
+
   # Create the draft release once up front — when the matrix jobs each try to
   # find-or-create it by tag, they race and produce duplicate drafts with
   # split assets and partial latest.json manifests.
   create-release:
+    needs: bump-version
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.create.outputs.result }}
     steps:
       - uses: actions/github-script@v7
         id: create
+        env:
+          TAG_NAME: ${{ needs.bump-version.outputs.tag_name }}
         with:
           script: |
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              tag_name: process.env.GITHUB_REF_NAME,
-              name: `Lixionary QA Tools ${process.env.GITHUB_REF_NAME}`,
+              tag_name: process.env.TAG_NAME,
+              name: `Lixionary QA Tools ${process.env.TAG_NAME}`,
               body: [
                 "See the assets below to download and install this version.",
                 "",
@@ -44,7 +91,7 @@ jobs:
             return data.id;
 
   build:
-    needs: create-release
+    needs: [bump-version, create-release]
     strategy:
       fail-fast: false
       matrix:
@@ -63,6 +110,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump-version.outputs.tag_name }}
 
       - uses: actions/setup-node@v4
         with:
@@ -96,3 +145,34 @@ jobs:
           projectPath: frontend
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
+
+  # Only after every platform build has succeeded: un-draft the release and
+  # mark it latest so auto-update starts offering it. draft:false and
+  # make_latest can't be set in the same PATCH (make_latest is silently
+  # ignored when combined with draft:false), so this is two calls.
+  publish-release:
+    # TEMPORARY: disabled for the first run of this new pipeline so the build
+    # artifacts can be checked by hand before anything reaches real users'
+    # auto-update. Remove this line once that run is verified.
+    if: false
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            const release_id = Number(process.env.RELEASE_ID);
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id,
+              draft: false,
+            });
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id,
+              make_latest: "true",
+            });
