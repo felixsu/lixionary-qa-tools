@@ -6,6 +6,7 @@ import { runAllSync, resolveConflictKeepLocal, resolveConflictKeepCloud } from "
 import type { SyncConflict } from "./syncEngine";
 import { setScreencastFrame } from "../utils/screencastFrameStore";
 import { scanInputNames } from "../utils/requestTokens";
+import type { Flow } from "../utils/flowTypes";
 
 const VPS_API_URL = process.env.NEXT_PUBLIC_VPS_API_URL ||
   (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://qa-tools-api.lixionary.com');
@@ -288,6 +289,13 @@ interface AppContextType {
   setSelectedRequestId: (id: string) => void;
   fetchCollections: () => Promise<void>;
 
+  // API Studio Flows
+  flows: Flow[];
+  fetchFlows: () => Promise<void>;
+  createFlow: (name: string) => Promise<Flow>;
+  updateFlow: (id: string, updates: Partial<Pick<Flow, "name" | "description" | "nodes" | "edges">>) => Promise<void>;
+  deleteFlow: (id: string) => Promise<void>;
+
   // API Explorer Active Request Editor State
   reqName: string;
   setReqName: (name: string) => void;
@@ -540,6 +548,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     id ? (authFunctions.find((af) => af.id === id || af.cloudId === id)?.cloudId || null) : null;
   const [userGuides, setUserGuides] = useState<UserGuideSummary[]>([]);
   const [collections, setCollections] = useState<Collection[]>([]);
+  const [flows, setFlows] = useState<Flow[]>([]);
   const [selectedCollectionId, setSelectedCollectionId] = useState<string>("");
   const [selectedRequestId, setSelectedRequestId] = useState<string>("");
 
@@ -689,6 +698,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         fetchEnvironments();
         fetchAuthFunctions();
         fetchCollections();
+        fetchFlows();
         fetchProfiles();
         fetchUserSessions();
         fetchUserGuides();
@@ -865,7 +875,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // since last sync) accumulate in syncConflicts for the SyncConflictModal to
   // resolve — resolved elsewhere or no longer applicable, they're replaced with
   // whatever this pass finds for the same entity types, never silently dropped.
-  const triggerSync = async (entityTypes: import("./syncEngine").EntityType[] = ["environment", "auth_function", "browser_profile", "collection"]) => {
+  const triggerSync = async (entityTypes: import("./syncEngine").EntityType[] = ["environment", "auth_function", "browser_profile", "collection", "flow"]) => {
     if (syncInFlightRef.current) return;
     syncInFlightRef.current = true;
     lastSyncAttemptRef.current = Date.now();
@@ -883,6 +893,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (entityTypes.includes("auth_function")) fetchAuthFunctions();
       if (entityTypes.includes("browser_profile")) fetchProfiles();
       if (entityTypes.includes("collection")) fetchCollections();
+      if (entityTypes.includes("flow")) fetchFlows();
 
       // runAllSync deliberately never throws on connectivity issues (each entity
       // type's pass is independently resilient), so it can't tell us whether the
@@ -917,6 +928,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (conflict.entityType === "auth_function") fetchAuthFunctions();
       if (conflict.entityType === "browser_profile") fetchProfiles();
       if (conflict.entityType === "collection") fetchCollections();
+      if (conflict.entityType === "flow") fetchFlows();
     } catch (e: any) {
       throw new Error(`Failed to resolve conflict: ${e.message}`);
     }
@@ -1071,6 +1083,70 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     await fetchCollections();
     triggerSync(["auth_function", "collection"]);
+  };
+
+  const fetchFlows = async () => {
+    try {
+      const data = await apiCall("/api/local-store/flow");
+      const mapped: Flow[] = data.map((r: any) => ({
+        id: r.localId,
+        cloudId: r.cloudId,
+        name: r.name,
+        description: r.description,
+        nodes: r.nodes || [],
+        edges: r.edges || [],
+      }));
+      setFlows(mapped);
+    } catch (e) {
+      console.error("Failed to fetch flows", e);
+    }
+  };
+
+  const createFlow = async (name: string): Promise<Flow> => {
+    const record = await apiCall("/api/local-store/flow", {
+      method: "POST",
+      body: JSON.stringify({ payload: { name, description: "", nodes: [], edges: [] } }),
+    });
+    await fetchFlows();
+    triggerSync(["flow"]);
+    return {
+      id: record.localId,
+      cloudId: record.cloudId,
+      name: record.name,
+      description: record.description,
+      nodes: record.nodes || [],
+      edges: record.edges || [],
+    };
+  };
+
+  // Whole-blob replace, like persistCollectionTree — the local-store PUT
+  // overwrites the payload with the merged object.
+  const updateFlow = async (
+    id: string,
+    updates: Partial<Pick<Flow, "name" | "description" | "nodes" | "edges">>
+  ): Promise<void> => {
+    const current = flows.find((f) => f.id === id);
+    if (!current) throw new Error("Flow not found.");
+    const merged: Flow = { ...current, ...updates };
+    await apiCall(`/api/local-store/flow/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        payload: {
+          name: merged.name,
+          description: merged.description || "",
+          nodes: merged.nodes,
+          edges: merged.edges,
+        },
+      }),
+    });
+    await fetchFlows();
+    triggerSync(["flow"]);
+  };
+
+  const deleteFlow = async (id: string): Promise<void> => {
+    await apiCall(`/api/local-store/flow/${id}`, { method: "DELETE" });
+    await fetchFlows();
+    triggerSync(["flow"]);
   };
 
   const fetchProfiles = async () => {
@@ -2273,6 +2349,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         selectedRequestId,
         setSelectedRequestId,
         fetchCollections,
+        flows,
+        fetchFlows,
+        createFlow,
+        updateFlow,
+        deleteFlow,
 
         reqName,
         setReqName,
