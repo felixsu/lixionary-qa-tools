@@ -225,6 +225,23 @@ const executeRequestConfig = async (
     return { ...empty, error: cfg.requestId ? "Linked request not found" : "No request selected" };
   }
 
+  // Auth parity with the API Explorer: HOOK auth is kept user-local — the
+  // shared collection stores authFunctionId as null and the real binding
+  // lives in localStorage (see handleSaveRequest / the hydration effect in
+  // AppContext). Apply the same per-device override here.
+  let authType = request.authType;
+  let authConfig = request.authConfig || {};
+  try {
+    const override = localStorage.getItem(`lixionary_auth_${request.id}`);
+    if (override) {
+      const parsed = JSON.parse(override);
+      authType = parsed.authType ?? authType;
+      authConfig = parsed.authConfig ?? authConfig;
+    }
+  } catch {
+    // storage unavailable / malformed override — fall back to the saved values
+  }
+
   // Start from the request's own stored bindings; flow mappings override.
   const bindings = new Map<string, InputBinding>();
   for (const b of request.inputs || []) bindings.set(b.name, b);
@@ -254,12 +271,12 @@ const executeRequestConfig = async (
     queryParams: (request.queryParams || []).filter((p) => p.key !== ""),
     bodyType: request.bodyType,
     body: request.body,
-    authType: request.authType,
+    authType,
     authConfig: {
-      token: request.authConfig?.token,
-      key: request.authConfig?.key,
-      value: request.authConfig?.value,
-      authFunctionId: deps.resolveAuthFunctionCloudId(request.authConfig?.authFunctionId),
+      token: authConfig?.token,
+      key: authConfig?.key,
+      value: authConfig?.value,
+      authFunctionId: deps.resolveAuthFunctionCloudId(authConfig?.authFunctionId),
     },
     responseParserScript: request.responseParserScript || "",
     inputs: Array.from(bindings.values()),

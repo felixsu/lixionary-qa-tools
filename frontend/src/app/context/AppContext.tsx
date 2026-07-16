@@ -535,7 +535,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Databases & Shared States
   const [environments, setEnvironments] = useState<Environment[]>([]);
-  const [selectedEnvId, setSelectedEnvId] = useState<string>("");
+  // Persisted so a restart doesn't silently fall back to the first environment
+  // (which made {{env.X}} tokens resolve against the wrong variable set).
+  const [selectedEnvId, setSelectedEnvIdState] = useState<string>(() => {
+    try {
+      return localStorage.getItem("lixionary_selected_env") || "";
+    } catch { return ""; }
+  });
+  const setSelectedEnvId = (id: string) => {
+    setSelectedEnvIdState(id);
+    try { localStorage.setItem("lixionary_selected_env", id); } catch { /* non-fatal */ }
+  };
   const selectedEnvCloudId = environments.find((e) => e.id === selectedEnvId)?.cloudId || null;
   const [authFunctions, setAuthFunctions] = useState<AuthFunction[]>([]);
   // Cloud endpoints that resolve HOOK auth (executor run/preview, profile token
@@ -996,7 +1006,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         variables: r.variables || [],
       }));
       setEnvironments(mapped);
-      if (mapped.length && !selectedEnvId) {
+      // Auto-select only when nothing is selected or the saved selection no
+      // longer exists (deleted environment / different account).
+      if (mapped.length && !mapped.some((e) => e.id === selectedEnvId)) {
         setSelectedEnvId(mapped[0].id);
       }
     } catch (e) {

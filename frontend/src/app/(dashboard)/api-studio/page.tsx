@@ -24,7 +24,7 @@ import type { Collection } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
 import { Modal, ModalFooter } from "../../components/Modal";
 import { confirmDialog } from "../../utils/confirmDialog";
-import { scanInputNames } from "../../utils/requestTokens";
+import { scanInputNames, scanEnvNames } from "../../utils/requestTokens";
 import {
   type Flow, type FlowNode, type FlowEdge, type FlowNodeType,
   type RequestNodeConfig, type LooperNodeConfig, type DelayNodeConfig, type VerifierNodeConfig,
@@ -132,6 +132,7 @@ function StudioEditor() {
     flows, createFlow, updateFlow, deleteFlow,
     collections,
     apiCall, selectedEnvCloudId, resolveAuthFunctionCloudId,
+    environments, selectedEnvId,
   } = useAppContext();
 
   const [selectedFlowId, setSelectedFlowId] = useState<string>("");
@@ -321,6 +322,38 @@ function StudioEditor() {
     return null;
   }, [nodes, edges, collections]);
 
+  // Non-blocking: {{env.X}} vars referenced by linked requests but absent from
+  // the active environment. Not an error — a parser script earlier in the flow
+  // may env.set() them at runtime — but the most common cause is running with
+  // the wrong environment selected.
+  const envWarning = useMemo((): string | null => {
+    const activeEnv = environments.find((e) => e.id === selectedEnvId);
+    const defined = new Set((activeEnv?.variables || []).map((v) => v.key));
+    const missing = new Set<string>();
+    for (const n of nodes) {
+      const cfg = requestNodeConfigOf(n.data.flowNode);
+      if (!cfg?.requestId) continue;
+      const req = lookupRequest(collections, cfg.requestId);
+      if (!req) continue;
+      const referenced = scanEnvNames({
+        url: req.url,
+        headers: req.headers || [],
+        queryParams: req.queryParams || [],
+        body: req.body || "",
+        authType: req.authType,
+        authConfig: req.authConfig || {},
+      });
+      for (const name of referenced) {
+        if (!defined.has(name)) missing.add(name);
+      }
+    }
+    if (!missing.size) return null;
+    const list = Array.from(missing).join(", ");
+    return activeEnv
+      ? `Env vars not defined in "${activeEnv.name}": ${list}`
+      : `No active environment — {{env.*}} vars unresolved: ${list}`;
+  }, [nodes, collections, environments, selectedEnvId]);
+
   // ---- toolbar actions ----
 
   const onSave = async () => {
@@ -475,11 +508,15 @@ function StudioEditor() {
 
         <div className="flex-1" />
 
-        {validationError && (
+        {validationError ? (
           <span className="flex items-center gap-1.5 text-[11px] text-amber-700 max-w-[320px] truncate" title={validationError}>
             <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" /> {validationError}
           </span>
-        )}
+        ) : envWarning ? (
+          <span className="flex items-center gap-1.5 text-[11px] text-amber-700 max-w-[320px] truncate" title={`${envWarning} — they may still be set at runtime via env.set()`}>
+            <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" /> {envWarning}
+          </span>
+        ) : null}
         <button
           onClick={onDownloadReport}
           disabled={!records.length}

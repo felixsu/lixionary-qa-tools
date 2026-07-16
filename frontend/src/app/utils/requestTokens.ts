@@ -45,3 +45,37 @@ export const scanInputNames = (fields: ScannableRequestFields): string[] => {
 
   return names;
 };
+
+const collectEnvTokens = (text: string | undefined, names: string[], seen: Set<string>) => {
+  if (!text) return;
+  for (const match of text.matchAll(TOKEN_RE)) {
+    const raw = match[1].trim();
+    if (!raw.startsWith("env.")) continue;
+    const name = raw.slice(4).trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    names.push(name);
+  }
+};
+
+// Returns the environment-variable names referenced as {{env.NAME}} across
+// all interpolated request fields, deduped in first-seen order.
+export const scanEnvNames = (fields: ScannableRequestFields): string[] => {
+  const names: string[] = [];
+  const seen = new Set<string>();
+
+  collectEnvTokens(fields.url, names, seen);
+  for (const h of fields.headers) collectEnvTokens(h.value, names, seen);
+  for (const p of fields.queryParams) collectEnvTokens(p.value, names, seen);
+  collectEnvTokens(fields.body, names, seen);
+
+  const authType = (fields.authType || "").toUpperCase();
+  if (authType === "BEARER") {
+    collectEnvTokens(fields.authConfig?.token, names, seen);
+  } else if (authType === "API_KEY") {
+    collectEnvTokens(fields.authConfig?.key, names, seen);
+    collectEnvTokens(fields.authConfig?.value, names, seen);
+  }
+
+  return names;
+};
