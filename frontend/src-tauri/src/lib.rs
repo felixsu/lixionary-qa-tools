@@ -7,6 +7,7 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 // frontend must be reachable on that origin in every mode: dev via the Next
 // dev server, release via tauri-plugin-localhost serving the bundled export.
 const FRONTEND_PORT: u16 = 8481;
+const SIDECAR_PORT: u16 = 8484;
 
 struct SidecarState(Mutex<Option<Child>>);
 
@@ -34,10 +35,71 @@ fn resolve_sidecar_script(app: &tauri::App) -> Option<PathBuf> {
   None
 }
 
+// A prior sidecar can outlive a clean app shutdown — a crash, a force-quit,
+// or (before tauri-plugin-single-instance) a second app launch racing the
+// first — and leave a zombie still bound to SIDECAR_PORT. Without this, the
+// freshly-spawned sidecar fails to bind and immediately exits, and
+// sidecar_process_alive reports it as dead with no way to recover short of
+// a reboot or manually killing the orphan. Returns true if anything was
+// killed, so the caller can give the OS a moment to actually release the port.
+fn kill_stale_port_holder(port: u16) -> bool {
+  let mut killed_any = false;
+
+  #[cfg(any(target_os = "macos", target_os = "linux"))]
+  {
+    if let Ok(output) = Command::new("lsof").args(["-ti", &format!("tcp:{}", port)]).output() {
+      for pid in String::from_utf8_lossy(&output.stdout).lines() {
+        let pid = pid.trim();
+        if pid.is_empty() {
+          continue;
+        }
+        println!("Killing stale process on port {}: PID {}", port, pid);
+        if Command::new("kill").args(["-9", pid]).status().map(|s| s.success()).unwrap_or(false) {
+          killed_any = true;
+        }
+      }
+    }
+  }
+
+  #[cfg(target_os = "windows")]
+  {
+    if let Ok(output) = Command::new("netstat").args(["-ano"]).output() {
+      let needle = format!(":{}", port);
+      for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if line.contains(&needle) && line.contains("LISTENING") {
+          if let Some(pid) = line.split_whitespace().last() {
+            println!("Killing stale process on port {}: PID {}", port, pid);
+            if Command::new("taskkill").args(["/F", "/PID", pid]).status().map(|s| s.success()).unwrap_or(false) {
+              killed_any = true;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  killed_any
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+  if let Some(window) = app.get_webview_window("main") {
+    let _ = window.show();
+    let _ = window.set_focus();
+  }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   #[allow(unused_mut)]
   let mut builder = tauri::Builder::default();
+
+  // Must be the first plugin registered — it needs to intercept before any
+  // other startup work (notably spawning the sidecar) runs at all. If
+  // another instance is already running, this process hands its launch args
+  // to that instance's callback and exits immediately.
+  builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    show_main_window(app);
+  }));
 
   #[cfg(not(debug_assertions))]
   {
@@ -79,6 +141,10 @@ pub fn run() {
 
       match resolve_sidecar_script(app) {
         Some(sidecar_abs) => {
+          if kill_stale_port_holder(SIDECAR_PORT) {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+          }
+
           println!("Launching local Python sidecar at: {:?}", sidecar_abs);
 
           // Spawn using python or fallback to python3
@@ -113,19 +179,44 @@ pub fn run() {
       Ok(())
     })
     .on_window_event(|window, event| {
-      if let tauri::WindowEvent::Destroyed = event {
-        if let Some(state) = window.try_state::<SidecarState>() {
-          let mut lock = state.0.lock().unwrap();
-          if let Some(mut child) = lock.take() {
-            println!("Terminating local sidecar process (PID: {})...", child.id());
-            let _ = child.kill();
+      match event {
+        // macOS: closing the window backgrounds the app (like Postman) rather
+        // than quitting it — reopened via the Dock icon (RunEvent::Reopen,
+        // below) or a second launch attempt (single-instance, above). Only an
+        // actual quit (Cmd+Q / Quit menu) tears the window down for real and
+        // reaches the Destroyed branch that kills the sidecar. Windows/Linux
+        // keep the original close-quits-the-app behavior — there's no tray
+        // icon here, so hiding there would strand the window with no way
+        // back short of Task Manager.
+        #[cfg(target_os = "macos")]
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+          api.prevent_close();
+          let _ = window.hide();
+        }
+        tauri::WindowEvent::Destroyed => {
+          if let Some(state) = window.try_state::<SidecarState>() {
+            let mut lock = state.0.lock().unwrap();
+            if let Some(mut child) = lock.take() {
+              println!("Terminating local sidecar process (PID: {})...", child.id());
+              let _ = child.kill();
+            }
           }
         }
+        _ => {}
       }
     })
     .invoke_handler(tauri::generate_handler![select_directory, open_external, sidecar_process_alive])
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    .build(tauri::generate_context!())
+    .expect("error while building tauri application")
+    .run(|app_handle, event| {
+      // macOS: clicking the Dock icon while the window is hidden (but the
+      // app — and its sidecar — is still running) should bring it back.
+      #[cfg(target_os = "macos")]
+      if let tauri::RunEvent::Reopen { .. } = event {
+        show_main_window(app_handle);
+      }
+      let _ = (app_handle, &event);
+    });
 }
 
 // Used by the frontend's backend-monitoring panel: a successful invoke proves
