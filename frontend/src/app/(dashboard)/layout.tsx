@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -9,6 +9,8 @@ import { useAppContext } from "../context/AppContext";
 import Dropdown from "../components/Dropdown";
 import UpdateBanner from "../components/UpdateBanner";
 import SyncConflictModal from "../components/SyncConflictModal";
+import BackendStatusIndicator from "../components/BackendStatusIndicator";
+import { useNowTick } from "../utils/useNowTick";
 
 type NavEntry =
   | { type: "section"; label: string }
@@ -70,15 +72,8 @@ export default function DashboardLayout({
     }
   }, [token, isLoadingAuth, router]);
 
-  // Drives the "Synced Xm ago" label — Date.now() can't be called during
-  // render (impure), so it's sampled in an effect and ticks on an interval.
-  const [nowTick, setNowTick] = useState<number>(0);
-  useEffect(() => {
-    const tick = () => setNowTick(Date.now());
-    const seed = setTimeout(tick, 0); // deferred, not a direct synchronous setState in the effect body
-    const interval = setInterval(tick, 15000);
-    return () => { clearTimeout(seed); clearInterval(interval); };
-  }, []);
+  // Drives the "Synced Xm ago" label.
+  const nowTick = useNowTick(15000);
 
   if (isLoadingAuth || !token) {
     return (
@@ -343,6 +338,11 @@ export default function DashboardLayout({
               </span>
             )}
           </button>
+
+          {/* Backend status */}
+          <div style={{ display: "flex", justifyContent: collapsed ? "center" : undefined }}>
+            <BackendStatusIndicator compact={collapsed} />
+          </div>
 
           {/* User row */}
           <div

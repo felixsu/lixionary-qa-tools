@@ -11,6 +11,7 @@ import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
 import type { NetworkLog, NetworkDetails } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
+import { confirmDialog } from "../../utils/confirmDialog";
 
 const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8484';
 
@@ -593,7 +594,7 @@ export default function WebExplorerPage() {
 
   const handleResetWorkspaceFile = async () => {
     if (!selectedWorkspaceFile || !sessionId) return;
-    if (!confirm(`Are you sure you want to reset ${selectedWorkspaceFile} to its default boilerplate? This will overwrite all your current modifications.`)) {
+    if (!(await confirmDialog(`Are you sure you want to reset ${selectedWorkspaceFile} to its default boilerplate? This will overwrite all your current modifications.`))) {
       return;
     }
     // A pending debounced save firing after the reset would clobber the boilerplate
@@ -634,7 +635,7 @@ export default function WebExplorerPage() {
 
   const handleDeleteFile = async (filename: string) => {
     if (filename === "main.py") { alert("main.py cannot be deleted."); return; }
-    if (!confirm(`Are you sure you want to delete ${filename}?`)) return;
+    if (!(await confirmDialog(`Are you sure you want to delete ${filename}?`))) return;
     if (!sessionId) return;
     // A pending flush after the DELETE would re-create the file (POST creates)
     if (filename === dirtyFileRef.current) cancelPendingSave();

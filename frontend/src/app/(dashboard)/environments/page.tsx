@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { Plus, Trash2, Pencil, X, Check } from "lucide-react";
 import { useAppContext, Environment } from "../../context/AppContext";
+import { confirmDialog } from "../../utils/confirmDialog";
 
 export default function EnvironmentsPage() {
   const {
@@ -100,7 +101,7 @@ export default function EnvironmentsPage() {
                     </button>
                     <button
                       onClick={async () => {
-                        if (confirm("Delete this environment?")) await handleDeleteEnv(env.id);
+                        if (await confirmDialog("Delete this environment?")) await handleDeleteEnv(env.id);
                       }}
                       className="h-7 w-7 rounded-md border border-line flex items-center justify-center hover:bg-danger-soft hover:text-danger transition-colors"
                       title="Delete"

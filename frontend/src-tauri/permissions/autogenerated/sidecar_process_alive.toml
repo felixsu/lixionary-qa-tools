@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sidecar-process-alive"
+description = "Enables the sidecar_process_alive command without any pre-configured scope."
+commands.allow = ["sidecar_process_alive"]
+
+[[permission]]
+identifier = "deny-sidecar-process-alive"
+description = "Denies the sidecar_process_alive command without any pre-configured scope."
+commands.deny = ["sidecar_process_alive"]

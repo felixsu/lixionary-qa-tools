@@ -4,10 +4,10 @@ import React, { useState, useEffect, useRef } from "react";
 import { Cpu, ArrowRight, AlertCircle, Shield } from "lucide-react";
 import { useAppContext } from "../../context/AppContext";
 import { useRouter } from "next/navigation";
+import { isTauri } from "../../utils/tauri";
+import BackendStatusIndicator from "../../components/BackendStatusIndicator";
 
 const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || "http://localhost:8484";
-
-const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export default function LoginPage() {
   const { token, handleLogin, handleGuestLogin, isLoadingAuth } = useAppContext();
@@ -137,7 +137,11 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-screen w-screen items-center justify-center bg-cream text-ink font-sans px-4">
-      <div className="w-full max-w-md space-y-8 rounded-2xl border border-line bg-cream p-8 shadow-[0_24px_48px_-12px_rgba(20,20,19,0.18)]">
+      <div className="relative w-full max-w-md space-y-8 rounded-2xl border border-line bg-cream p-8 shadow-[0_24px_48px_-12px_rgba(20,20,19,0.18)]">
+
+        <div className="absolute top-4 right-4">
+          <BackendStatusIndicator compact />
+        </div>
 
         {/* Header */}
         <div className="flex flex-col items-center text-center">

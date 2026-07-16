@@ -4,6 +4,8 @@ import React, { useState, useEffect } from "react";
 import { Plus, Trash2, Pencil, X, Key, Globe, RefreshCw, Layers } from "lucide-react";
 import { useAppContext, BrowserProfile } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
+import { isTauri } from "../../utils/tauri";
+import { confirmDialog } from "../../utils/confirmDialog";
 
 const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || "http://localhost:8484";
 
@@ -368,7 +370,7 @@ export default function BrowserProfilesPage() {
   // Tauri webview itself are unreliable across platforms.
   const handleDownloadExtension = async () => {
     const url = `${LOCAL_API_URL}/api/browser-helper/extension`;
-    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+    if (isTauri()) {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("open_external", { url });
@@ -511,7 +513,7 @@ export default function BrowserProfilesPage() {
                     </button>
                     <button
                       onClick={async () => {
-                        if (confirm("Delete this profile?")) await handleDeleteProfile(p.id);
+                        if (await confirmDialog("Delete this profile?")) await handleDeleteProfile(p.id);
                       }}
                       className="h-7 w-7 rounded-md border border-line flex items-center justify-center hover:bg-danger-soft hover:text-danger transition-colors flex-shrink-0"
                       title="Delete"

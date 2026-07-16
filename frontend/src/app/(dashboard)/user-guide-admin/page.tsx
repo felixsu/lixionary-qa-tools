@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useAppContext, UserGuideSummary } from "../../context/AppContext";
 import GuideBlockRenderer from "../../components/guide/GuideBlockRenderer";
+import { confirmDialog } from "../../utils/confirmDialog";
 
 type DraftBlock = { key: string; type: "markdown" | "mermaid"; content: string };
 
@@ -87,7 +88,7 @@ export default function UserGuideAdminPage() {
   };
 
   const handleDelete = async (guide: UserGuideSummary) => {
-    if (!confirm(`Delete the guide "${guide.title}"? This cannot be undone.`)) return;
+    if (!(await confirmDialog(`Delete the guide "${guide.title}"? This cannot be undone.`))) return;
     try {
       await apiCall(`/api/admin/user-guides/${guide.id}`, { method: "DELETE" });
       await fetchUserGuides();

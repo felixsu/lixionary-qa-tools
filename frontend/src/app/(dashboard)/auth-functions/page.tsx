@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { Plus, Trash2, Pencil, X, Clock, CheckCircle2, Circle, RefreshCw, Play } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, AuthFunction } from "../../context/AppContext";
+import { confirmDialog } from "../../utils/confirmDialog";
 
 const DEFAULT_SCRIPT = `// Call IAM/OAuth endpoint to get token
 const response = fetchToken("https://api.example.com/oauth/token", {
@@ -81,10 +82,10 @@ export default function AuthFunctionsPage() {
     setShowModal(true);
   };
 
-  const applyPreset = (presetId: string) => {
+  const applyPreset = async (presetId: string) => {
     const preset = PRESETS.find((p) => p.id === presetId);
     if (!preset) return;
-    if (script.trim() && script.trim() !== DEFAULT_SCRIPT.trim() && !confirm(`Replace the current script with the "${preset.label}" preset?`)) {
+    if (script.trim() && script.trim() !== DEFAULT_SCRIPT.trim() && !(await confirmDialog(`Replace the current script with the "${preset.label}" preset?`))) {
       return;
     }
     setScript(preset.script);
@@ -163,7 +164,7 @@ export default function AuthFunctionsPage() {
                   </button>
                   <button
                     onClick={async () => {
-                      if (confirm("Delete this auth function?")) await handleDeleteAuthFunc(func.id);
+                      if (await confirmDialog("Delete this auth function?")) await handleDeleteAuthFunc(func.id);
                     }}
                     className="h-7 w-7 rounded-md border border-line flex items-center justify-center hover:bg-danger-soft hover:text-danger transition-colors flex-shrink-0"
                     title="Delete"
