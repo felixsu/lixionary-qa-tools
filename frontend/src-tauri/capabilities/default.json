@@ -15,6 +15,7 @@
     "updater:default",
     "process:default",
     "allow-select-directory",
-    "allow-open-external"
+    "allow-open-external",
+    "allow-sidecar-process-alive"
   ]
 }

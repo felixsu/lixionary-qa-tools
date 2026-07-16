@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { Download, RefreshCw, X } from "lucide-react";
+import { isTauri } from "../utils/tauri";
 
 // Checks GitHub releases (latest.json) for a newer signed build on app start.
 // Renders nothing outside the Tauri desktop app.
@@ -13,7 +14,7 @@ export default function UpdateBanner() {
   const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+    if (!isTauri()) return;
     let cancelled = false;
     (async () => {
       try {

@@ -5,7 +5,7 @@ fn main() {
   // (tauri-plugin-localhost), which Tauri classifies as remote.
   tauri_build::try_build(
     tauri_build::Attributes::new().app_manifest(
-      tauri_build::AppManifest::new().commands(&["select_directory", "open_external"]),
+      tauri_build::AppManifest::new().commands(&["select_directory", "open_external", "sidecar_process_alive"]),
     ),
   )
   .expect("failed to run tauri-build");

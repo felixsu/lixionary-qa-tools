@@ -35,6 +35,14 @@ app.add_middleware(
     allow_origin_regex=r"(chrome-extension://.*|tauri://.*|http://tauri\.localhost)",
 )
 
+@app.get("/health")
+async def health():
+    # Deliberately no auth/DB touch — pure "is this process accepting HTTP
+    # connections" signal for the frontend's backend-monitoring panel,
+    # distinct from /api/local-store/device-id which also proves the local
+    # SQLite store is functional.
+    return {"status": "ok"}
+
 # Shared Local Workspace directory: ~/Documents/AutomationExplorer/workspaces
 USER_HOME = os.path.expanduser("~")
 BASE_DIR = os.path.join(USER_HOME, "Documents", "AutomationExplorer")

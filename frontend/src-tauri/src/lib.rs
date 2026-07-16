@@ -122,9 +122,23 @@ pub fn run() {
         }
       }
     })
-    .invoke_handler(tauri::generate_handler![select_directory, open_external])
+    .invoke_handler(tauri::generate_handler![select_directory, open_external, sidecar_process_alive])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
+}
+
+// Used by the frontend's backend-monitoring panel: a successful invoke proves
+// the Tauri IPC bridge itself is up, and the returned bool distinguishes the
+// sidecar process having crashed from it simply not answering HTTP yet (e.g.
+// still running through bootstrap_sidecar.py's first-launch venv/pip/
+// playwright-install sequence, which can take minutes).
+#[tauri::command]
+fn sidecar_process_alive(state: tauri::State<SidecarState>) -> bool {
+  let mut lock = state.0.lock().unwrap();
+  match lock.as_mut() {
+    Some(child) => matches!(child.try_wait(), Ok(None)),
+    None => false,
+  }
 }
 
 #[tauri::command]
