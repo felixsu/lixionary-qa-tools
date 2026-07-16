@@ -43,19 +43,18 @@ _cached_key_expiry = None
 
 async def decode_iam_token(token: str) -> dict:
     """
-    Decodes and verifies an RS256 JWT using Lixionary IAM's JWKS endpoint.
+    Decodes and verifies a JWT — either a token this backend issued itself
+    (HS256, from /google, /google/exchange or /guest — the common case,
+    including in production) or, for backward compatibility with sessions
+    issued before the move to direct Google SSO, an RS256 token from
+    Lixionary IAM's JWKS endpoint.
     """
     global _cached_public_key, _cached_key_expiry
-    
-    if settings.DEV_MODE:
-        try:
-            # Check if token is locally signed (HS256 mock/guest token)
-            unverified = jwt.decode(token, options={"verify_signature": False})
-            sub = unverified.get("sub", "")
-            if sub.startswith("google-") or sub.startswith("sess_") or "@" in sub or sub == "google-guest-999":
-                return jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
-        except Exception:
-            pass
+
+    try:
+        return jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
+    except Exception:
+        pass
 
     try:
         now = datetime.now(timezone.utc)
@@ -98,11 +97,6 @@ async def decode_iam_token(token: str) -> dict:
         return payload
     except Exception as e:
         print(f"IAM JWT verification failed: {e}")
-        if settings.DEV_MODE:
-            try:
-                return jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
-            except Exception:
-                pass
         raise HTTPException(status_code=401, detail="Invalid token signature")
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
