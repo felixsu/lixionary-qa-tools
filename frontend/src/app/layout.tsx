@@ -4,6 +4,7 @@ import "./globals.css";
 import { Suspense } from "react";
 import { AppProvider } from "./context/AppContext";
 import { BackendStatusProvider } from "./context/BackendStatusContext";
+import TauriOnlyGate from "./components/TauriOnlyGate";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -42,13 +43,15 @@ export default function RootLayout({
       className={`${inter.variable} ${cormorant.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col font-sans">
-        <BackendStatusProvider>
-          <AppProvider>
-            <Suspense fallback={null}>
-              {children}
-            </Suspense>
-          </AppProvider>
-        </BackendStatusProvider>
+        <TauriOnlyGate>
+          <BackendStatusProvider>
+            <AppProvider>
+              <Suspense fallback={null}>
+                {children}
+              </Suspense>
+            </AppProvider>
+          </BackendStatusProvider>
+        </TauriOnlyGate>
       </body>
     </html>
   );
