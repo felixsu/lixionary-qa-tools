@@ -171,7 +171,7 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({ node, depth, selectedFile, 
   }
 };
 
-export default function LocalScannerPage() {
+export default function NvCommonLibExplorerPage() {
   const { apiCall } = useAppContext();
 
   // Root configuration
@@ -549,7 +549,7 @@ export default function LocalScannerPage() {
             <div>
               <h1 className="font-serif text-3xl font-medium text-ink flex items-center gap-3">
                 <FolderOpen className="h-8 w-8 text-clay" />
-                Local Directory Scanner
+                NV Common Lib Explorer
               </h1>
               <p className="text-sm text-stone mt-1">Configure and manage directory tracking on your local system.</p>
             </div>
@@ -558,7 +558,7 @@ export default function LocalScannerPage() {
                 onClick={() => setIsSetupMode(false)}
                 className="h-[38px] px-4 border border-line hover:bg-hover rounded-lg text-[13px] font-medium text-graphite flex items-center gap-2 transition-all cursor-pointer"
               >
-                <ArrowLeft className="h-4 w-4" /> Back to Scanner
+                <ArrowLeft className="h-4 w-4" /> Back to Explorer
               </button>
             )}
           </div>

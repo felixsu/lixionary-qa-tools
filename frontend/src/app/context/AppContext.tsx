@@ -2,21 +2,25 @@
 
 import React, { createContext, useContext, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { runAllSync, resolveConflictKeepLocal, resolveConflictKeepCloud } from "./syncEngine";
+import type { SyncConflict } from "./syncEngine";
 
-const VPS_API_URL = process.env.NEXT_PUBLIC_VPS_API_URL || 
+const VPS_API_URL = process.env.NEXT_PUBLIC_VPS_API_URL ||
   (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://qa-tools-api.lixionary.com');
 const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8484';
 
 
 // Types
 export interface Environment {
-  id: string;
+  id: string; // local-store localId — stable offline, before any cloud sync
+  cloudId?: string | null; // Mongo _id once synced; undefined/null until then
   name: string;
   variables: { key: string; value: string; isSecret: boolean }[];
 }
 
 export interface AuthFunction {
-  id: string;
+  id: string; // local-store localId — stable offline, before any cloud sync
+  cloudId?: string | null; // Mongo _id once synced
   name: string;
   description: string;
   script: string;
@@ -53,7 +57,8 @@ export interface RequestItem {
 }
 
 export interface Collection {
-  id: string;
+  id: string; // local-store localId (root collections only) — stable offline, before any cloud sync
+  cloudId?: string | null; // Mongo _id once synced; only meaningful on root collections
   name: string;
   description?: string;
   ownerId?: string;
@@ -220,14 +225,15 @@ export interface RecordedElement {
 }
 
 export interface BrowserProfile {
-  id: string;
+  id: string; // local-store localId — stable offline, before any cloud sync
+  cloudId?: string | null; // Mongo _id once synced
   name: string;
   cookies: string;
   localStorage: string;
   authFunctionId?: string;
   authInjection?: { type: string; key: string; domainOrOrigin: string };
   defaultUrl?: string;
-  createdAt: string;
+  createdAt?: string;
 }
 
 export interface SessionInfo {
@@ -249,10 +255,18 @@ interface AppContextType {
   // Databases & Shared States
   environments: Environment[];
   selectedEnvId: string;
+  selectedEnvCloudId: string | null; // cloud Mongo _id of the selected env, once synced — for cloud endpoints that expect one
   setSelectedEnvId: (id: string) => void;
   fetchEnvironments: () => Promise<void>;
   authFunctions: AuthFunction[];
   fetchAuthFunctions: () => Promise<void>;
+  resolveAuthFunctionCloudId: (localId?: string | null) => string | null;
+  syncConflicts: SyncConflict[];
+  resolveSyncConflict: (conflict: SyncConflict, choice: "local" | "cloud") => Promise<void>;
+  isOnline: boolean;
+  lastSyncAt: string | null;
+  syncStatus: "idle" | "syncing" | "error";
+  triggerSync: (entityTypes?: import("./syncEngine").EntityType[]) => Promise<void>;
   userGuides: UserGuideSummary[];
   fetchUserGuides: () => Promise<void>;
   collections: Collection[];
@@ -486,10 +500,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const refreshPromiseRef = useRef<Promise<string> | null>(null);
 
+  // Local-first sync: this device's id (from the sidecar's local store) and an
+  // in-flight guard so overlapping triggers (login + focus + interval) collapse
+  // into one pass instead of racing each other.
+  const deviceIdRef = useRef<string | null>(null);
+  const syncInFlightRef = useRef<boolean>(false);
+  const lastSyncAttemptRef = useRef<number>(0);
+  const [syncConflicts, setSyncConflicts] = useState<SyncConflict[]>([]);
+  const [isOnline, setIsOnline] = useState<boolean>(true);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "error">("idle");
+
   // Databases & Shared States
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [selectedEnvId, setSelectedEnvId] = useState<string>("");
+  const selectedEnvCloudId = environments.find((e) => e.id === selectedEnvId)?.cloudId || null;
   const [authFunctions, setAuthFunctions] = useState<AuthFunction[]>([]);
+  // Cloud endpoints that resolve HOOK auth (executor run/preview, profile token
+  // fetch) expect a Mongo _id — an auth function that hasn't synced yet only has
+  // a local id, so this resolves to null rather than send an id the cloud can't parse.
+  // id may be a local id (set via this device's own UI, which never changes even
+  // after the record syncs) or a cloud id (pulled from a record another device
+  // wrote) — check both rather than assume.
+  const resolveAuthFunctionCloudId = (id?: string | null): string | null =>
+    id ? (authFunctions.find((af) => af.id === id || af.cloudId === id)?.cloudId || null) : null;
   const [userGuides, setUserGuides] = useState<UserGuideSummary[]>([]);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [selectedCollectionId, setSelectedCollectionId] = useState<string>("");
@@ -628,7 +662,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       fetchProfiles();
       fetchUserSessions();
       fetchUserGuides();
+      triggerSync();
     }
+  }, [token]);
+
+  // Keep local-first data fresh without the user having to think about it:
+  // re-sync when the window regains focus (debounced — skip if we just synced
+  // within the last minute, e.g. quick tab-switching) and on a slow background
+  // interval as a fallback while the tab stays open.
+  useEffect(() => {
+    if (!token) return;
+
+    const handleFocus = () => {
+      if (Date.now() - lastSyncAttemptRef.current < 60_000) return;
+      triggerSync();
+    };
+    window.addEventListener("focus", handleFocus);
+
+    const interval = setInterval(() => {
+      triggerSync();
+    }, 5 * 60 * 1000);
+
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      clearInterval(interval);
+    };
   }, [token]);
 
   // Ref to suppress the auth-persist write on the render right after a selection
@@ -698,7 +756,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ...(tok ? { "Authorization": `Bearer ${tok}` } : {}),
         ...(options.headers || {})
       };
-      const isLocal = path.startsWith("/api/browser") || path.startsWith("/api/workspace") || path.startsWith("/api/browser-helper");
+      const isLocal = path.startsWith("/api/browser") || path.startsWith("/api/workspace") || path.startsWith("/api/browser-helper") || path.startsWith("/api/local-store");
       const baseUrl = isLocal ? LOCAL_API_URL : VPS_API_URL;
       const fullUrl = `${baseUrl}${path}`;
       return await fetch(fullUrl, { ...options, headers });
@@ -769,6 +827,68 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return response.json();
   };
 
+  // Local-first sync: reconciles the sidecar's local store against the cloud
+  // for the given entity types. Conflicts (dirty locally AND moved on cloud
+  // since last sync) accumulate in syncConflicts for the SyncConflictModal to
+  // resolve — resolved elsewhere or no longer applicable, they're replaced with
+  // whatever this pass finds for the same entity types, never silently dropped.
+  const triggerSync = async (entityTypes: import("./syncEngine").EntityType[] = ["environment", "auth_function", "browser_profile", "collection"]) => {
+    if (syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
+    lastSyncAttemptRef.current = Date.now();
+    setSyncStatus("syncing");
+    try {
+      if (!deviceIdRef.current) {
+        const { deviceId } = await apiCall("/api/local-store/device-id");
+        deviceIdRef.current = deviceId;
+      }
+      const conflicts = await runAllSync(apiCall, deviceIdRef.current!, entityTypes);
+      setSyncConflicts((prev) => [...prev.filter((c) => !entityTypes.includes(c.entityType)), ...conflicts]);
+      // Refetch whichever local state changed so the UI reflects synced content
+      // (new cloudIds, pulled remote edits, FK-remapped references, etc).
+      if (entityTypes.includes("environment")) fetchEnvironments();
+      if (entityTypes.includes("auth_function")) fetchAuthFunctions();
+      if (entityTypes.includes("browser_profile")) fetchProfiles();
+      if (entityTypes.includes("collection")) fetchCollections();
+
+      // runAllSync deliberately never throws on connectivity issues (each entity
+      // type's pass is independently resilient), so it can't tell us whether the
+      // cloud was actually reachable this pass — probe its lightest endpoint
+      // directly rather than changing that contract.
+      try {
+        await apiCall("/api/environments/sync-state");
+        setIsOnline(true);
+        setLastSyncAt(new Date().toISOString());
+      } catch {
+        setIsOnline(false);
+      }
+      setSyncStatus("idle");
+    } catch (e) {
+      console.warn("[sync] sync pass failed", e);
+      setSyncStatus("error");
+    } finally {
+      syncInFlightRef.current = false;
+    }
+  };
+
+  // User resolved a conflict card in SyncConflictModal.
+  const resolveSyncConflict = async (conflict: SyncConflict, choice: "local" | "cloud") => {
+    try {
+      if (choice === "local") {
+        await resolveConflictKeepLocal(conflict, apiCall, deviceIdRef.current!);
+      } else {
+        await resolveConflictKeepCloud(conflict, apiCall);
+      }
+      setSyncConflicts((prev) => prev.filter((c) => !(c.entityType === conflict.entityType && c.localId === conflict.localId)));
+      if (conflict.entityType === "environment") fetchEnvironments();
+      if (conflict.entityType === "auth_function") fetchAuthFunctions();
+      if (conflict.entityType === "browser_profile") fetchProfiles();
+      if (conflict.entityType === "collection") fetchCollections();
+    } catch (e: any) {
+      throw new Error(`Failed to resolve conflict: ${e.message}`);
+    }
+  };
+
   const handleLogin = async (code: string) => {
     try {
       const data = await apiCall("/api/auth/oauth-token", {
@@ -822,10 +942,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const fetchEnvironments = async () => {
     try {
-      const data = await apiCall("/api/environments");
-      setEnvironments(data);
-      if (data.length && !selectedEnvId) {
-        setSelectedEnvId(data[0].id);
+      const data = await apiCall("/api/local-store/environment");
+      const mapped: Environment[] = data.map((r: any) => ({
+        id: r.localId,
+        cloudId: r.cloudId,
+        name: r.name,
+        variables: r.variables || [],
+      }));
+      setEnvironments(mapped);
+      if (mapped.length && !selectedEnvId) {
+        setSelectedEnvId(mapped[0].id);
       }
     } catch (e) {
       console.error("Failed to fetch environments", e);
@@ -834,8 +960,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const fetchAuthFunctions = async () => {
     try {
-      const data = await apiCall("/api/auth-functions");
-      setAuthFunctions(data);
+      const data = await apiCall("/api/local-store/auth_function");
+      const mapped: AuthFunction[] = data.map((r: any) => ({
+        id: r.localId,
+        cloudId: r.cloudId,
+        name: r.name,
+        description: r.description,
+        script: r.script,
+        expires_in: r.expires_in,
+        cachedToken: r.cachedToken,
+        expiresAt: r.expiresAt,
+      }));
+      setAuthFunctions(mapped);
     } catch (e) {
       console.error("Failed to fetch auth functions", e);
     }
@@ -852,12 +988,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const fetchCollections = async () => {
     try {
-      const data = await apiCall("/api/collections");
-      setCollections(data);
-      if (data.length && !selectedCollectionId) {
-        setSelectedCollectionId(data[0].id);
-        if (data[0].requests.length) {
-          setSelectedRequestId(data[0].requests[0].id);
+      const data = await apiCall("/api/local-store/collection");
+      const mapped: Collection[] = data.map((r: any) => ({
+        id: r.localId,
+        cloudId: r.cloudId,
+        name: r.name,
+        description: r.description,
+        ownerId: r.ownerId,
+        collaboratorIds: r.collaboratorIds,
+        requests: r.requests || [],
+        children: r.children || [],
+      }));
+      setCollections(mapped);
+      if (mapped.length && !selectedCollectionId) {
+        setSelectedCollectionId(mapped[0].id);
+        if (mapped[0].requests.length) {
+          setSelectedRequestId(mapped[0].requests[0].id);
         }
       }
     } catch (e) {
@@ -865,12 +1011,50 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // Shared by every collection-tree mutation (add/rename/move/delete a request
+  // or sub-collection): merges `updates` onto the current root collection and
+  // writes the FULL merged object to local-store (a whole-blob replace, unlike
+  // the cloud route's partial $set), then refetches + kicks a background sync.
+  const persistCollectionTree = async (
+    rootColId: string,
+    updates: Partial<Pick<Collection, "name" | "description" | "requests" | "children">>
+  ): Promise<void> => {
+    const current = collections.find((c) => c.id === rootColId);
+    if (!current) throw new Error("Collection not found.");
+    const merged: Collection = { ...current, ...updates };
+    await apiCall(`/api/local-store/collection/${rootColId}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        payload: {
+          name: merged.name,
+          description: merged.description,
+          ownerId: merged.ownerId,
+          collaboratorIds: merged.collaboratorIds,
+          requests: merged.requests,
+          children: merged.children,
+        }
+      })
+    });
+    await fetchCollections();
+    triggerSync(["auth_function", "collection"]);
+  };
+
   const fetchProfiles = async () => {
     try {
-      const data = await apiCall("/api/profiles");
-      setProfiles(data);
-      if (data.length && !selectedProfileId) {
-        setSelectedProfileId(data[0].id);
+      const data = await apiCall("/api/local-store/browser_profile");
+      const mapped: BrowserProfile[] = data.map((r: any) => ({
+        id: r.localId,
+        cloudId: r.cloudId,
+        name: r.name,
+        cookies: r.cookies,
+        localStorage: r.localStorage,
+        authFunctionId: r.authFunctionId,
+        authInjection: r.authInjection,
+        defaultUrl: r.defaultUrl,
+      }));
+      setProfiles(mapped);
+      if (mapped.length && !selectedProfileId) {
+        setSelectedProfileId(mapped[0].id);
       }
     } catch (e) {
       console.error("Failed to fetch browser profiles", e);
@@ -942,9 +1126,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           localStorageData = profile.localStorage ? JSON.parse(profile.localStorage) : null;
         } catch {}
 
-        if (profile.authFunctionId && profile.authInjection) {
+        // The cloud endpoint resolves the auth function id (a path segment, not
+        // optional) as a Mongo _id — skip the token fetch entirely if it hasn't
+        // synced yet rather than send an id the cloud can't parse.
+        const authFunctionCloudId = resolveAuthFunctionCloudId(profile.authFunctionId);
+        if (authFunctionCloudId && profile.authInjection) {
           try {
-            const tokenData = await apiCall(`/api/auth-functions/${profile.authFunctionId}/token?envId=${selectedEnvId}`);
+            // Same reasoning for envId — an environment that hasn't synced yet
+            // only has a local id, so omit the param instead.
+            const tokenUrl = selectedEnvCloudId
+              ? `/api/auth-functions/${authFunctionCloudId}/token?envId=${selectedEnvCloudId}`
+              : `/api/auth-functions/${authFunctionCloudId}/token`;
+            const tokenData = await apiCall(tokenUrl);
             if (tokenData && tokenData.token) {
               const tokenVal = tokenData.token;
 
@@ -1456,10 +1649,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           token: reqAuthConfig.token,
           key: reqAuthConfig.key,
           value: reqAuthConfig.value,
-          authFunctionId: reqAuthConfig.authFunctionId
+          authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId)
         },
         responseParserScript: reqParserScript,
-        environmentId: selectedEnvId || null
+        // Cloud resolves this as a Mongo _id — fall back to none if the selected
+        // environment hasn't synced to the cloud yet (only has a local id so far).
+        environmentId: selectedEnvCloudId
       };
 
       const result = await apiCall("/api/executor/run", {
@@ -1518,21 +1713,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       const updatedCol = updateRequestInTree(col, selectedRequestId, updatedRequest);
 
-      await apiCall(`/api/collections/${col.id}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          requests: updatedCol.requests,
-          children: updatedCol.children || []
-        })
-      });
+      await persistCollectionTree(col.id, { requests: updatedCol.requests, children: updatedCol.children || [] });
 
       // Saved state is now authoritative — drop the unsaved auth override.
       // Exception: HOOK auth is kept user-local in localStorage (not in DB), so don't clear it.
       if (reqAuthType !== "HOOK") {
         try { localStorage.removeItem(`lixionary_auth_${selectedRequestId}`); } catch { /* non-fatal */ }
       }
-
-      await fetchCollections();
     } catch (e: any) {
       throw new Error(`Save failed: ${e.message}`);
     }
@@ -1565,15 +1752,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       const updatedCol = addRequestToNode(col, actualTargetId, newRequest);
 
-      await apiCall(`/api/collections/${col.id}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          requests: updatedCol.requests,
-          children: updatedCol.children || []
-        })
-      });
-
-      await fetchCollections();
+      await persistCollectionTree(col.id, { requests: updatedCol.requests, children: updatedCol.children || [] });
       setSelectedRequestId(newRequest.id);
     } catch (e: any) {
       throw new Error(`Failed to add request: ${e.message}`);
@@ -1608,14 +1787,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const updatedCol = addRequestToNode(col, targetColId, newRequest);
 
-    await apiCall(`/api/collections/${col.id}`, {
-      method: "PUT",
-      body: JSON.stringify({
-        requests: updatedCol.requests,
-        children: updatedCol.children || []
-      })
-    });
-    await fetchCollections();
+    await persistCollectionTree(col.id, { requests: updatedCol.requests, children: updatedCol.children || [] });
   };
 
   const handleSaveNetworkRequestToCollection = async (
@@ -1676,15 +1848,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       const updatedCol = addSubCollectionToNode(col, parentColId, newSub);
 
-      await apiCall(`/api/collections/${col.id}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          requests: updatedCol.requests,
-          children: updatedCol.children || []
-        })
-      });
-
-      await fetchCollections();
+      await persistCollectionTree(col.id, { requests: updatedCol.requests, children: updatedCol.children || [] });
     } catch (e: any) {
       throw new Error(`Failed to create sub-collection: ${e.message}`);
     }
@@ -1763,13 +1927,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           updatedCol = addSubCollectionToNode(updatedCol, targetColId, itemToMove as Collection);
         }
 
-        await apiCall(`/api/collections/${sourceRootCol.id}`, {
-          method: "PUT",
-          body: JSON.stringify({
-            requests: updatedCol.requests,
-            children: updatedCol.children || []
-          })
-        });
+        await persistCollectionTree(sourceRootCol.id, { requests: updatedCol.requests, children: updatedCol.children || [] });
       } else {
         // Cross root tree movement
         const updatedSourceCol = removeNodeFromTree(sourceRootCol, nodeId);
@@ -1781,25 +1939,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
 
         // Save target first
-        await apiCall(`/api/collections/${targetRootCol.id}`, {
-          method: "PUT",
-          body: JSON.stringify({
-            requests: updatedTargetCol.requests,
-            children: updatedTargetCol.children || []
-          })
-        });
+        await persistCollectionTree(targetRootCol.id, { requests: updatedTargetCol.requests, children: updatedTargetCol.children || [] });
 
         // Save source second
-        await apiCall(`/api/collections/${sourceRootCol.id}`, {
-          method: "PUT",
-          body: JSON.stringify({
-            requests: updatedSourceCol.requests,
-            children: updatedSourceCol.children || []
-          })
-        });
+        await persistCollectionTree(sourceRootCol.id, { requests: updatedSourceCol.requests, children: updatedSourceCol.children || [] });
       }
-
-      await fetchCollections();
     } catch (e: any) {
       throw new Error(`Failed to move item: ${e.message}`);
     }
@@ -1808,12 +1952,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const handleDeleteNode = async (nodeId: string, nodeType: "request" | "collection") => {
     try {
       if (nodeType === "collection" && collections.some(c => c.id === nodeId)) {
-        await apiCall(`/api/collections/${nodeId}`, { method: "DELETE" });
+        await apiCall(`/api/local-store/collection/${nodeId}`, { method: "DELETE" });
         if (selectedCollectionId === nodeId) {
           setSelectedCollectionId("");
           setSelectedRequestId("");
         }
         await fetchCollections();
+        triggerSync(["collection"]);
         return;
       }
 
@@ -1831,19 +1976,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       const updatedCol = removeNodeFromTree(col, nodeId);
 
-      await apiCall(`/api/collections/${col.id}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          requests: updatedCol.requests,
-          children: updatedCol.children || []
-        })
-      });
+      await persistCollectionTree(col.id, { requests: updatedCol.requests, children: updatedCol.children || [] });
 
       if (nodeType === "request" && selectedRequestId === nodeId) {
         setSelectedRequestId("");
       }
-
-      await fetchCollections();
     } catch (e: any) {
       throw new Error(`Failed to delete item: ${e.message}`);
     }
@@ -1852,11 +1989,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const handleRenameNode = async (nodeId: string, nodeType: "request" | "collection", newName: string) => {
     try {
       if (nodeType === "collection" && collections.some(c => c.id === nodeId)) {
-        await apiCall(`/api/collections/${nodeId}`, {
-          method: "PUT",
-          body: JSON.stringify({ name: newName })
-        });
-        await fetchCollections();
+        await persistCollectionTree(nodeId, { name: newName });
         return;
       }
 
@@ -1888,31 +2021,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       const updatedCol = renameInTree(col);
 
-      await apiCall(`/api/collections/${col.id}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          requests: updatedCol.requests,
-          children: updatedCol.children || []
-        })
-      });
+      await persistCollectionTree(col.id, { requests: updatedCol.requests, children: updatedCol.children || [] });
 
       if (nodeType === "request" && selectedRequestId === nodeId) {
         setReqName(newName);
       }
-
-      await fetchCollections();
     } catch (e: any) {
       throw new Error(`Failed to rename item: ${e.message}`);
     }
   };
 
   const createCollection = async (name: string): Promise<Collection> => {
-    const result = await apiCall("/api/collections", {
+    const result = await apiCall("/api/local-store/collection", {
       method: "POST",
-      body: JSON.stringify({ name })
+      body: JSON.stringify({ payload: { name, description: "", requests: [], children: [] } })
     });
     await fetchCollections();
-    return result as Collection;
+    triggerSync(["collection"]);
+    return {
+      id: result.localId,
+      cloudId: result.cloudId,
+      name: result.name,
+      description: result.description,
+      requests: result.requests || [],
+      children: result.children || [],
+    };
   };
 
   const handleCreateCollection = async (name: string) => {
@@ -1924,6 +2057,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // Importing/sharing a collection is inherently a cloud operation (resolving
+  // another user's identity, granting cloud-side access) — stays cloud-only,
+  // unlike the local-first CRUD above. Once it succeeds, a sync pass pulls the
+  // now-shared collection into this device's local store.
   const handleImportCollection = async (id: string) => {
     try {
       await apiCall(`/api/collections/${id}`);
@@ -1931,8 +2068,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         method: "POST",
         body: JSON.stringify({ userId: user.id })
       });
-      await fetchCollections();
-      setSelectedCollectionId(id);
+      await triggerSync(["collection"]);
+      const localRecords = await apiCall("/api/local-store/collection");
+      const imported = localRecords.find((r: any) => r.cloudId === id);
+      if (imported) setSelectedCollectionId(imported.localId);
     } catch (e: any) {
       throw new Error(`Import failed: ${e.message}`);
     }
@@ -1940,12 +2079,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const handleAddCollaborator = async (email: string) => {
     if (!selectedCollectionId) return;
+    const col = collections.find((c) => c.id === selectedCollectionId);
+    if (!col?.cloudId) throw new Error("This collection hasn't finished syncing yet — try again in a moment.");
     try {
-      await apiCall(`/api/collections/${selectedCollectionId}/collaborators`, {
+      await apiCall(`/api/collections/${col.cloudId}/collaborators`, {
         method: "POST",
         body: JSON.stringify({ email })
       });
-      fetchCollections();
+      triggerSync(["collection"]);
     } catch (e: any) {
       throw new Error(`Sharing failed: ${e.message}`);
     }
@@ -1954,17 +2095,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const handleSaveEnv = async (name: string, variables: { key: string; value: string; isSecret: boolean }[], id: string | null) => {
     try {
       if (id) {
-        await apiCall(`/api/environments/${id}`, {
+        await apiCall(`/api/local-store/environment/${id}`, {
           method: "PUT",
-          body: JSON.stringify({ name, variables })
+          body: JSON.stringify({ payload: { name, variables } })
         });
       } else {
-        await apiCall("/api/environments", {
+        await apiCall("/api/local-store/environment", {
           method: "POST",
-          body: JSON.stringify({ name, variables })
+          body: JSON.stringify({ payload: { name, variables } })
         });
       }
       fetchEnvironments();
+      triggerSync(["environment"]);
     } catch (e: any) {
       throw new Error(`Failed to save environment: ${e.message}`);
     }
@@ -1972,8 +2114,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const handleDeleteEnv = async (id: string) => {
     try {
-      await apiCall(`/api/environments/${id}`, { method: "DELETE" });
+      await apiCall(`/api/local-store/environment/${id}`, { method: "DELETE" });
       fetchEnvironments();
+      triggerSync(["environment"]);
       if (selectedEnvId === id) setSelectedEnvId("");
     } catch (e: any) {
       throw new Error(`Delete failed: ${e.message}`);
@@ -1983,17 +2126,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const handleSaveAuthFunc = async (name: string, description: string, script: string, expires_in: number | null, id: string | null) => {
     try {
       if (id) {
-        await apiCall(`/api/auth-functions/${id}`, {
+        await apiCall(`/api/local-store/auth_function/${id}`, {
           method: "PUT",
-          body: JSON.stringify({ name, description, script, expires_in })
+          body: JSON.stringify({ payload: { name, description, script, expires_in } })
         });
       } else {
-        await apiCall("/api/auth-functions", {
+        await apiCall("/api/local-store/auth_function", {
           method: "POST",
-          body: JSON.stringify({ name, description, script, expires_in })
+          body: JSON.stringify({ payload: { name, description, script, expires_in } })
         });
       }
       fetchAuthFunctions();
+      triggerSync(["auth_function", "browser_profile", "collection"]);
     } catch (e: any) {
       throw new Error(`Failed to save auth function: ${e.message}`);
     }
@@ -2001,8 +2145,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const handleDeleteAuthFunc = async (id: string) => {
     try {
-      await apiCall(`/api/auth-functions/${id}`, { method: "DELETE" });
+      await apiCall(`/api/local-store/auth_function/${id}`, { method: "DELETE" });
       fetchAuthFunctions();
+      triggerSync(["auth_function"]);
     } catch (e: any) {
       throw new Error(`Delete failed: ${e.message}`);
     }
@@ -2019,17 +2164,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   ) => {
     try {
       if (id) {
-        await apiCall(`/api/profiles/${id}`, {
+        await apiCall(`/api/local-store/browser_profile/${id}`, {
           method: "PUT",
-          body: JSON.stringify({ name, cookies, localStorage, authFunctionId, authInjection, defaultUrl })
+          body: JSON.stringify({ payload: { name, cookies, localStorage, authFunctionId, authInjection, defaultUrl } })
         });
       } else {
-        await apiCall("/api/profiles", {
+        await apiCall("/api/local-store/browser_profile", {
           method: "POST",
-          body: JSON.stringify({ name, cookies, localStorage, authFunctionId, authInjection, defaultUrl })
+          body: JSON.stringify({ payload: { name, cookies, localStorage, authFunctionId, authInjection, defaultUrl } })
         });
       }
       await fetchProfiles();
+      triggerSync(["auth_function", "browser_profile"]);
     } catch (e: any) {
       throw new Error(`Failed to save browser profile: ${e.message}`);
     }
@@ -2037,8 +2183,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const handleDeleteProfile = async (id: string) => {
     try {
-      await apiCall(`/api/profiles/${id}`, { method: "DELETE" });
+      await apiCall(`/api/local-store/browser_profile/${id}`, { method: "DELETE" });
       await fetchProfiles();
+      triggerSync(["browser_profile"]);
       if (selectedProfileId === id) setSelectedProfileId("");
     } catch (e: any) {
       throw new Error(`Delete failed: ${e.message}`);
@@ -2057,10 +2204,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         environments,
         selectedEnvId,
+        selectedEnvCloudId,
         setSelectedEnvId,
         fetchEnvironments,
         authFunctions,
         fetchAuthFunctions,
+        resolveAuthFunctionCloudId,
+        syncConflicts,
+        resolveSyncConflict,
+        isOnline,
+        lastSyncAt,
+        syncStatus,
+        triggerSync,
         userGuides,
         fetchUserGuides,
         collections,

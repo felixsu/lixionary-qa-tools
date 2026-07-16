@@ -492,7 +492,9 @@ export default function BrowserProfilesPage() {
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 content-start">
             {profiles.map((p) => {
-              const linkedAuthFunc = authFunctions.find((f) => f.id === p.authFunctionId);
+              // p.authFunctionId may be a local id (set via this device) or a cloud
+              // id (pulled from another device's record) — check both.
+              const linkedAuthFunc = authFunctions.find((f) => f.id === p.authFunctionId || f.cloudId === p.authFunctionId);
               return (
                 <div key={p.id} className="bg-cream border border-line rounded-xl overflow-hidden flex flex-col">
                   <div className="px-5 pt-4 pb-3 flex items-start gap-2">

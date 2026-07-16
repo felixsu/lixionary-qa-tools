@@ -1,13 +1,14 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint, FolderOpen } from "lucide-react";
+import { Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint, FolderOpen, Cloud, CloudOff, RefreshCw, AlertTriangle } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import Dropdown from "../components/Dropdown";
 import UpdateBanner from "../components/UpdateBanner";
+import SyncConflictModal from "../components/SyncConflictModal";
 
 type NavEntry =
   | { type: "section"; label: string }
@@ -18,7 +19,7 @@ const NAV: NavEntry[] = [
   { type: "section", label: "QA Tools" },
   { type: "item", href: "/api-explorer", icon: Send, label: "API explorer" },
   { type: "item", href: "/web-explorer", icon: Globe, label: "Web explorer" },
-  { type: "item", href: "/local-scanner", icon: FolderOpen, label: "Local scanner" },
+  { type: "item", href: "/nv-common-lib-explorer", icon: FolderOpen, label: "NV Common Lib Explorer" },
   { type: "section", label: "Configuration" },
   { type: "item", href: "/environments", icon: Database, label: "Environments", badge: "env" },
   { type: "item", href: "/auth-functions", icon: Key, label: "Auth functions" },
@@ -39,6 +40,11 @@ export default function DashboardLayout({
     setSelectedEnvId,
     handleLogout,
     userGuides,
+    isOnline,
+    lastSyncAt,
+    syncStatus,
+    syncConflicts,
+    triggerSync,
   } = useAppContext();
 
   const pathname = usePathname();
@@ -64,6 +70,16 @@ export default function DashboardLayout({
     }
   }, [token, isLoadingAuth, router]);
 
+  // Drives the "Synced Xm ago" label — Date.now() can't be called during
+  // render (impure), so it's sampled in an effect and ticks on an interval.
+  const [nowTick, setNowTick] = useState<number>(0);
+  useEffect(() => {
+    const tick = () => setNowTick(Date.now());
+    const seed = setTimeout(tick, 0); // deferred, not a direct synchronous setState in the effect body
+    const interval = setInterval(tick, 15000);
+    return () => { clearTimeout(seed); clearInterval(interval); };
+  }, []);
+
   if (isLoadingAuth || !token) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-cream text-ink">
@@ -80,6 +96,17 @@ export default function DashboardLayout({
 
   const isActive = (path: string) => pathname === path;
 
+  const formatRelativeTime = (iso: string | null, now: number): string => {
+    if (!iso || !now) return "never";
+    const seconds = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 1000));
+    if (seconds < 10) return "just now";
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ago`;
+  };
+
   const getHeaderTitle = () => {
     if (pathname === "/user-guides/detail") {
       const guideId = searchParams.get("id");
@@ -95,8 +122,8 @@ export default function DashboardLayout({
         return "API Automation Engine";
       case "/web-explorer":
         return "Web automation & POM generator";
-      case "/local-scanner":
-        return "Local Repository Scanner";
+      case "/nv-common-lib-explorer":
+        return "NV Common Lib Explorer";
       case "/environments":
         return "Variable environments";
       case "/auth-functions":
@@ -279,6 +306,44 @@ export default function DashboardLayout({
             {!collapsed && <span className="text-[13px]">Collapse</span>}
           </button>
 
+          {/* Sync status */}
+          <button
+            onClick={() => triggerSync()}
+            disabled={syncStatus === "syncing"}
+            title={
+              collapsed
+                ? (syncConflicts.length > 0
+                    ? `${syncConflicts.length} sync conflict(s) — click to sync now`
+                    : !isOnline
+                      ? "Offline — click to retry"
+                      : `Synced ${formatRelativeTime(lastSyncAt, nowTick)} — click to sync now`)
+                : "Sync now"
+            }
+            className="flex items-center gap-2.5 rounded-lg px-2 py-2 w-full transition-colors hover:bg-panel text-mute hover:text-graphite disabled:cursor-wait"
+            style={{ justifyContent: collapsed ? "center" : undefined }}
+          >
+            {syncStatus === "syncing" ? (
+              <RefreshCw className="h-3.5 w-3.5 flex-shrink-0 animate-spin" />
+            ) : syncConflicts.length > 0 ? (
+              <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 text-amber-600" />
+            ) : !isOnline ? (
+              <CloudOff className="h-3.5 w-3.5 flex-shrink-0 text-danger" />
+            ) : (
+              <Cloud className="h-3.5 w-3.5 flex-shrink-0" />
+            )}
+            {!collapsed && (
+              <span className="text-[13px] truncate">
+                {syncStatus === "syncing"
+                  ? "Syncing…"
+                  : syncConflicts.length > 0
+                    ? `${syncConflicts.length} conflict${syncConflicts.length === 1 ? "" : "s"}`
+                    : !isOnline
+                      ? "Offline"
+                      : `Synced ${formatRelativeTime(lastSyncAt, nowTick)}`}
+              </span>
+            )}
+          </button>
+
           {/* User row */}
           <div
             className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 overflow-hidden"
@@ -350,6 +415,8 @@ export default function DashboardLayout({
           {children}
         </main>
       </div>
+
+      <SyncConflictModal />
     </div>
   );
 }

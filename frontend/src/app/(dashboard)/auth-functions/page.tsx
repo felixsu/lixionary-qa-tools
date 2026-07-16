@@ -48,7 +48,7 @@ return data.data.access_token;`,
 ];
 
 export default function AuthFunctionsPage() {
-  const { authFunctions, handleSaveAuthFunc, handleDeleteAuthFunc, apiCall, selectedEnvId } = useAppContext();
+  const { authFunctions, handleSaveAuthFunc, handleDeleteAuthFunc, apiCall, selectedEnvCloudId } = useAppContext();
 
   const [showModal, setShowModal] = useState(false);
   const [name, setName] = useState("");
@@ -100,7 +100,7 @@ export default function AuthFunctionsPage() {
         method: "POST",
         body: JSON.stringify({
           script,
-          environment_id: selectedEnvId || null
+          environment_id: selectedEnvCloudId
         })
       });
       setTestResult(res);

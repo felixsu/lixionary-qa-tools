@@ -20,8 +20,11 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from services.browser import BrowserSessionManager, rank_locators, sanitize_cookies
 from services.naming import polish_method_names, dedupe_names, heuristic_method_name, propose_locator_fix
 from services.generator import generate_pom_class, generate_http_client, build_pom_method_code
+from db.local_store import LocalStore
+from routes.local_store import router as local_store_router
 
 app = FastAPI(title="Lixionary Local Automation Explorer Sidecar")
+app.include_router(local_store_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -176,6 +179,8 @@ def setup_local_venv():
 
 @app.on_event("startup")
 async def startup_event():
+    # Local SQLite store for offline-first config data — fast, do inline.
+    LocalStore.connect()
     # Setup venv in background so startup returns immediately
     asyncio.create_task(asyncio.to_thread(setup_local_venv))
 

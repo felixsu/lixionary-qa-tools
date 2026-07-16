@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
@@ -6,6 +5,13 @@ from bson import ObjectId
 
 from db.mongo import MongoDB
 from routes.auth import get_current_user
+from services.sync_versioning import (
+    get_device_id,
+    new_version_fields,
+    apply_versioned_update,
+    soft_delete,
+    sync_state_projection,
+)
 
 router = APIRouter(prefix="/api/auth-functions", tags=["auth-functions"])
 
@@ -20,6 +26,8 @@ class AuthFunctionUpdate(BaseModel):
     description: Optional[str] = None
     script: Optional[str] = None
     expires_in: Optional[int] = None
+    expected_version: Optional[int] = None
+    force: bool = False
 
 def serialize_doc(doc) -> dict:
     if not doc:
@@ -35,12 +43,23 @@ def serialize_doc(doc) -> dict:
 @router.get("")
 async def get_auth_functions(current_user: dict = Depends(get_current_user)):
     col = MongoDB.get_collection("auth_functions")
-    cursor = col.find({"ownerId": ObjectId(current_user["id"])})
+    cursor = col.find({"ownerId": ObjectId(current_user["id"]), "deleted": {"$ne": True}})
     docs = await cursor.to_list(length=100)
     return [serialize_doc(d) for d in docs]
 
+@router.get("/sync-state")
+async def get_auth_functions_sync_state(current_user: dict = Depends(get_current_user)):
+    col = MongoDB.get_collection("auth_functions")
+    cursor = col.find({"ownerId": ObjectId(current_user["id"])})
+    docs = await cursor.to_list(length=1000)
+    return [sync_state_projection(d) for d in docs]
+
 @router.post("")
-async def create_auth_function(payload: AuthFunctionCreate, current_user: dict = Depends(get_current_user)):
+async def create_auth_function(
+    payload: AuthFunctionCreate,
+    current_user: dict = Depends(get_current_user),
+    device_id: str = Depends(get_device_id),
+):
     col = MongoDB.get_collection("auth_functions")
     doc = {
         "ownerId": ObjectId(current_user["id"]),
@@ -50,15 +69,19 @@ async def create_auth_function(payload: AuthFunctionCreate, current_user: dict =
         "expires_in": payload.expires_in,
         "cachedToken": None,
         "expiresAt": None,
-        "createdAt": datetime.now(timezone.utc),
-        "updatedAt": datetime.now(timezone.utc)
+        **new_version_fields(device_id),
     }
     res = await col.insert_one(doc)
     doc["_id"] = res.inserted_id
     return serialize_doc(doc)
 
 @router.put("/{id}")
-async def update_auth_function(id: str, payload: AuthFunctionUpdate, current_user: dict = Depends(get_current_user)):
+async def update_auth_function(
+    id: str,
+    payload: AuthFunctionUpdate,
+    current_user: dict = Depends(get_current_user),
+    device_id: str = Depends(get_device_id),
+):
     col = MongoDB.get_collection("auth_functions")
     existing = await col.find_one({"_id": ObjectId(id), "ownerId": ObjectId(current_user["id"])})
     if not existing:
@@ -80,22 +103,28 @@ async def update_auth_function(id: str, payload: AuthFunctionUpdate, current_use
         update_fields["cachedToken"] = None
         update_fields["expiresAt"] = None
 
-    if update_fields:
-        update_fields["updatedAt"] = datetime.now(timezone.utc)
-        await col.update_one({"_id": ObjectId(id)}, {"$set": update_fields})
-        
-    doc = await col.find_one({"_id": ObjectId(id)})
+    doc = await apply_versioned_update(
+        col, ObjectId(id), update_fields,
+        device_id=device_id,
+        expected_version=payload.expected_version,
+        force=payload.force,
+        serialize=serialize_doc,
+    )
     return serialize_doc(doc)
 
 @router.delete("/{id}")
-async def delete_auth_function(id: str, current_user: dict = Depends(get_current_user)):
+async def delete_auth_function(
+    id: str,
+    current_user: dict = Depends(get_current_user),
+    device_id: str = Depends(get_device_id),
+):
     col = MongoDB.get_collection("auth_functions")
     existing = await col.find_one({"_id": ObjectId(id), "ownerId": ObjectId(current_user["id"])})
     if not existing:
         raise HTTPException(status_code=404, detail="Auth function not found")
 
-    await col.delete_one({"_id": ObjectId(id)})
-    return {"message": "Auth function deleted successfully"}
+    updated = await soft_delete(col, ObjectId(id), device_id=device_id)
+    return {"message": "Auth function deleted successfully", **sync_state_projection(updated)}
 
 @router.get("/{id}/token")
 async def resolve_auth_function_token(id: str, envId: Optional[str] = None, current_user: dict = Depends(get_current_user)):

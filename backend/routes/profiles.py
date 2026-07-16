@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
@@ -6,6 +5,13 @@ from bson import ObjectId
 
 from db.mongo import MongoDB
 from routes.auth import get_current_user
+from services.sync_versioning import (
+    get_device_id,
+    new_version_fields,
+    apply_versioned_update,
+    soft_delete,
+    sync_state_projection,
+)
 
 router = APIRouter(prefix="/api/profiles", tags=["profiles"])
 
@@ -29,6 +35,8 @@ class ProfileUpdate(BaseModel):
     authFunctionId: Optional[str] = None
     authInjection: Optional[AuthInjection] = None
     defaultUrl: Optional[str] = None
+    expected_version: Optional[int] = None
+    force: bool = False
 
 def serialize_doc(doc) -> dict:
     if not doc:
@@ -44,9 +52,16 @@ def serialize_doc(doc) -> dict:
 @router.get("")
 async def get_profiles(current_user: dict = Depends(get_current_user)):
     col = MongoDB.get_collection("browser_profiles")
-    cursor = col.find({"ownerId": ObjectId(current_user["id"])})
+    cursor = col.find({"ownerId": ObjectId(current_user["id"]), "deleted": {"$ne": True}})
     docs = await cursor.to_list(length=100)
     return [serialize_doc(d) for d in docs]
+
+@router.get("/sync-state")
+async def get_profiles_sync_state(current_user: dict = Depends(get_current_user)):
+    col = MongoDB.get_collection("browser_profiles")
+    cursor = col.find({"ownerId": ObjectId(current_user["id"])})
+    docs = await cursor.to_list(length=1000)
+    return [sync_state_projection(d) for d in docs]
 
 def validate_url(url: str):
     if not url:
@@ -62,11 +77,15 @@ def validate_url(url: str):
         raise HTTPException(status_code=400, detail="Invalid URL format")
 
 @router.post("")
-async def create_profile(payload: ProfileCreate, current_user: dict = Depends(get_current_user)):
+async def create_profile(
+    payload: ProfileCreate,
+    current_user: dict = Depends(get_current_user),
+    device_id: str = Depends(get_device_id),
+):
     col = MongoDB.get_collection("browser_profiles")
-    
+
     # Check if name already exists for this user
-    existing = await col.find_one({"ownerId": ObjectId(current_user["id"]), "name": payload.name})
+    existing = await col.find_one({"ownerId": ObjectId(current_user["id"]), "name": payload.name, "deleted": {"$ne": True}})
     if existing:
         raise HTTPException(status_code=400, detail="Profile with this name already exists")
 
@@ -80,15 +99,20 @@ async def create_profile(payload: ProfileCreate, current_user: dict = Depends(ge
         "authFunctionId": ObjectId(payload.authFunctionId) if payload.authFunctionId else None,
         "authInjection": payload.authInjection.dict() if payload.authInjection else None,
         "defaultUrl": payload.defaultUrl,
-        "createdAt": datetime.now(timezone.utc)
+        **new_version_fields(device_id),
     }
-    
+
     res = await col.insert_one(doc)
     doc["_id"] = res.inserted_id
     return serialize_doc(doc)
 
 @router.put("/{id}")
-async def update_profile(id: str, payload: ProfileUpdate, current_user: dict = Depends(get_current_user)):
+async def update_profile(
+    id: str,
+    payload: ProfileUpdate,
+    current_user: dict = Depends(get_current_user),
+    device_id: str = Depends(get_device_id),
+):
     col = MongoDB.get_collection("browser_profiles")
     existing = await col.find_one({"_id": ObjectId(id), "ownerId": ObjectId(current_user["id"])})
     if not existing:
@@ -109,18 +133,25 @@ async def update_profile(id: str, payload: ProfileUpdate, current_user: dict = D
         validate_url(payload.defaultUrl)
         update_fields["defaultUrl"] = payload.defaultUrl
 
-    if update_fields:
-        await col.update_one({"_id": ObjectId(id)}, {"$set": update_fields})
-        
-    doc = await col.find_one({"_id": ObjectId(id)})
+    doc = await apply_versioned_update(
+        col, ObjectId(id), update_fields,
+        device_id=device_id,
+        expected_version=payload.expected_version,
+        force=payload.force,
+        serialize=serialize_doc,
+    )
     return serialize_doc(doc)
 
 @router.delete("/{id}")
-async def delete_profile(id: str, current_user: dict = Depends(get_current_user)):
+async def delete_profile(
+    id: str,
+    current_user: dict = Depends(get_current_user),
+    device_id: str = Depends(get_device_id),
+):
     col = MongoDB.get_collection("browser_profiles")
     existing = await col.find_one({"_id": ObjectId(id), "ownerId": ObjectId(current_user["id"])})
     if not existing:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    await col.delete_one({"_id": ObjectId(id)})
-    return {"message": "Profile deleted successfully"}
+    updated = await soft_delete(col, ObjectId(id), device_id=device_id)
+    return {"message": "Profile deleted successfully", **sync_state_projection(updated)}

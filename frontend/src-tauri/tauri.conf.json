@@ -41,6 +41,7 @@
       "../../backend/sidecar_requirements.txt": "backend/sidecar_requirements.txt",
       "../../backend/services/*.py": "backend/services/",
       "../../backend/db/*.py": "backend/db/",
+      "../../backend/routes/local_store.py": "backend/routes/local_store.py",
       "../../chrome-extension/*": "chrome-extension/"
     },
     "android": {

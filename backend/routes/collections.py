@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
@@ -6,6 +5,13 @@ from bson import ObjectId
 
 from db.mongo import MongoDB
 from routes.auth import get_current_user
+from services.sync_versioning import (
+    get_device_id,
+    new_version_fields,
+    apply_versioned_update,
+    soft_delete,
+    sync_state_projection,
+)
 
 router = APIRouter(prefix="/api/collections", tags=["collections"])
 
@@ -46,6 +52,8 @@ class CollectionUpdate(BaseModel):
     description: Optional[str] = None
     requests: Optional[List[RequestDefinitionSchema]] = None
     children: Optional[List[Dict[str, Any]]] = None
+    expected_version: Optional[int] = None
+    force: bool = False
 
 class AddCollaboratorPayload(BaseModel):
     email: Optional[str] = None
@@ -102,13 +110,32 @@ async def get_collections(current_user: dict = Depends(get_current_user)):
         "$or": [
             {"ownerId": uid},
             {"collaboratorIds": uid}
-        ]
+        ],
+        "deleted": {"$ne": True}
     })
     docs = await cursor.to_list(length=100)
     return [serialize_doc(d) for d in docs]
 
+@router.get("/sync-state")
+async def get_collections_sync_state(current_user: dict = Depends(get_current_user)):
+    # Must be registered before GET /{id}, or FastAPI would match "sync-state" as an id.
+    col = MongoDB.get_collection("collections")
+    uid = ObjectId(current_user["id"])
+    cursor = col.find({
+        "$or": [
+            {"ownerId": uid},
+            {"collaboratorIds": uid}
+        ]
+    })
+    docs = await cursor.to_list(length=1000)
+    return [sync_state_projection(d) for d in docs]
+
 @router.post("")
-async def create_collection(payload: CollectionCreate, current_user: dict = Depends(get_current_user)):
+async def create_collection(
+    payload: CollectionCreate,
+    current_user: dict = Depends(get_current_user),
+    device_id: str = Depends(get_device_id),
+):
     col = MongoDB.get_collection("collections")
     doc = {
         "name": payload.name,
@@ -117,8 +144,7 @@ async def create_collection(payload: CollectionCreate, current_user: dict = Depe
         "collaboratorIds": [],
         "requests": [],
         "children": [],
-        "createdAt": datetime.now(timezone.utc),
-        "updatedAt": datetime.now(timezone.utc)
+        **new_version_fields(device_id),
     }
     res = await col.insert_one(doc)
     doc["_id"] = res.inserted_id
@@ -134,7 +160,12 @@ async def get_collection_by_id(id: str, current_user: dict = Depends(get_current
     return serialize_doc(doc)
 
 @router.put("/{id}")
-async def update_collection(id: str, payload: CollectionUpdate, current_user: dict = Depends(get_current_user)):
+async def update_collection(
+    id: str,
+    payload: CollectionUpdate,
+    current_user: dict = Depends(get_current_user),
+    device_id: str = Depends(get_device_id),
+):
     col = MongoDB.get_collection("collections")
     doc = await col.find_one({"_id": ObjectId(id)})
     if not doc:
@@ -157,7 +188,7 @@ async def update_collection(id: str, payload: CollectionUpdate, current_user: di
             if req_dict.get("authConfig") and req_dict["authConfig"].get("authFunctionId"):
                 req_dict["authConfig"]["authFunctionId"] = ObjectId(req_dict["authConfig"]["authFunctionId"])
             serialized_requests.append(req_dict)
-            
+
         update_fields["requests"] = serialized_requests
     if payload.children is not None:
         processed_children = []
@@ -165,14 +196,17 @@ async def update_collection(id: str, payload: CollectionUpdate, current_user: di
             processed_children.append(process_collection_tree(child, 2))
         update_fields["children"] = processed_children
 
-    update_fields["updatedAt"] = datetime.now(timezone.utc)
-    await col.update_one({"_id": ObjectId(id)}, {"$set": update_fields})
-    
-    updated_doc = await col.find_one({"_id": ObjectId(id)})
-    
+    updated_doc = await apply_versioned_update(
+        col, ObjectId(id), update_fields,
+        device_id=device_id,
+        expected_version=payload.expected_version,
+        force=payload.force,
+        serialize=serialize_doc,
+    )
+
     # In a full production app, you would broadcast this update over WebSockets
     # to all active collaborator client sessions.
-    
+
     return serialize_doc(updated_doc)
 
 @router.post("/{id}/collaborators")
@@ -217,15 +251,19 @@ async def add_collaborator(id: str, payload: AddCollaboratorPayload, current_use
     return {"message": "Collaborator added successfully", "collection": serialize_doc(updated_doc)}
 
 @router.delete("/{id}")
-async def delete_collection(id: str, current_user: dict = Depends(get_current_user)):
+async def delete_collection(
+    id: str,
+    current_user: dict = Depends(get_current_user),
+    device_id: str = Depends(get_device_id),
+):
     col = MongoDB.get_collection("collections")
     doc = await col.find_one({"_id": ObjectId(id)})
     if not doc:
         raise HTTPException(status_code=404, detail="Collection not found")
-        
+
     uid = ObjectId(current_user["id"])
     if doc["ownerId"] != uid:
         raise HTTPException(status_code=403, detail="Only the owner can delete this collection")
-        
-    await col.delete_one({"_id": ObjectId(id)})
-    return {"message": "Collection deleted successfully"}
+
+    updated = await soft_delete(col, ObjectId(id), device_id=device_id)
+    return {"message": "Collection deleted successfully", **sync_state_projection(updated)}

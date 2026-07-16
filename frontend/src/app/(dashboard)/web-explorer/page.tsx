@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Globe, Terminal, Eye, Crosshair, Download, Trash2, Plus, FileCode, Play,
   Save, File, Folder, XCircle, Rows, Lock, X, Layers, Code2, Clipboard, Activity,
-  ChevronDown, ChevronUp, RotateCcw, Copy, Mail, Anchor, Loader2, ScanSearch,
+  ChevronDown, ChevronUp, RotateCcw, Copy, Check, Mail, Anchor, Loader2, ScanSearch,
   CheckCircle2, AlertCircle, Sparkles, StopCircle,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
@@ -267,6 +267,12 @@ export default function WebExplorerPage() {
   const [newCollectionName, setNewCollectionName] = useState("");
   const [saveDuplicates, setSaveDuplicates] = useState<{ collectionName: string; requestName: string }[]>([]);
   const [saveShowDuplicateWarning, setSaveShowDuplicateWarning] = useState(false);
+
+  // Show Python client code for a network log
+  const [showPythonModal, setShowPythonModal] = useState(false);
+  const [pythonCopied, setPythonCopied] = useState(false);
+  const [pendingPythonLog, setPendingPythonLog] = useState<NetworkLog | null>(null);
+  const [pendingPythonDetails, setPendingPythonDetails] = useState<NetworkDetails | null>(null);
   const [isSavingToCollection, setIsSavingToCollection] = useState(false);
 
   const pageMethodsRef = useRef<{ name: string; args: string; doc: string }[]>([]);
@@ -974,6 +980,178 @@ export default function WebExplorerPage() {
     } catch { /* non-fatal — save with basic NetworkLog info */ }
   };
 
+  const handleOpenPythonModal = async (log: NetworkLog, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPendingPythonLog(log);
+    setPendingPythonDetails(null);
+    setPythonCopied(false);
+    setShowPythonModal(true);
+    try {
+      const data = await apiCall(`/api/browser/network/${sessionId}/details/${log.id}`);
+      setPendingPythonDetails(data);
+    } catch { /* non-fatal — generate from basic NetworkLog info */ }
+  };
+
+  const buildPythonFromNetworkLog = (log: NetworkLog, details: NetworkDetails | null): string => {
+    const extraModels: string[] = [];
+
+    const toClassName = (name: string) =>
+      name.replace(/[^a-zA-Z0-9]/g, "_").replace(/^[0-9]/, "_$&")
+          .split("_").filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join("");
+
+    const pyType = (v: any, nameHint: string): string => {
+      if (v === null) return "Optional[Any]";
+      if (typeof v === "boolean") return "bool";
+      if (typeof v === "number") return Number.isInteger(v) ? "int" : "float";
+      if (typeof v === "string") return "str";
+      if (Array.isArray(v)) {
+        if (v.length > 0 && v[0] !== null && typeof v[0] === "object" && !Array.isArray(v[0])) {
+          const modelName = toClassName(nameHint) + "Item";
+          extraModels.push(`class ${modelName}(BaseModel):\n${modelFields(v[0], modelName)}`);
+          return `List[${modelName}]`;
+        }
+        return "List[Any]";
+      }
+      if (typeof v === "object") {
+        const modelName = toClassName(nameHint);
+        extraModels.push(`class ${modelName}(BaseModel):\n${modelFields(v, modelName)}`);
+        return modelName;
+      }
+      return "Any";
+    };
+
+    const modelFields = (obj: Record<string, any>, parentName: string): string =>
+      Object.entries(obj)
+        .map(([k, v]) => `    ${k}: ${pyType(v, parentName + "_" + k)}`)
+        .join("\n") || "    pass";
+
+    const url = details?.request.url ?? log.url;
+    const method = (details?.request.method ?? log.method).toLowerCase();
+    const headers = details?.request.headers ?? log.headers ?? {};
+
+    const postData = details?.request.postData;
+    let requestBodyObj: Record<string, any> | null = null;
+    if (postData) {
+      try {
+        const parsed = JSON.parse(postData);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) requestBodyObj = parsed;
+      } catch { /* not JSON — sent as raw body below */ }
+    }
+    const hasRequestModel = !!requestBodyObj;
+
+    const rawResponseBody = details?.response?.body;
+    let responseBodyObj: any = null;
+    if (rawResponseBody !== undefined && rawResponseBody !== null) {
+      if (typeof rawResponseBody === "string") {
+        try { responseBodyObj = JSON.parse(rawResponseBody); } catch { responseBodyObj = null; }
+      } else {
+        responseBodyObj = rawResponseBody;
+      }
+    }
+
+    let responseModelName = "";
+    let responseModelBlock = "";
+    if (responseBodyObj !== null) {
+      if (Array.isArray(responseBodyObj) && responseBodyObj.length > 0 &&
+          typeof responseBodyObj[0] === "object" && responseBodyObj[0] !== null && !Array.isArray(responseBodyObj[0])) {
+        responseModelName = "List[ResponseItem]";
+        responseModelBlock = `class ResponseItem(BaseModel):\n${modelFields(responseBodyObj[0], "ResponseItem")}`;
+      } else if (typeof responseBodyObj === "object" && !Array.isArray(responseBodyObj)) {
+        responseModelName = "ResponseBody";
+        responseModelBlock = `class ResponseBody(BaseModel):\n${modelFields(responseBodyObj, "ResponseBody")}`;
+      }
+    }
+
+    const requestModelBlock = hasRequestModel
+      ? `class RequestBody(BaseModel):\n${modelFields(requestBodyObj!, "RequestBody")}`
+      : "";
+
+    const lines: string[] = [];
+    lines.push("from __future__ import annotations");
+    lines.push("import requests");
+    lines.push("from pydantic import BaseModel");
+    lines.push("from typing import Any, Dict, List, Optional");
+
+    for (const m of extraModels) {
+      lines.push("");
+      lines.push(m);
+    }
+
+    if (requestModelBlock) {
+      lines.push("");
+      lines.push(requestModelBlock);
+    }
+
+    if (responseModelBlock) {
+      lines.push("");
+      lines.push(responseModelBlock);
+    }
+
+    const returnType = responseModelName || "dict";
+    lines.push("");
+    lines.push("");
+    lines.push(`def call_api() -> ${returnType}:`);
+    lines.push(`    url = "${url}"`);
+
+    const headerEntries = Object.entries(headers).filter(([k]) => k !== "");
+    if (headerEntries.length) {
+      lines.push("    headers = {");
+      headerEntries.forEach(([k, v]) => {
+        lines.push(`        "${k}": "${v}",`);
+      });
+      lines.push("    }");
+    } else {
+      lines.push("    headers = {}");
+    }
+
+    if (hasRequestModel) {
+      const fieldInits = Object.entries(requestBodyObj!).map(([k, v]) => {
+        const val = typeof v === "string" ? `"${v}"` : JSON.stringify(v);
+        return `        ${k}=${val},`;
+      }).join("\n");
+      lines.push("    payload = RequestBody(");
+      lines.push(fieldInits);
+      lines.push("    )");
+    }
+
+    const hasBody = !!postData;
+    if (hasBody) {
+      lines.push(`    response = requests.${method}(`);
+      lines.push("        url,");
+      lines.push("        headers=headers,");
+      if (hasRequestModel) {
+        lines.push("        json=payload.model_dump(),");
+      } else {
+        lines.push(`        data=${JSON.stringify(postData)},`);
+      }
+      lines.push("    )");
+    } else {
+      lines.push(`    response = requests.${method}(url, headers=headers)`);
+    }
+
+    lines.push("    response.raise_for_status()");
+    if (responseModelName === "ResponseBody") {
+      lines.push("    return ResponseBody(**response.json())");
+    } else if (responseModelName) {
+      lines.push("    return response.json()  # List[ResponseItem]");
+    } else {
+      lines.push("    return response.json()");
+    }
+
+    return lines.join("\n");
+  };
+
+  const copyPythonToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setPythonCopied(true);
+      showToast("Python code copied");
+      setTimeout(() => setPythonCopied(false), 1500);
+    } catch {
+      showToast("Failed to copy", "error");
+    }
+  };
+
   const handleConfirmSaveToCollection = async (e: React.FormEvent) => {
     e.preventDefault();
     const isNewCollection = saveCollectionId === "__new__";
@@ -1255,6 +1433,13 @@ export default function WebExplorerPage() {
                       {log.status === null ? "Pending" : log.status}
                     </span>
                     <span className="font-mono text-[11px] text-graphite flex-1 truncate">{log.url}</span>
+                    <button
+                      onClick={(e) => handleOpenPythonModal(log, e)}
+                      title="Show Python client code"
+                      className="h-5 w-5 rounded flex items-center justify-center text-stone hover:text-clay hover:bg-line transition-colors flex-shrink-0"
+                    >
+                      <Code2 className="h-3 w-3" />
+                    </button>
                     <button
                       onClick={(e) => handleOpenSaveModal(log, e)}
                       title="Save to API Explorer collection"
@@ -2248,6 +2433,42 @@ export default function WebExplorerPage() {
           </form>
         </ModalShell>
       )}
+
+      {showPythonModal && pendingPythonLog && (() => {
+        const code = buildPythonFromNetworkLog(pendingPythonLog, pendingPythonDetails);
+        return (
+          <ModalShell title="Python client" onClose={() => { setShowPythonModal(false); setPythonCopied(false); }} width={680}>
+            <div className="flex flex-col gap-4">
+              <p className="text-[13px] text-stone leading-relaxed">
+                Generated from the captured request and response. Uses{" "}
+                <code className="font-mono text-[12px] bg-panel px-1 py-0.5 rounded">requests</code> and{" "}
+                <code className="font-mono text-[12px] bg-panel px-1 py-0.5 rounded">pydantic</code>.
+              </p>
+              <div className="relative">
+                <pre className="m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre rounded-xl max-h-[420px]">
+                  {code}
+                </pre>
+                <button
+                  onClick={() => copyPythonToClipboard(code)}
+                  title="Copy code"
+                  className="absolute top-3 right-3 h-7 px-2.5 flex items-center gap-1.5 bg-ink-800/80 border border-white/10 rounded-md text-xs font-medium text-cream/70 hover:text-cream hover:bg-ink-700 transition-colors"
+                >
+                  {pythonCopied ? <Check className="h-3.5 w-3.5 text-sage" /> : <Copy className="h-3.5 w-3.5" />}
+                  {pythonCopied ? "Copied" : "Copy"}
+                </button>
+              </div>
+              <div className="flex justify-end pt-1 border-t border-line">
+                <button
+                  onClick={() => { setShowPythonModal(false); setPythonCopied(false); }}
+                  className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </ModalShell>
+        );
+      })()}
 
       {/* Toast */}
       {toast && (
