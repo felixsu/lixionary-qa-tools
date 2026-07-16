@@ -111,12 +111,13 @@ def _resolve_dynamic_token(key: str) -> Optional[str]:
         return None
     return handler(arg)
 
-def interpolate_variables(text: str, variables: Dict[str, str]) -> str:
+def interpolate_variables(text: str, env_vars: Dict[str, str], inputs: Optional[Dict[str, str]] = None) -> str:
     """
-    Replaces all occurrences of {{key}} in text with the matching value from variables.
-    Keys starting with "$" are resolved as dynamic tokens (e.g. {{$date:YYYY-MM-DD}},
-    {{$randomInt:4}}) instead of being looked up in variables. Unresolved/unrecognized
-    tokens are left untouched.
+    Replaces all occurrences of {{key}} in text. Token grammar:
+      {{env.NAME}}       -> environment variable NAME
+      {{$generator:arg}} -> dynamic token (e.g. {{$date:YYYY-MM-DD}}, {{$randomInt:4}})
+      {{name}}           -> request input, resolved from the request's input bindings
+    Unresolved/unrecognized tokens are left untouched.
     """
     if not text:
         return text
@@ -126,9 +127,30 @@ def interpolate_variables(text: str, variables: Dict[str, str]) -> str:
         if key.startswith("$"):
             resolved = _resolve_dynamic_token(key)
             return resolved if resolved is not None else match.group(0)
-        return variables.get(key, match.group(0))
+        if key.startswith("env."):
+            return env_vars.get(key[4:].strip(), match.group(0))
+        return (inputs or {}).get(key, match.group(0))
 
     return re.sub(r"\{\{([^}]+)\}\}", replacer, text)
+
+def resolve_input_bindings(bindings: List[Dict[str, Any]], env_vars: Dict[str, str]) -> Dict[str, str]:
+    """
+    Resolves a request's saved input bindings into concrete values, once per run
+    (a generator input used in several places gets the same value within one run).
+    Literal values may themselves contain {{env.X}} / {{$...}} tokens (no input recursion).
+    """
+    resolved: Dict[str, str] = {}
+    for binding in bindings or []:
+        name = (binding.get("name") or "").strip()
+        if not name:
+            continue
+        value = binding.get("value") or ""
+        if binding.get("source") == "generator":
+            generated = _resolve_dynamic_token(value) if value.startswith("$") else None
+            resolved[name] = generated if generated is not None else value
+        else:
+            resolved[name] = interpolate_variables(value, env_vars)
+    return resolved
 
 def extract_jwt_expiry(token: str) -> datetime:
     """
@@ -224,25 +246,27 @@ async def resolve_request(request_data: Dict[str, Any], environment_id: str = No
             for var in env.get("variables", []):
                 variables[var["key"]] = var["value"]
 
-    # 2. Interpolate URL, headers, query params, body
-    url = interpolate_variables(request_data.get("url", ""), variables)
+    # 2. Resolve input bindings once per run, then interpolate URL, headers, query params, body
+    inputs = resolve_input_bindings(request_data.get("inputs") or [], variables)
+
+    url = interpolate_variables(request_data.get("url", ""), variables, inputs)
 
     headers = {}
     for h in request_data.get("headers", []):
         if h.get("key"):
-            headers[h["key"]] = interpolate_variables(h.get("value", ""), variables)
+            headers[h["key"]] = interpolate_variables(h.get("value", ""), variables, inputs)
 
     params = {}
     for p in request_data.get("queryParams", []):
         if p.get("key"):
-            params[p["key"]] = interpolate_variables(p.get("value", ""), variables)
+            params[p["key"]] = interpolate_variables(p.get("value", ""), variables, inputs)
 
     body_type = request_data.get("bodyType", "NONE").upper()
     body_content = request_data.get("body", "")
 
     # Interpolate body if JSON or TEXT
     if body_type in ["JSON", "RAW", "TEXT"] and body_content:
-        body_content = interpolate_variables(body_content, variables)
+        body_content = interpolate_variables(body_content, variables, inputs)
 
     # 3. Handle Authentication Hook
     auth_type = request_data.get("authType", "NONE").upper()
@@ -254,12 +278,12 @@ async def resolve_request(request_data: Dict[str, Any], environment_id: str = No
         headers["Authorization"] = f"Bearer {cached_token}"
 
     elif auth_type == "BEARER" and auth_config.get("token"):
-        token_val = interpolate_variables(auth_config["token"], variables)
+        token_val = interpolate_variables(auth_config["token"], variables, inputs)
         headers["Authorization"] = f"Bearer {token_val}"
 
     elif auth_type == "API_KEY" and auth_config.get("key") and auth_config.get("value"):
-        key_name = interpolate_variables(auth_config["key"], variables)
-        key_val = interpolate_variables(auth_config["value"], variables)
+        key_name = interpolate_variables(auth_config["key"], variables, inputs)
+        key_val = interpolate_variables(auth_config["value"], variables, inputs)
         headers[key_name] = key_val
 
     return {"url": url, "headers": headers, "params": params, "body": body_content}
@@ -321,10 +345,14 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
                 "body": f"HTTP dispatch failed: {str(e)}",
                 "executionTimeMs": duration_ms,
                 "parsedVariables": {},
-                "parserError": None
+                "parserError": None,
+                "outputs": {},
+                "missingOutputs": []
             }
 
     # 5. Execute Response Parser Script
+    declared_outputs = [o for o in (request_data.get("outputs") or []) if o]
+    outputs_result = {}
     parsed_variables = {}
     parser_error = None
     parser_script = request_data.get("responseParserScript")
@@ -332,13 +360,13 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
         parser_error = f"Parser skipped: response status {response.status_code}"
     elif parser_script:
         try:
-            parsed_variables = await run_unsafe_response_parser(
+            outputs_result, parsed_variables = await run_unsafe_response_parser(
                 response_body=response_body,
                 response_headers=response_headers,
                 parser_script=parser_script
             )
 
-            # If variables were extracted, save them back to the active environment
+            # If env writes were made, save them back to the active environment
             if parsed_variables and environment_id:
                 env_col = MongoDB.get_collection("environments")
                 # Retrieve current variables
@@ -362,6 +390,23 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
             parser_error = str(e)
             print(f"Response parser script run failed: {str(e)}")
 
+    missing_outputs = [name for name in declared_outputs if name not in outputs_result]
+
+    # Persist last extracted outputs per request (groundwork for request chaining)
+    if declared_outputs and request_data.get("requestId"):
+        try:
+            await MongoDB.get_collection("request_outputs").update_one(
+                {"requestId": request_data["requestId"]},
+                {"$set": {
+                    "outputs": outputs_result,
+                    "missingOutputs": missing_outputs,
+                    "updatedAt": datetime.now(timezone.utc)
+                }},
+                upsert=True
+            )
+        except Exception as e:
+            print(f"Failed to persist request outputs: {str(e)}")
+
     # Try formatting body as JSON for client
     try:
         formatted_body = json.loads(response_body)
@@ -375,5 +420,7 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
         "body": formatted_body,
         "executionTimeMs": duration_ms,
         "parsedVariables": parsed_variables,
-        "parserError": parser_error
+        "parserError": parser_error,
+        "outputs": outputs_result,
+        "missingOutputs": missing_outputs
     }

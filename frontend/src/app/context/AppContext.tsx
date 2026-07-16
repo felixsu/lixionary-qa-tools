@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { runAllSync, resolveConflictKeepLocal, resolveConflictKeepCloud } from "./syncEngine";
 import type { SyncConflict } from "./syncEngine";
 import { setScreencastFrame } from "../utils/screencastFrameStore";
+import { scanInputNames } from "../utils/requestTokens";
 
 const VPS_API_URL = process.env.NEXT_PUBLIC_VPS_API_URL ||
   (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://qa-tools-api.lixionary.com');
@@ -38,6 +39,14 @@ export interface UserGuideSummary {
   updatedAt?: string;
 }
 
+export interface InputBinding {
+  name: string;
+  source: "literal" | "generator";
+  // literal: free-typed value (may contain {{env.X}} / {{$...}} tokens);
+  // generator: token body without braces, e.g. "$date:+1d:YYYY-MM-DD"
+  value: string;
+}
+
 export interface RequestItem {
   id: string;
   name: string;
@@ -55,6 +64,8 @@ export interface RequestItem {
     authFunctionId?: string;
   };
   responseParserScript?: string;
+  inputs?: InputBinding[];
+  outputs?: string[];
 }
 
 export interface Collection {
@@ -298,6 +309,10 @@ interface AppContextType {
   setReqAuthConfig: (config: any) => void;
   reqParserScript: string;
   setReqParserScript: (script: string) => void;
+  reqInputs: InputBinding[];
+  setReqInputs: React.Dispatch<React.SetStateAction<InputBinding[]>>;
+  reqOutputs: string[];
+  setReqOutputs: React.Dispatch<React.SetStateAction<string[]>>;
 
   // API Explorer Response State
   apiResponse: any;
@@ -539,6 +554,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [reqAuthType, setReqAuthType] = useState("NONE");
   const [reqAuthConfig, setReqAuthConfig] = useState<any>({ token: "", key: "", value: "", authFunctionId: "" });
   const [reqParserScript, setReqParserScript] = useState("");
+  const [reqInputs, setReqInputs] = useState<InputBinding[]>([]);
+  const [reqOutputs, setReqOutputs] = useState<string[]>([]);
 
   // API Explorer Response State
   const [apiResponse, setApiResponse] = useState<any>(null);
@@ -739,6 +756,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setReqAuthConfig(authConfig);
 
         setReqParserScript(req.responseParserScript || "");
+        setReqInputs(req.inputs || []);
+        setReqOutputs(req.outputs || []);
         setApiResponse(null);
       }
     }
@@ -1667,6 +1686,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId)
         },
         responseParserScript: reqParserScript,
+        inputs: reqInputs,
+        outputs: reqOutputs,
         // Cloud resolves this as a Mongo _id — fall back to none if the selected
         // environment hasn't synced to the cloud yet (only has a local id so far).
         environmentId: selectedEnvCloudId
@@ -1723,7 +1744,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           // HOOK auth function is user-local — don't embed in the shared collection document
           authFunctionId: reqAuthType === "HOOK" ? null : (reqAuthConfig.authFunctionId || null)
         },
-        responseParserScript: reqParserScript
+        responseParserScript: reqParserScript,
+        // Drop bindings whose token no longer appears in any request field
+        inputs: (() => {
+          const detected = scanInputNames({
+            url: reqUrl,
+            headers: reqHeaders,
+            queryParams: reqQueryParams,
+            body: reqBody,
+            authType: reqAuthType,
+            authConfig: reqAuthConfig
+          });
+          return reqInputs.filter(b => detected.includes(b.name));
+        })(),
+        outputs: reqOutputs.filter(Boolean)
       };
 
       const updatedCol = updateRequestInTree(col, selectedRequestId, updatedRequest);
@@ -1756,7 +1790,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         id: `req_${Math.random().toString(36).substring(2, 9)}`,
         name: name || "New Request",
         method: "GET",
-        url: "{{BASE_URL}}/api/resource",
+        url: "{{env.BASE_URL}}/api/resource",
         headers: [],
         queryParams: [],
         bodyType: "NONE",
@@ -2260,6 +2294,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setReqAuthConfig,
         reqParserScript,
         setReqParserScript,
+        reqInputs,
+        setReqInputs,
+        reqOutputs,
+        setReqOutputs,
 
         apiResponse,
         setApiResponse,

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useLayoutEffect } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -10,10 +10,12 @@ import {
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, findRequestInTree, findRequestOwnerCollection, findAncestorPathToRequest } from "../../context/AppContext";
+import type { InputBinding } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
 import { confirmDialog } from "../../utils/confirmDialog";
+import { scanInputNames } from "../../utils/requestTokens";
 
-type ConfigTab = "headers" | "params" | "auth" | "variables" | "body";
+type ConfigTab = "headers" | "params" | "auth" | "inputs" | "output" | "body";
 
 interface ParsedCurl {
   method: string;
@@ -543,7 +545,10 @@ export default function ApiExplorerPage() {
     setReqAuthConfig,
     reqParserScript,
     setReqParserScript,
-    selectedEnvId,
+    reqInputs,
+    setReqInputs,
+    reqOutputs,
+    setReqOutputs,
     selectedEnvCloudId,
     resolveAuthFunctionCloudId,
 
@@ -599,6 +604,14 @@ export default function ApiExplorerPage() {
   const [isBuildingCurl, setIsBuildingCurl] = useState(false);
   const [resolvedCurl, setResolvedCurl] = useState("");
   const [curlError, setCurlError] = useState<string | null>(null);
+  const [newOutputName, setNewOutputName] = useState("");
+  const [resolvedPreview, setResolvedPreview] = useState<{
+    url: string;
+    headers: Record<string, string>;
+    params: Record<string, string>;
+    body: string;
+  } | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [configHeight, setConfigHeight] = useState(250);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -606,6 +619,30 @@ export default function ApiExplorerPage() {
 
   const activeCollection = selectedRequestId ? findRequestOwnerCollection(collections, selectedRequestId) : undefined;
   const activeRequest = activeCollection ? findRequestInTree(activeCollection, selectedRequestId) : undefined;
+
+  // Bare {{name}} tokens across all interpolated fields, live as the user types
+  const detectedInputs = useMemo(
+    () => scanInputNames({
+      url: reqUrl,
+      headers: reqHeaders,
+      queryParams: reqQueryParams,
+      body: reqBody,
+      authType: reqAuthType,
+      authConfig: reqAuthConfig,
+    }),
+    [reqUrl, reqHeaders, reqQueryParams, reqBody, reqAuthType, reqAuthConfig]
+  );
+  // Saved bindings whose token no longer appears anywhere (pruned on save)
+  const staleInputs = reqInputs.filter((b) => !detectedInputs.includes(b.name));
+
+  const setInputBinding = (name: string, patch: Partial<InputBinding>) =>
+    setReqInputs((prev) => {
+      const idx = prev.findIndex((b) => b.name === name);
+      if (idx === -1) return [...prev, { name, source: "literal", value: "", ...patch }];
+      const next = [...prev];
+      next[idx] = { ...next[idx], ...patch };
+      return next;
+    });
 
   const pathname = usePathname();
   const router = useRouter();
@@ -740,6 +777,7 @@ export default function ApiExplorerPage() {
         body: JSON.stringify({
           prompt: aiPrompt,
           responseBodySample: apiResponse ? JSON.stringify(apiResponse.body, null, 2) : "",
+          outputs: reqOutputs,
         }),
       });
       if (result.generatedScript) {
@@ -805,7 +843,7 @@ export default function ApiExplorerPage() {
     if (!apiResponse) return "";
     if (responseTab === "headers") return JSON.stringify(apiResponse.headers || {}, null, 2);
     if (responseTab === "raw") return JSON.stringify(apiResponse, null, 2);
-    if (responseTab === "extracted") return JSON.stringify(apiResponse.parsedVariables || {}, null, 2);
+    if (responseTab === "extracted") return JSON.stringify(apiResponse.outputs || {}, null, 2);
     return typeof apiResponse.body === "object"
       ? JSON.stringify(apiResponse.body, null, 2)
       : String(apiResponse.body ?? "");
@@ -859,6 +897,7 @@ export default function ApiExplorerPage() {
             value: reqAuthConfig.value,
             authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId)
           },
+          inputs: reqInputs,
           environmentId: selectedEnvCloudId
         })
       });
@@ -872,7 +911,9 @@ export default function ApiExplorerPage() {
     }
   };
 
-  const buildPython = (): string => {
+  const buildPython = (
+    resolved?: { url: string; headers: Record<string, string>; params: Record<string, string>; body: string } | null
+  ): string => {
     const extraModels: string[] = [];
 
     const toClassName = (name: string) =>
@@ -905,16 +946,19 @@ export default function ApiExplorerPage() {
         .map(([k, v]) => `    ${k}: ${pyType(v, parentName + "_" + k)}`)
         .join("\n") || "    pass";
 
-    const q = reqQueryParams.filter((p) => p.key !== "");
-    let url = reqUrl;
+    const q = resolved
+      ? Object.entries(resolved.params).filter(([k]) => k !== "")
+      : reqQueryParams.filter((p) => p.key !== "").map((p) => [p.key, p.value] as [string, string]);
+    let url = resolved ? resolved.url : reqUrl;
     if (q.length) {
-      const qs = q.map((p) => `${encodeURIComponent(p.key)}=${encodeURIComponent(p.value)}`).join("&");
+      const qs = q.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
       url += (url.includes("?") ? "&" : "?") + qs;
     }
 
+    const bodySource = resolved ? resolved.body : reqBody;
     let requestBodyObj: Record<string, any> | null = null;
-    if (reqBodyType === "JSON" && reqBody) {
-      try { requestBodyObj = JSON.parse(reqBody); } catch { /* ignore */ }
+    if (reqBodyType === "JSON" && bodySource) {
+      try { requestBodyObj = JSON.parse(bodySource); } catch { /* ignore */ }
     }
     const hasRequestModel = requestBodyObj && typeof requestBodyObj === "object" && !Array.isArray(requestBodyObj);
 
@@ -966,11 +1010,13 @@ export default function ApiExplorerPage() {
     lines.push(`def call_api() -> ${returnType}:`);
     lines.push(`    url = "${url}"`);
 
-    const filteredHeaders = reqHeaders.filter((h) => h.key !== "");
+    const filteredHeaders: [string, string][] = resolved
+      ? Object.entries(resolved.headers).filter(([k]) => k !== "")
+      : reqHeaders.filter((h) => h.key !== "").map((h) => [h.key, h.value]);
     if (filteredHeaders.length) {
       lines.push("    headers = {");
-      filteredHeaders.forEach((h) => {
-        lines.push(`        "${h.key}": "${h.value}",`);
+      filteredHeaders.forEach(([k, v]) => {
+        lines.push(`        "${k}": "${v}",`);
       });
       lines.push("    }");
     } else {
@@ -988,7 +1034,7 @@ export default function ApiExplorerPage() {
     }
 
     const method = reqMethod.toLowerCase();
-    const hasBody = hasRequestModel || (reqBodyType !== "NONE" && reqBody);
+    const hasBody = hasRequestModel || (reqBodyType !== "NONE" && bodySource);
     if (hasBody) {
       lines.push(`    response = requests.${method}(`);
       lines.push("        url,");
@@ -996,7 +1042,7 @@ export default function ApiExplorerPage() {
       if (hasRequestModel) {
         lines.push("        json=payload.model_dump(),");
       } else {
-        lines.push(`        data=${JSON.stringify(reqBody)},`);
+        lines.push(`        data=${JSON.stringify(bodySource)},`);
       }
       lines.push("    )");
     } else {
@@ -1015,7 +1061,37 @@ export default function ApiExplorerPage() {
     return lines.join("\n");
   };
 
-  const handleShowPython = () => setShowPythonModal(true);
+  const handleShowPython = async () => {
+    setShowPythonModal(true);
+    setResolvedPreview(null);
+    setPreviewError(null);
+    try {
+      const resolved = await apiCall("/api/executor/preview", {
+        method: "POST",
+        body: JSON.stringify({
+          requestId: selectedRequestId,
+          method: reqMethod,
+          url: reqUrl,
+          headers: reqHeaders.filter((h) => h.key !== ""),
+          queryParams: reqQueryParams.filter((p) => p.key !== ""),
+          bodyType: reqBodyType,
+          body: reqBody,
+          authType: reqAuthType,
+          authConfig: {
+            token: reqAuthConfig.token,
+            key: reqAuthConfig.key,
+            value: reqAuthConfig.value,
+            authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId)
+          },
+          inputs: reqInputs,
+          environmentId: selectedEnvCloudId
+        })
+      });
+      setResolvedPreview(resolved);
+    } catch (e: any) {
+      setPreviewError(e.message || "Failed to resolve request tokens");
+    }
+  };
 
   const handleSplitDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -1039,7 +1115,8 @@ export default function ApiExplorerPage() {
     { id: "headers", label: "Headers" },
     { id: "params", label: "Params" },
     { id: "auth", label: "Auth" },
-    { id: "variables", label: "Variables" },
+    { id: "inputs", label: detectedInputs.length ? `Input (${detectedInputs.length})` : "Input" },
+    { id: "output", label: reqOutputs.length ? `Output (${reqOutputs.length})` : "Output" },
     { id: "body", label: "Body" },
   ];
 
@@ -1351,7 +1428,7 @@ export default function ApiExplorerPage() {
                         <label className="text-xs font-medium text-stone">Token</label>
                         <input
                           type="text"
-                          placeholder="Token or {{VARIABLE}}"
+                          placeholder="Token, {{env.VARIABLE}} or {{input}}"
                           value={reqAuthConfig.token || ""}
                           onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, token: e.target.value })}
                           className="h-[38px] bg-cream border border-line rounded-lg px-3.5 font-mono text-xs text-ink outline-none focus:border-clay"
@@ -1397,18 +1474,119 @@ export default function ApiExplorerPage() {
                   </div>
                 )}
 
-                {/* Variables */}
-                {configTab === "variables" && (
+                {/* Inputs */}
+                {configTab === "inputs" && (
+                  <div className="p-4 flex flex-col gap-1.5">
+                    {detectedInputs.length === 0 && staleInputs.length === 0 && (
+                      <p className="text-xs text-mute py-4 text-center">
+                        No inputs detected. Type {"{{name}}"} in the URL, headers, params, body or auth fields.
+                        Use {"{{env.NAME}}"} for environment variables.
+                      </p>
+                    )}
+                    {detectedInputs.map((name) => {
+                      const binding = reqInputs.find((b) => b.name === name);
+                      const source = binding?.source || "literal";
+                      return (
+                        <div key={name} className="flex items-center gap-2">
+                          <span className="font-mono text-xs font-medium text-clay w-[156px] truncate flex-shrink-0" title={`{{${name}}}`}>
+                            {name}
+                          </span>
+                          <Dropdown
+                            value={source}
+                            onChange={(v) => setInputBinding(name, { source: v as InputBinding["source"], value: "" })}
+                            className="h-[30px] px-2.5 rounded-md text-xs text-ink"
+                            widthClass="w-[120px]"
+                            options={[
+                              { value: "literal", label: "Literal" },
+                              { value: "generator", label: "Generator" },
+                            ]}
+                          />
+                          {source === "literal" ? (
+                            <input
+                              value={binding?.value || ""}
+                              placeholder={`unbound — sent as {{${name}}}`}
+                              onChange={(e) => setInputBinding(name, { value: e.target.value })}
+                              className={`${inputCls} flex-1`}
+                            />
+                          ) : (
+                            <GeneratorBindingButton
+                              value={binding?.value || ""}
+                              onChange={(tokenBody) => setInputBinding(name, { value: tokenBody })}
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+                    {staleInputs.map((binding) => (
+                      <div key={binding.name} className="flex items-center gap-2 opacity-50">
+                        <span className="font-mono text-xs w-[156px] truncate flex-shrink-0 line-through" title={binding.name}>
+                          {binding.name}
+                        </span>
+                        <span className="text-[11px] text-mute flex-1">not referenced in the request — removed on save</span>
+                        <button
+                          onClick={() => setReqInputs(reqInputs.filter((b) => b.name !== binding.name))}
+                          className="h-7 w-7 rounded-md border border-line flex items-center justify-center text-stone hover:bg-danger-soft hover:text-danger transition-colors flex-shrink-0"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                    {detectedInputs.length > 0 && (
+                      <p className="text-[11px] text-mute mt-2">
+                        Inputs are resolved once per run; a generator used in several places gets the same value.
+                        Literal values may contain {"{{env.X}}"} and {"{{$...}}"} tokens.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Output */}
+                {configTab === "output" && (
                   <div className="flex flex-col h-full">
-                    <div className="px-4 py-3 flex items-center justify-between flex-shrink-0">
-                      <span className="text-xs text-stone">Parser script — runs after response</span>
-                      <button
-                        onClick={() => setShowAiModal(true)}
-                        disabled={!apiResponse}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-cream border border-line rounded-md text-xs font-medium text-clay hover:bg-panel transition-colors disabled:opacity-50"
-                      >
-                        <Sparkles className="h-3.5 w-3.5" /> AI agent parser
-                      </button>
+                    <div className="px-4 pt-3 pb-2 flex flex-col gap-2 flex-shrink-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-medium text-stone">Declared outputs</span>
+                        {reqOutputs.map((name) => (
+                          <span
+                            key={name}
+                            className="flex items-center gap-1 px-2 py-0.5 bg-panel border border-line rounded-full font-mono text-[11px] text-clay"
+                          >
+                            {name}
+                            <button
+                              onClick={() => setReqOutputs(reqOutputs.filter((o) => o !== name))}
+                              className="text-stone hover:text-danger transition-colors"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </span>
+                        ))}
+                        <input
+                          value={newOutputName}
+                          placeholder="add output…"
+                          onChange={(e) => setNewOutputName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key !== "Enter") return;
+                            e.preventDefault();
+                            const name = newOutputName.trim();
+                            if (name && !reqOutputs.includes(name)) setReqOutputs([...reqOutputs, name]);
+                            setNewOutputName("");
+                          }}
+                          className={`${inputCls} w-[140px]`}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] text-mute">
+                          Parser script runs after the response — assign <code className="font-mono">output.&lt;name&gt;</code> for
+                          each declared output; <code className="font-mono">env.set(key, value)</code> writes environment variables.
+                        </span>
+                        <button
+                          onClick={() => setShowAiModal(true)}
+                          disabled={!apiResponse}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-cream border border-line rounded-md text-xs font-medium text-clay hover:bg-panel transition-colors disabled:opacity-50 flex-shrink-0"
+                        >
+                          <Sparkles className="h-3.5 w-3.5" /> AI agent parser
+                        </button>
+                      </div>
                     </div>
                     <div className="flex-1 mx-4 mb-4 rounded-lg overflow-hidden border border-line">
                       <Editor
@@ -1569,7 +1747,7 @@ export default function ApiExplorerPage() {
                   <Send className="h-7 w-7 text-mute" />
                   <div className="text-sm font-medium text-mute">Send a request to see the response</div>
                   <div className="text-[13px] text-mute text-center max-w-[300px] leading-relaxed">
-                    Pretty, Headers, Raw and Extracted variables appear here.
+                    Pretty, Headers, Raw and Extracted outputs appear here.
                   </div>
                 </div>
               ) : (
@@ -1604,34 +1782,45 @@ export default function ApiExplorerPage() {
                           <span className="text-[12px] text-red-700 font-mono break-all">{apiResponse.parserError}</span>
                         </div>
                       )}
-                      {apiResponse.parsedVariables && Object.keys(apiResponse.parsedVariables).length ? (
-                        <>
-                          {!selectedEnvId && (
-                            <div className="px-3.5 py-2 mb-3 bg-amber-50 border border-amber-300 rounded-lg text-[12px] text-amber-800">
-                              Extracted but not saved — select an environment to persist these variables.
-                            </div>
-                          )}
-                          <div className="flex flex-col gap-1.5">
-                            {Object.entries(apiResponse.parsedVariables).map(([k, v]) => (
+                      {reqOutputs.length ? (
+                        <div className="flex flex-col gap-1.5">
+                          {reqOutputs.map((name) => {
+                            const outputs = apiResponse.outputs || {};
+                            if (name in outputs) {
+                              const v = outputs[name];
+                              return (
+                                <div
+                                  key={name}
+                                  className="flex items-center gap-2.5 px-3.5 py-2.5 bg-panel border border-line rounded-lg"
+                                >
+                                  <span className="font-mono text-xs font-medium text-clay min-w-[120px]">{name}</span>
+                                  <span className="text-[11px] text-stone">=</span>
+                                  <span className="font-mono text-[11px] text-graphite flex-1 truncate">
+                                    {typeof v === "object" ? JSON.stringify(v) : String(v)}
+                                  </span>
+                                </div>
+                              );
+                            }
+                            return (
                               <div
-                                key={k}
-                                className="flex items-center gap-2.5 px-3.5 py-2.5 bg-panel border border-line rounded-lg"
+                                key={name}
+                                className="flex items-center gap-2.5 px-3.5 py-2.5 bg-amber-50 border border-amber-300 rounded-lg"
                               >
-                                <span className="font-mono text-xs font-medium text-clay min-w-[120px]">{k}</span>
-                                <span className="text-[11px] text-stone">=</span>
-                                <span className="font-mono text-[11px] text-graphite flex-1 truncate">{String(v)}</span>
+                                <AlertCircle className="h-4 w-4 text-amber-600 flex-shrink-0" />
+                                <span className="font-mono text-xs font-medium text-amber-800 min-w-[120px]">{name}</span>
+                                <span className="text-[12px] text-amber-800 flex-1">not set by the parser script</span>
                               </div>
-                            ))}
-                          </div>
-                        </>
-                      ) : !apiResponse.parserError ? (
+                            );
+                          })}
+                        </div>
+                      ) : (
                         <div className="flex flex-col items-center justify-center gap-2.5 min-h-[100px]">
                           <Code2 className="h-6 w-6 text-mute" />
                           <p className="text-[13px] text-mute text-center">
-                            No variables extracted. Add a parser script in the Variables tab.
+                            No outputs declared. Declare outputs in the Output tab to extract values from the response.
                           </p>
                         </div>
-                      ) : null}
+                      )}
                     </div>
                   )}
                 </div>
@@ -1740,7 +1929,7 @@ export default function ApiExplorerPage() {
       )}
 
       {showPythonModal && (() => {
-        const code = buildPython();
+        const code = buildPython(resolvedPreview);
         return (
           <Modal title="Python client" onClose={() => { setShowPythonModal(false); setPythonCopied(false); }} width={680}>
             <div className="flex flex-col gap-4">
@@ -1749,6 +1938,11 @@ export default function ApiExplorerPage() {
                 <code className="font-mono text-[12px] bg-panel px-1 py-0.5 rounded">requests</code> and{" "}
                 <code className="font-mono text-[12px] bg-panel px-1 py-0.5 rounded">pydantic</code>.
               </p>
+              {previewError && (
+                <div className="px-3.5 py-2 bg-amber-50 border border-amber-300 rounded-lg text-[12px] text-amber-800">
+                  Tokens could not be resolved — showing raw template values. ({previewError})
+                </div>
+              )}
               <div className="relative">
                 <pre className="m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre rounded-xl max-h-[420px]">
                   {code}
@@ -1920,23 +2114,125 @@ const DATE_OFFSET_UNITS = [
   { value: "s", label: "Seconds" },
 ];
 
+// Token bodies without braces — braces are added by the Body-editor wrapper;
+// input bindings store the bare body (matches backend resolve_input_bindings).
 const INSERT_VALUE_ROWS = [
-  { label: "Random email", token: "{{$randomEmail}}" },
-  { label: "Random first name", token: "{{$randomFirstName}}" },
-  { label: "Random last name", token: "{{$randomLastName}}" },
-  { label: "Random full name", token: "{{$randomFullName}}" },
+  { label: "Random email", token: "$randomEmail" },
+  { label: "Random first name", token: "$randomFirstName" },
+  { label: "Random last name", token: "$randomLastName" },
+  { label: "Random full name", token: "$randomFullName" },
 ];
 
-function InsertValueMenu({ onInsert }: { onInsert: (token: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
+// Shared generator picker panel — emits brace-less token bodies like
+// "$date:+1d:YYYY-MM-DD" or "$randomInt:4" via onPick.
+function GeneratorMenuPanel({ onPick }: { onPick: (tokenBody: string) => void }) {
   const [dateOffset, setDateOffset] = useState("0");
   const [dateUnit, setDateUnit] = useState("d");
   const [dateFormat, setDateFormat] = useState("YYYY-MM-DD");
   const [digits, setDigits] = useState("4");
+
+  const handleUnitChange = (unit: string) => {
+    setDateUnit(unit);
+    setDateFormat((prev) => {
+      if (prev !== "YYYY-MM-DD" && prev !== "YYYY-MM-DD HH:mm:ss") return prev; // user customized it, leave alone
+      return unit === "d" ? "YYYY-MM-DD" : "YYYY-MM-DD HH:mm:ss";
+    });
+  };
+
+  const pickDate = () => {
+    const n = parseInt(dateOffset, 10) || 0;
+    const offsetPart = n !== 0 ? `${n > 0 ? "+" : ""}${n}${dateUnit}:` : "";
+    onPick(`$date:${offsetPart}${dateFormat || "YYYY-MM-DD"}`);
+  };
+
+  const pickRandomInt = () => {
+    const n = Math.max(1, parseInt(digits, 10) || 4);
+    onPick(`$randomInt:${n}`);
+  };
+
+  return (
+    <>
+      <div className="flex flex-col gap-1.5">
+        <span className="text-[11px] font-medium text-stone uppercase tracking-wide">Date</span>
+        <div className="flex items-center gap-1.5">
+          <input
+            type="number"
+            value={dateOffset}
+            onChange={(e) => setDateOffset(e.target.value)}
+            title="Offset (e.g. 3, -2)"
+            className="w-16 h-8 bg-panel border border-line rounded-md px-2 text-xs text-ink outline-none focus:border-clay"
+          />
+          <Dropdown
+            value={dateUnit}
+            onChange={handleUnitChange}
+            className="h-8 px-2 rounded-md text-xs text-ink flex-1"
+            options={DATE_OFFSET_UNITS}
+          />
+        </div>
+        <input
+          type="text"
+          value={dateFormat}
+          onChange={(e) => setDateFormat(e.target.value)}
+          placeholder="YYYY-MM-DD"
+          className="h-8 bg-panel border border-line rounded-md px-2 font-mono text-xs text-ink outline-none focus:border-clay"
+        />
+        <button
+          onClick={pickDate}
+          className="h-8 bg-clay hover:bg-clay-dark rounded-md text-xs font-medium text-white transition-colors"
+        >
+          Use date
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-1.5 pt-2 border-t border-line">
+        <span className="text-[11px] font-medium text-stone uppercase tracking-wide">Random number</span>
+        <div className="flex items-center gap-1.5">
+          <input
+            type="number"
+            min={1}
+            value={digits}
+            onChange={(e) => setDigits(e.target.value)}
+            className="w-16 h-8 bg-panel border border-line rounded-md px-2 text-xs text-ink outline-none focus:border-clay"
+          />
+          <span className="text-xs text-mute">digits</span>
+          <button
+            onClick={pickRandomInt}
+            className="ml-auto h-8 px-3 bg-clay hover:bg-clay-dark rounded-md text-xs font-medium text-white transition-colors"
+          >
+            Use
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-0.5 pt-2 border-t border-line">
+        {INSERT_VALUE_ROWS.map((row) => (
+          <button
+            key={row.token}
+            onClick={() => onPick(row.token)}
+            className="h-8 px-2 text-left rounded-md text-xs text-ink hover:bg-hover transition-colors"
+          >
+            {row.label}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// Trigger button + positioned portal around GeneratorMenuPanel.
+function GeneratorMenuButton({
+  buttonContent,
+  buttonClassName,
+  onPick,
+}: {
+  buttonContent: React.ReactNode;
+  buttonClassName: string;
+  onPick: (tokenBody: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const updateCoords = () => {
     const el = triggerRef.current;
@@ -1968,36 +2264,15 @@ function InsertValueMenu({ onInsert }: { onInsert: (token: string) => void }) {
     return () => document.removeEventListener("mousedown", onPointer);
   }, [open]);
 
-  const handleUnitChange = (unit: string) => {
-    setDateUnit(unit);
-    setDateFormat((prev) => {
-      if (prev !== "YYYY-MM-DD" && prev !== "YYYY-MM-DD HH:mm:ss") return prev; // user customized it, leave alone
-      return unit === "d" ? "YYYY-MM-DD" : "YYYY-MM-DD HH:mm:ss";
-    });
-  };
-
-  const insertDate = () => {
-    const n = parseInt(dateOffset, 10) || 0;
-    const offsetPart = n !== 0 ? `${n > 0 ? "+" : ""}${n}${dateUnit}:` : "";
-    onInsert(`{{$date:${offsetPart}${dateFormat || "YYYY-MM-DD"}}}`);
-    setOpen(false);
-  };
-
-  const insertRandomInt = () => {
-    const n = Math.max(1, parseInt(digits, 10) || 4);
-    onInsert(`{{$randomInt:${n}}}`);
-    setOpen(false);
-  };
-
   return (
     <>
       <button
         ref={triggerRef}
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="h-[30px] px-2.5 flex items-center gap-1.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors"
+        className={buttonClassName}
       >
-        <Wand2 className="h-3.5 w-3.5" /> Insert value
+        {buttonContent}
       </button>
 
       {open && coords &&
@@ -2007,72 +2282,43 @@ function InsertValueMenu({ onInsert }: { onInsert: (token: string) => void }) {
             style={{ position: "fixed", top: coords.top, left: coords.left, width: 288 }}
             className="z-[100] rounded-lg border border-line bg-cream p-3 shadow-lg shadow-ink/5 flex flex-col gap-3 animate-[fadeUp_0.12s_ease-out]"
           >
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[11px] font-medium text-stone uppercase tracking-wide">Date</span>
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="number"
-                  value={dateOffset}
-                  onChange={(e) => setDateOffset(e.target.value)}
-                  title="Offset (e.g. 3, -2)"
-                  className="w-16 h-8 bg-panel border border-line rounded-md px-2 text-xs text-ink outline-none focus:border-clay"
-                />
-                <Dropdown
-                  value={dateUnit}
-                  onChange={handleUnitChange}
-                  className="h-8 px-2 rounded-md text-xs text-ink flex-1"
-                  options={DATE_OFFSET_UNITS}
-                />
-              </div>
-              <input
-                type="text"
-                value={dateFormat}
-                onChange={(e) => setDateFormat(e.target.value)}
-                placeholder="YYYY-MM-DD"
-                className="h-8 bg-panel border border-line rounded-md px-2 font-mono text-xs text-ink outline-none focus:border-clay"
-              />
-              <button
-                onClick={insertDate}
-                className="h-8 bg-clay hover:bg-clay-dark rounded-md text-xs font-medium text-white transition-colors"
-              >
-                Insert date
-              </button>
-            </div>
-
-            <div className="flex flex-col gap-1.5 pt-2 border-t border-line">
-              <span className="text-[11px] font-medium text-stone uppercase tracking-wide">Random number</span>
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="number"
-                  min={1}
-                  value={digits}
-                  onChange={(e) => setDigits(e.target.value)}
-                  className="w-16 h-8 bg-panel border border-line rounded-md px-2 text-xs text-ink outline-none focus:border-clay"
-                />
-                <span className="text-xs text-mute">digits</span>
-                <button
-                  onClick={insertRandomInt}
-                  className="ml-auto h-8 px-3 bg-clay hover:bg-clay-dark rounded-md text-xs font-medium text-white transition-colors"
-                >
-                  Insert
-                </button>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-0.5 pt-2 border-t border-line">
-              {INSERT_VALUE_ROWS.map((row) => (
-                <button
-                  key={row.token}
-                  onClick={() => { onInsert(row.token); setOpen(false); }}
-                  className="h-8 px-2 text-left rounded-md text-xs text-ink hover:bg-hover transition-colors"
-                >
-                  {row.label}
-                </button>
-              ))}
-            </div>
+            <GeneratorMenuPanel
+              onPick={(tokenBody) => {
+                onPick(tokenBody);
+                setOpen(false);
+              }}
+            />
           </div>,
           document.body
         )}
     </>
+  );
+}
+
+// Body-editor variant: inserts a full {{$...}} token at the cursor.
+function InsertValueMenu({ onInsert }: { onInsert: (token: string) => void }) {
+  return (
+    <GeneratorMenuButton
+      buttonContent={<><Wand2 className="h-3.5 w-3.5" /> Insert value</>}
+      buttonClassName="h-[30px] px-2.5 flex items-center gap-1.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors"
+      onPick={(tokenBody) => onInsert(`{{${tokenBody}}}`)}
+    />
+  );
+}
+
+// Input-tab variant: binds an input to a generator token body.
+function GeneratorBindingButton({ value, onChange }: { value: string; onChange: (tokenBody: string) => void }) {
+  return (
+    <GeneratorMenuButton
+      buttonContent={
+        <>
+          <Wand2 className="h-3.5 w-3.5 flex-shrink-0" />
+          <span className="font-mono truncate">{value || "Choose generator…"}</span>
+          <ChevronDown className="h-3.5 w-3.5 ml-auto flex-shrink-0" />
+        </>
+      }
+      buttonClassName="h-[30px] px-2.5 flex-1 flex items-center gap-1.5 bg-cream border border-line rounded-md text-xs text-graphite hover:bg-panel transition-colors min-w-0 text-left"
+      onPick={onChange}
+    />
   );
 }

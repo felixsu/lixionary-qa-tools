@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 from google import genai
 from google.genai import types
 
@@ -12,6 +12,7 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 class GenerateParserPayload(BaseModel):
     responseBodySample: Any
     prompt: str
+    outputs: Optional[List[str]] = None
 
 @router.post("/generate-parser")
 async def generate_parser(payload: GenerateParserPayload, current_user: dict = Depends(get_current_user)):
@@ -24,10 +25,18 @@ async def generate_parser(payload: GenerateParserPayload, current_user: dict = D
             detail="GEMINI_API_KEY is not configured on the server. Please set it in your environment."
         )
 
+    declared_outputs = [o for o in (payload.outputs or []) if o]
+    outputs_section = ""
+    if declared_outputs:
+        outputs_section = f"""
+    Declared outputs (each MUST be assigned via output.<name> = value):
+    {", ".join(declared_outputs)}
+    """
+
     formatted_prompt = f"""
     Response Payload Sample:
     {payload.responseBodySample}
-
+    {outputs_section}
     Goal instructions:
     {payload.prompt}
     """
@@ -38,11 +47,13 @@ async def generate_parser(payload: GenerateParserPayload, current_user: dict = D
         "Rules:\n"
         "1. Do not output any markdown formatting, code block markers, backticks, or comments. Output ONLY executable JavaScript.\n"
         "2. The JSON response is available inside a local variable named 'response'.\n"
-        "3. You have access to a custom SDK object named 'vars' to set values: vars.set('variable_name', value).\n"
-        "4. Extract properties safely (e.g. check for array lengths or null boundaries).\n\n"
+        "3. Declared request outputs are set by assigning onto the 'output' object: output.order_id = value. "
+        "Set every declared output name the user lists.\n"
+        "4. To write environment variables (only when explicitly asked), use env.set('variable_name', value).\n"
+        "5. Extract properties safely (e.g. check for array lengths or null boundaries).\n\n"
         "Example Output:\n"
         "if(response && response.body && response.body.data && response.body.data.users && response.body.data.users.length > 0) {\n"
-        "  vars.set('user_email', response.body.data.users[0].email);\n"
+        "  output.user_email = response.body.data.users[0].email;\n"
         "}"
     )
 
