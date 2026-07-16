@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { Cpu } from "lucide-react";
 import { isTauri } from "../utils/tauri";
 
@@ -10,8 +11,15 @@ import { isTauri } from "../utils/tauri";
 // local testing keeps working.
 const DEV_MODE = process.env.NODE_ENV === "development";
 
+// /callback is the one page that's *supposed* to run in a plain browser tab:
+// desktop sign-in opens Google's consent screen in the system browser (Tauri
+// webview can't do it), and Google redirects back to this same localhost
+// origin outside the webview. Gating it shut would strand that flow.
+const ALWAYS_ALLOWED_PATHS = ["/callback"];
+
 export default function TauriOnlyGate({ children }: { children: React.ReactNode }) {
-  const [allowed, setAllowed] = useState(DEV_MODE);
+  const pathname = usePathname();
+  const [tauriDetected, setTauriDetected] = useState(false);
 
   useEffect(() => {
     // isTauri() reads window.__TAURI_INTERNALS__, which isn't present during
@@ -19,9 +27,11 @@ export default function TauriOnlyGate({ children }: { children: React.ReactNode 
     // (rather than calling setState synchronously in the effect body) avoids
     // a hydration mismatch against that pre-rendered HTML.
     Promise.resolve().then(() => {
-      if (isTauri()) setAllowed(true);
+      if (isTauri()) setTauriDetected(true);
     });
   }, []);
+
+  const allowed = DEV_MODE || ALWAYS_ALLOWED_PATHS.includes(pathname) || tauriDetected;
 
   if (!allowed) {
     return (
