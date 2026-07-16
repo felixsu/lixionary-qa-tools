@@ -1,11 +1,16 @@
 from fastapi import APIRouter, HTTPException, Depends
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Literal, Optional
 from pydantic import BaseModel
 
 from routes.auth import get_current_user
 from services.executor import execute_request, resolve_request
 
 router = APIRouter(prefix="/api/executor", tags=["executor"])
+
+class InputBinding(BaseModel):
+    name: str
+    source: Literal["literal", "generator"] = "literal"
+    value: str = ""
 
 class ExecutorPayload(BaseModel):
     requestId: str
@@ -19,6 +24,8 @@ class ExecutorPayload(BaseModel):
     authConfig: Optional[dict] = None
     responseParserScript: Optional[str] = ""
     environmentId: Optional[str] = None
+    inputs: Optional[List[InputBinding]] = None
+    outputs: Optional[List[str]] = None
 
 @router.post("/run")
 async def run_request(payload: ExecutorPayload, current_user: dict = Depends(get_current_user)):

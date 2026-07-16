@@ -1,18 +1,46 @@
 import re
 import pytest
-from services.executor import interpolate_variables, extract_jwt_expiry, resolve_request
+from services.executor import interpolate_variables, resolve_input_bindings, extract_jwt_expiry, resolve_request
 from datetime import datetime, timedelta, timezone
 
 def test_interpolate_variables():
     variables = {"BASE_URL": "https://api.example.com", "USER_ID": "12345"}
 
-    url = "{{BASE_URL}}/users/{{USER_ID}}"
+    url = "{{env.BASE_URL}}/users/{{env.USER_ID}}"
     result = interpolate_variables(url, variables)
     assert result == "https://api.example.com/users/12345"
 
-    no_match = "{{NOT_FOUND}}/path"
-    result = interpolate_variables(no_match, variables)
-    assert result == "{{NOT_FOUND}}/path"
+    # Bare tokens no longer read the environment — they are request inputs.
+    assert interpolate_variables("{{BASE_URL}}/path", variables) == "{{BASE_URL}}/path"
+
+    # Bare tokens resolve from the inputs dict.
+    assert interpolate_variables("ref-{{order_ref}}", variables, {"order_ref": "A1"}) == "ref-A1"
+
+    # Unknown env var and unbound input are left untouched.
+    assert interpolate_variables("{{env.NOT_FOUND}}/{{missing}}", variables, {}) == "{{env.NOT_FOUND}}/{{missing}}"
+
+def test_resolve_input_bindings():
+    env = {"BASE_URL": "https://api.example.com"}
+
+    # Literal passthrough
+    assert resolve_input_bindings([{"name": "ref", "source": "literal", "value": "A-1"}], env) == {"ref": "A-1"}
+
+    # Literal values may contain env and $ tokens (one level, no input recursion)
+    resolved = resolve_input_bindings(
+        [{"name": "path", "source": "literal", "value": "{{env.BASE_URL}}/x-{{$randomInt:2}}"}], env
+    )
+    assert re.fullmatch(r"https://api\.example\.com/x-[1-9]\d", resolved["path"])
+
+    # Generator binding
+    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+    resolved = resolve_input_bindings([{"name": "when", "source": "generator", "value": "$date:+1d"}], env)
+    assert resolved["when"] == tomorrow
+
+    # Malformed generator falls back to the raw value; empty names are skipped
+    resolved = resolve_input_bindings(
+        [{"name": "bad", "source": "generator", "value": "$bogus"}, {"name": "", "value": "x"}], env
+    )
+    assert resolved == {"bad": "$bogus"}
 
 def test_interpolate_variables_dynamic_tokens():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -31,9 +59,9 @@ def test_interpolate_variables_dynamic_tokens():
     # Unknown dynamic token is left untouched, same fallback as an unresolved variable.
     assert interpolate_variables("{{$bogus}}", {}) == "{{$bogus}}"
 
-    # Dynamic tokens and normal variables can mix in the same string.
-    mixed = interpolate_variables("{{VAR}} FLX-{{$randomInt:4}}", {"VAR": "hi"})
-    assert re.fullmatch(r"hi FLX-[1-9]\d{3}", mixed)
+    # Dynamic tokens, env vars, and inputs can mix in the same string.
+    mixed = interpolate_variables("{{env.VAR}} {{who}} FLX-{{$randomInt:4}}", {"VAR": "hi"}, {"who": "bob"})
+    assert re.fullmatch(r"hi bob FLX-[1-9]\d{3}", mixed)
 
 def test_interpolate_variables_date_math():
     tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -52,20 +80,21 @@ def test_interpolate_variables_date_math():
 
 async def test_resolve_request():
     result = await resolve_request({
-        "url": "{{BASE_URL}}/orders",
+        "url": "{{env.BASE_URL}}/orders",
         "method": "POST",
         "headers": [{"key": "X-Test", "value": "{{$randomInt:2}}"}],
         "queryParams": [{"key": "q", "value": "{{$randomEmail}}"}],
         "bodyType": "JSON",
-        "body": '{"tracking_id": "FLX-{{$randomInt:4}}"}',
+        "body": '{"tracking_id": "FLX-{{$randomInt:4}}", "ref": "{{tracking}}"}',
         "authType": "BEARER",
         "authConfig": {"token": "tok-{{$randomInt:4}}"},
+        "inputs": [{"name": "tracking", "source": "literal", "value": "T-1"}],
     }, None)
 
-    assert result["url"] == "{{BASE_URL}}/orders"  # no environment given, left unresolved
+    assert result["url"] == "{{env.BASE_URL}}/orders"  # no environment given, left unresolved
     assert re.fullmatch(r"[1-9]\d", result["headers"]["X-Test"])
     assert "@" in result["params"]["q"]
-    assert re.fullmatch(r'\{"tracking_id": "FLX-[1-9]\d{3}"\}', result["body"])
+    assert re.fullmatch(r'\{"tracking_id": "FLX-[1-9]\d{3}", "ref": "T-1"\}', result["body"])
     assert re.fullmatch(r"Bearer tok-[1-9]\d{3}", result["headers"]["Authorization"])
 
 def test_extract_jwt_expiry_fallback():

@@ -1,7 +1,7 @@
 import json
 import httpx
 import quickjs
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 
 def python_fetch_handler(url: str, options_json: str = "{}") -> str:
     """
@@ -91,17 +91,18 @@ async def run_unsafe_auth_script(user_script: str, context_env: Dict[str, str]) 
     except Exception as e:
         return f"ERROR: Execution failed: {str(e)}"
 
-async def run_unsafe_response_parser(response_body: str, response_headers: Dict[str, str], parser_script: str) -> Dict[str, Any]:
+async def run_unsafe_response_parser(response_body: str, response_headers: Dict[str, str], parser_script: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Runs a response parser script on an HTTP response.
-    Injects 'response' and a custom 'vars' storage object.
-    Returns the variables that were extracted.
+    Injects 'response', an 'output' object for declared request outputs, and an
+    'env' storage object ('vars' kept as a deprecated alias) for environment writes.
+    Returns (outputs, env_writes).
     """
     ctx = quickjs.Context()
-    
+
     # Store set variables
     extracted_vars = {}
-    
+
     def vars_set_handler(key: str, value: Any):
         extracted_vars[key] = value
 
@@ -110,7 +111,7 @@ async def run_unsafe_response_parser(response_body: str, response_headers: Dict[
     # primitives, so objects/arrays are JSON-stringified and null/undefined
     # become empty strings instead of raising a conversion error.
     ctx.eval("""
-    const vars = {
+    const env = {
         set: function(key, val) {
             if (val === null || val === undefined) {
                 python_vars_set(String(key), "");
@@ -119,6 +120,8 @@ async def run_unsafe_response_parser(response_body: str, response_headers: Dict[
             python_vars_set(String(key), typeof val === "object" ? JSON.stringify(val) : val);
         }
     };
+    const vars = env;
+    const output = {};
     """)
 
     # Try parsing response body as JSON
@@ -157,6 +160,7 @@ async def run_unsafe_response_parser(response_body: str, response_headers: Dict[
         status = ctx.eval(wrapped_script)
         if str(status).startswith("ERROR:"):
             raise ValueError(status)
-        return extracted_vars
+        outputs = json.loads(ctx.eval("JSON.stringify(output)") or "{}")
+        return outputs, extracted_vars
     except Exception as e:
         raise RuntimeError(f"Parser execution failed: {str(e)}")
