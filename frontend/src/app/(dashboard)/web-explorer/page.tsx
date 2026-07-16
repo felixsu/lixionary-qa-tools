@@ -12,6 +12,7 @@ import { useAppContext } from "../../context/AppContext";
 import type { NetworkLog, NetworkDetails } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
 import { confirmDialog } from "../../utils/confirmDialog";
+import { useScreencastFrame } from "../../utils/screencastFrameStore";
 
 const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8484';
 
@@ -39,7 +40,6 @@ export default function WebExplorerPage() {
     isBrowserConnected,
     inspectMode,
     vncUrl,
-    latestFrame,
     sessionId,
     sendBrowserMouseEvent,
     sendBrowserWheelEvent,
@@ -126,6 +126,7 @@ export default function WebExplorerPage() {
     handleSwitchTab,
     handleCloseTab,
   } = useAppContext();
+  const latestFrame = useScreencastFrame();
 
   // While verifying an inspected element (or running an autonomous Explore
   // session), the noVNC view must be watch-only — the automation is really

@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useEffect, useRef } from "r
 import { useRouter } from "next/navigation";
 import { runAllSync, resolveConflictKeepLocal, resolveConflictKeepCloud } from "./syncEngine";
 import type { SyncConflict } from "./syncEngine";
+import { setScreencastFrame } from "../utils/screencastFrameStore";
 
 const VPS_API_URL = process.env.NEXT_PUBLIC_VPS_API_URL ||
   (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://qa-tools-api.lixionary.com');
@@ -323,8 +324,6 @@ interface AppContextType {
   setInspectMode: (inspect: boolean) => void;
   vncUrl: string;
   setVncUrl: (url: string) => void;
-  latestFrame: string | null;
-  setLatestFrame: (frame: string | null) => void;
   sessionId: string;
   setSessionId: (id: string) => void;
   networkLogs: NetworkLog[];
@@ -564,7 +563,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [isBrowserConnected, setIsBrowserConnected] = useState(false);
   const [inspectMode, setInspectMode] = useState(false);
   const [vncUrl, setVncUrl] = useState("");
-  const [latestFrame, setLatestFrame] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState("");
   const [networkLogs, setNetworkLogs] = useState<NetworkLog[]>([]);
   const [networkFilter, setNetworkFilter] = useState("");
@@ -1191,7 +1189,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setVncUrl("");
           break;
         case "screencast_frame":
-          setLatestFrame(msg.data.image);
+          setScreencastFrame(msg.data.image);
           break;
         case "navigation":
           const navUrl = msg.data?.url || msg.url;
@@ -1358,7 +1356,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setIsBrowserConnected(false);
         setInspectMode(false);
         setVncUrl("");
-        setLatestFrame(null);
+        setScreencastFrame(null);
         setSessionId("");
       }
       await fetchUserSessions();
@@ -1380,7 +1378,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setBrowserTabs([]);
     setActiveTabIndex(0);
     setVncUrl(""); // Empty initially; will be populated dynamically by the WebSocket status message
-    setLatestFrame(null);
+    setScreencastFrame(null);
     connectBrowserSession(sessId, profileId);
   };
 
@@ -1405,7 +1403,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setBrowserTabs([]);
       setActiveTabIndex(0);
       setVncUrl(""); // Empty initially; will be populated dynamically by the WebSocket status message
-      setLatestFrame(null);
+      setScreencastFrame(null);
       connectBrowserSession(sessId, profileId);
       await fetchUserSessions();
     } catch (e: any) {
@@ -1425,7 +1423,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setIsBrowserConnected(false);
     setInspectMode(false);
     setVncUrl("");
-    setLatestFrame(null);
+    setScreencastFrame(null);
     setBrowserTabs([]);
     setActiveTabIndex(0);
     // Keep sessionId so the UI can show the disconnected state and offer reconnect.
@@ -2270,8 +2268,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setInspectMode,
         vncUrl,
         setVncUrl,
-        latestFrame,
-        setLatestFrame,
         sessionId,
         setSessionId,
         networkLogs,

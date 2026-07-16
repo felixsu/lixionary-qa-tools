@@ -72,7 +72,7 @@ export default function BackendStatusIndicator({ compact = false }: { compact?: 
   const { tauri, sidecar, localDb, vps, refresh } = useBackendStatus();
   const signals = { tauri, sidecar, localDb, vps };
   const [open, setOpen] = useState(false);
-  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const [coords, setCoords] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const nowTick = useNowTick(15000);
@@ -80,6 +80,8 @@ export default function BackendStatusIndicator({ compact = false }: { compact?: 
   const summary = summarize([tauri, sidecar, localDb, vps]);
   const errorCount = [tauri, sidecar, localDb, vps].filter((s) => s?.status === "error").length;
 
+  // Initial guess: below the trigger. Corrected below once the popover's
+  // real height is known (it can't be measured before it's first rendered).
   useLayoutEffect(() => {
     if (!open) return;
     const el = triggerRef.current;
@@ -87,6 +89,29 @@ export default function BackendStatusIndicator({ compact = false }: { compact?: 
     const r = el.getBoundingClientRect();
     setCoords({ top: r.bottom + 6, left: r.left });
   }, [open]);
+
+  // Flip to open upward when there isn't room below (e.g. the sidebar's
+  // bottom-anchored trigger) but there is above — runs after the popover has
+  // actually rendered so its real height can be measured.
+  useLayoutEffect(() => {
+    if (!open || !coords) return;
+    const el = triggerRef.current;
+    const pop = popoverRef.current;
+    if (!el || !pop) return;
+    const r = el.getBoundingClientRect();
+    const popHeight = pop.getBoundingClientRect().height;
+    const spaceBelow = window.innerHeight - r.bottom;
+    const spaceAbove = r.top;
+    const fitsBelow = spaceBelow >= popHeight + 12;
+    const shouldOpenUpward = !fitsBelow && spaceAbove > spaceBelow;
+    const isOpenUpward = coords.bottom !== undefined;
+    if (shouldOpenUpward === isOpenUpward) return;
+    setCoords(
+      shouldOpenUpward
+        ? { bottom: window.innerHeight - r.top + 6, left: r.left }
+        : { top: r.bottom + 6, left: r.left }
+    );
+  }, [open, coords]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -122,7 +147,7 @@ export default function BackendStatusIndicator({ compact = false }: { compact?: 
         createPortal(
           <div
             ref={popoverRef}
-            style={{ position: "fixed", top: coords.top, left: coords.left }}
+            style={{ position: "fixed", top: coords.top, bottom: coords.bottom, left: coords.left }}
             className="z-[100] w-72 rounded-xl border border-line bg-cream py-2 shadow-lg shadow-ink/10 animate-[fadeUp_0.12s_ease-out]"
           >
             <div className="px-3.5 pb-2 mb-1 border-b border-line">
