@@ -151,10 +151,6 @@ jobs:
   # make_latest can't be set in the same PATCH (make_latest is silently
   # ignored when combined with draft:false), so this is two calls.
   publish-release:
-    # TEMPORARY: disabled for the first run of this new pipeline so the build
-    # artifacts can be checked by hand before anything reaches real users'
-    # auto-update. Remove this line once that run is verified.
-    if: false
     needs: [create-release, build]
     runs-on: ubuntu-latest
     steps:
