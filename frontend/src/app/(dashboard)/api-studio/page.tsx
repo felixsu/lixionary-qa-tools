@@ -537,7 +537,8 @@ function StudioEditor() {
           ))}
           <p className="text-[11px] text-mute px-1 mt-2 leading-relaxed">
             Connect nodes to define execution order. A node can reference any upstream node&apos;s outputs as{" "}
-            <code className="font-mono">nodeName.output</code>.
+            <code className="font-mono">nodeName.output</code>. Use a <code className="font-mono">*</code> segment
+            to flatten arrays, e.g. <code className="font-mono">loop.results.*.uuid</code>.
           </p>
         </div>
 

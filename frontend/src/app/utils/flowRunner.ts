@@ -90,9 +90,13 @@ export function topoSort(nodes: FlowNode[], edges: FlowEdge[]): { order: string[
 export type RunContext = Record<string, Record<string, any>>;
 
 // Walk a dot-path ("node.out.a.0.b") through the run context / an object.
+// A "*" segment projects over an array: "loop.results.*.uuid" collects the
+// uuid of every iteration into a flat array (elements that don't resolve are
+// dropped, JSONPath-style). Wildcards nest.
 const walkPath = (root: any, segments: string[]): any => {
   let cur = root;
-  for (const seg of segments) {
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
     if (cur === null || cur === undefined) return undefined;
     // JSON-string leaves (e.g. an output that stringified an object) are
     // transparently parsed so paths can continue into them.
@@ -102,6 +106,13 @@ const walkPath = (root: any, segments: string[]): any => {
       } catch {
         return undefined;
       }
+    }
+    if (seg === "*") {
+      if (!Array.isArray(cur)) return undefined;
+      const rest = segments.slice(i + 1);
+      return cur
+        .map((el) => (rest.length ? walkPath(el, rest) : el))
+        .filter((v) => v !== undefined);
     }
     cur = cur?.[seg];
   }
