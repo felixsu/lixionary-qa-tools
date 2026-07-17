@@ -753,6 +753,8 @@ export default function WebExplorerPage() {
     } catch (e: any) {
       alert(`Failed to stop script: ${e.message}`);
     }
+  };
+
   const handleToggleRecord = async () => {
     if (isRecording) {
       handleStopRecording();
