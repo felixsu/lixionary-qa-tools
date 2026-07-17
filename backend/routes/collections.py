@@ -42,6 +42,7 @@ class RequestDefinitionSchema(BaseModel):
     authConfig: Optional[AuthConfigSchema] = None
     responseParserScript: Optional[str] = ""
     extractedVariables: List[ExtractedVariableSchema] = []
+    lastResponse: Optional[Dict[str, Any]] = None
 
 class CollectionCreate(BaseModel):
     name: str

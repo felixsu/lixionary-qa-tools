@@ -67,6 +67,7 @@ export interface RequestItem {
   responseParserScript?: string;
   inputs?: InputBinding[];
   outputs?: string[];
+  lastResponse?: any;
 }
 
 export interface Collection {
@@ -748,12 +749,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // change (when reqAuthType/reqAuthConfig haven't synced to the new request yet).
   const authPersistIdRef = useRef<string>("");
 
+  // Ref to skip re-hydrating the editor when `collections` merely gets a new
+  // array identity from a background refetch (e.g. after Save or an execute
+  // auto-persist) while the same request stays selected — otherwise every
+  // reqXxx field and apiResponse get reset, visibly flashing the UI.
+  const prevSelectedRequestIdRef = useRef<string | null>(null);
+
   // Synchronize request inputs when selection changes
   useEffect(() => {
     if (selectedRequestId) {
       const col = findRequestOwnerCollection(collections, selectedRequestId);
       const req = col ? findRequestInTree(col, selectedRequestId) : null;
       if (req) {
+        const selectionChanged = prevSelectedRequestIdRef.current !== selectedRequestId;
+        prevSelectedRequestIdRef.current = selectedRequestId;
+        if (!selectionChanged) return;
+
         if (col && col.id !== selectedCollectionId) {
           setSelectedCollectionId(col.id);
         }
@@ -1079,9 +1090,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // the cloud route's partial $set), then refetches + kicks a background sync.
   const persistCollectionTree = async (
     rootColId: string,
-    updates: Partial<Pick<Collection, "name" | "description" | "requests" | "children">>
+    updates: Partial<Pick<Collection, "name" | "description" | "requests" | "children">>,
+    // Callers that just created rootColId in the same tick (e.g. saving a
+    // network request into a brand-new collection) must pass it here directly —
+    // `collections` state won't reflect it yet since setState from that
+    // creation hasn't re-rendered this closure, so the state lookup below
+    // would wrongly throw "Collection not found."
+    baseCollection?: Collection
   ): Promise<void> => {
-    const current = collections.find((c) => c.id === rootColId);
+    const current = baseCollection ?? collections.find((c) => c.id === rootColId);
     if (!current) throw new Error("Collection not found.");
     const merged: Collection = { ...current, ...updates };
     await apiCall(`/api/local-store/collection/${rootColId}`, {
@@ -1821,6 +1838,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setApiResponse(result);
       if (result.status < 400) {
         setLastApiResponse(result);
+        try {
+          const col = collections.find(c => findRequestInTree(c, selectedRequestId) !== null);
+          const req = col ? findRequestInTree(col, selectedRequestId) : null;
+          if (col && req) {
+            const updatedCol = updateRequestInTree(col, selectedRequestId, { ...req, lastResponse: result });
+            await persistCollectionTree(col.id, { requests: updatedCol.requests, children: updatedCol.children || [] });
+          }
+        } catch {
+          // best-effort persistence — a failed write shouldn't block showing the fresh response
+        }
       }
       fetchEnvironments();
       triggerSync(["environment"]);
@@ -1957,7 +1984,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const updatedCol = addRequestToNode(col, targetColId, newRequest);
 
-    await persistCollectionTree(col.id, { requests: updatedCol.requests, children: updatedCol.children || [] });
+    await persistCollectionTree(col.id, { requests: updatedCol.requests, children: updatedCol.children || [] }, col);
   };
 
   const handleSaveNetworkRequestToCollection = async (
