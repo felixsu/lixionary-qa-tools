@@ -144,7 +144,7 @@ class AddPOMMethodsBulkPayload(BaseModel):
     methods: List[BulkPOMMethod]
 
 def get_workspace_dir(session_id: str) -> str:
-    path = os.path.join(WORKSPACE_DIR, session_id)
+    path = os.path.join(WORKSPACE_DIR, "default")
     os.makedirs(path, exist_ok=True)
     return path
 
