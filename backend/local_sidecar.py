@@ -382,11 +382,27 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
             except Exception as e:
                 print(f"Error processing click: {e}")
 
+        async def on_interaction_recorded(source, action_json: str):
+            try:
+                action_data = json.loads(action_json)
+                session = _active_sessions.get(session_id)
+                if session:
+                    frame_chain = await get_frame_locators_chain(source["frame"], session["pages"][session["active_page_index"]])
+                    action_data["element"]["frameLocators"] = frame_chain
+                    await BrowserSessionManager.record_interaction(session_id, action_data)
+            except Exception as e:
+                print(f"Error recording interaction: {e}")
+
         await context.expose_binding("pythonOnElementSelected", on_element_selected)
+        await context.expose_binding("pythonOnInteractionRecorded", on_interaction_recorded)
 
         # Inject overlay script
         inspector_js = BrowserSessionManager.get_inspector_js()
         await context.add_init_script(inspector_js)
+
+        # Inject recorder script
+        recorder_js = BrowserSessionManager.get_recorder_js()
+        await context.add_init_script(recorder_js)
 
         # Open page
         page = await context.new_page()
@@ -449,9 +465,13 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
         async def handle_nav(frame):
             try:
                 await frame.evaluate(inspector_js)
+                await frame.evaluate(recorder_js)
                 session = _active_sessions.get(session_id)
-                if session and session.get("inspect_enabled"):
-                    await frame.evaluate("window.__setLixionaryInspectMode(true)")
+                if session:
+                    if session.get("inspect_enabled"):
+                        await frame.evaluate("window.__setLixionaryInspectMode(true)")
+                    if session.get("recording_enabled"):
+                        await frame.evaluate("window.__setLixionaryRecordingMode(true)")
             except Exception:
                 pass
             if frame == page.main_frame:
@@ -476,6 +496,8 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
             "pages": [page],
             "active_page_index": 0,
             "inspect_enabled": False,
+            "recording_enabled": False,
+            "recorded_steps": [],
             "last_clicked_frame": None,
             "anchor_frame": None,
             "callback": send_to_client
@@ -531,6 +553,41 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                         await frame.evaluate(eval_script)
                     except Exception:
                         pass
+            elif action == "start-recording":
+                session["recording_enabled"] = True
+                session["recorded_steps"] = []
+                # Initialize my_recording.py with boilerplate
+                user_home = os.path.expanduser("~")
+                workspace_dir = os.path.join(user_home, "Documents", "AutomationExplorer", "workspaces", "default")
+                os.makedirs(workspace_dir, exist_ok=True)
+                my_recording_path = os.path.join(workspace_dir, "my_recording.py")
+                
+                content = "import os\n"
+                content += "from playwright.sync_api import sync_playwright\n\n"
+                content += "def run():\n"
+                content += "    cdp_url = os.environ.get(\"BROWSER_CDP_URL\", \"http://localhost:9222\")\n"
+                content += "    print(f\"Connecting to browser at {cdp_url}...\")\n"
+                content += "    with sync_playwright() as p:\n"
+                content += "        browser = p.chromium.connect_over_cdp(cdp_url)\n"
+                content += "        context = browser.contexts[0]\n"
+                content += "        page = context.pages[0]\n"
+                content += "        print(\"Connected! Replaying recorded steps...\")\n\n"
+                content += "        # No steps recorded yet\n"
+                content += "        pass\n"
+                content += "\nif __name__ == \"__main__\":\n"
+                content += "    run()\n"
+
+                with open(my_recording_path, "w") as f:
+                    f.write(content)
+
+                # Enable recording mode on page frames
+                await BrowserSessionManager.set_recording_mode(session_id, True)
+                await send_to_client({"type": "recording_started"})
+
+            elif action == "stop-recording":
+                session["recording_enabled"] = False
+                await BrowserSessionManager.set_recording_mode(session_id, False)
+                await send_to_client({"type": "recording_stopped"})
             elif action == "set-anchor":
                 target_frame = session.get("last_clicked_frame") or active_page.main_frame
                 anchor_info = await target_frame.evaluate(

@@ -1,4 +1,5 @@
 import asyncio
+import os
 import json
 import re
 from typing import Dict, Any, List, Optional
@@ -1154,6 +1155,267 @@ class BrowserSessionManager:
             ensureInspectorListeners();
         })();
         """
+
+    @classmethod
+    def get_recorder_js(cls) -> str:
+        return """
+        (function() {
+            if (window.__lixionary_recorder_injected) return;
+            window.__lixionary_recorder_injected = true;
+
+            let recordingMode = false;
+
+            window.__setLixionaryRecordingMode = function(enabled) {
+                recordingMode = enabled;
+            };
+
+            function getElementMetadata(el) {
+                const rect = el.getBoundingClientRect();
+                
+                const getCssPath = (node) => {
+                    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+                    let path = [];
+                    while (node && node.nodeType === Node.ELEMENT_NODE) {
+                        let selector = node.nodeName.toLowerCase();
+                        if (node.id) {
+                            selector += '#' + node.id;
+                            path.unshift(selector);
+                            break;
+                        } else {
+                            let sibling = node;
+                            let sibIndex = 1;
+                            while (sibling = sibling.previousElementSibling) {
+                                if (sibling.nodeName.toLowerCase() == node.nodeName.toLowerCase()) {
+                                    sibIndex++;
+                                }
+                            }
+                            if (sibIndex > 1) {
+                                selector += `:nth-of-type(${sibIndex})`;
+                            }
+                        }
+                        path.unshift(selector);
+                        node = node.parentNode;
+                    }
+                    return path.join(' > ');
+                };
+
+                const getXPath = (node) => {
+                    if (node.id) return `//*[@id="${node.id}"]`;
+                    let path = '';
+                    for (; node && node.nodeType === Node.ELEMENT_NODE; node = node.parentNode) {
+                        let index = 1;
+                        for (let sibling = node.previousSibling; sibling; sibling = sibling.previousSibling) {
+                            if (sibling.nodeType === Node.DOCUMENT_TYPE_NODE) continue;
+                            if (sibling.nodeName === node.nodeName) index++;
+                        }
+                        const tagName = node.nodeName.toLowerCase();
+                        path = `/${tagName}[${index}]` + path;
+                    }
+                    return path;
+                };
+
+                return {
+                    tagName: el.tagName.toLowerCase(),
+                    text: el.innerText ? el.innerText.trim().substring(0, 100) : '',
+                    testId: el.getAttribute('data-testid') || el.getAttribute('data-test-id') || '',
+                    label: el.getAttribute('aria-label') || el.getAttribute('label') || '',
+                    placeholder: el.getAttribute('placeholder') || '',
+                    role: el.getAttribute('role') || '',
+                    href: el.tagName.toLowerCase() === 'a' ? (el.getAttribute('href') || '') : '',
+                    cssSelector: getCssPath(el),
+                    xpath: getXPath(el)
+                };
+            }
+
+            document.addEventListener('click', function(e) {
+                if (!recordingMode) return;
+                const el = e.target;
+
+                const interactiveEl = el.closest('button, a[href], [role="button"], [role="link"], input, textarea, select, [contenteditable="true"]');
+                if (!interactiveEl) return;
+
+                const tag = interactiveEl.tagName.toLowerCase();
+                const type = (interactiveEl.getAttribute('type') || '').toLowerCase();
+                if (tag === 'input' && ['text', 'email', 'password', 'search', 'tel', 'url', 'number'].includes(type)) {
+                    return;
+                }
+                if (tag === 'textarea' || interactiveEl.getAttribute('contenteditable') === 'true') {
+                    return;
+                }
+
+                const metadata = getElementMetadata(interactiveEl);
+                if (window.pythonOnInteractionRecorded) {
+                    window.pythonOnInteractionRecorded(JSON.stringify({
+                        action: 'click',
+                        element: metadata
+                    }));
+                }
+            }, true);
+
+            document.addEventListener('change', function(e) {
+                if (!recordingMode) return;
+                const el = e.target;
+                const tag = el.tagName.toLowerCase();
+                const type = (el.getAttribute('type') || '').toLowerCase();
+
+                if (tag === 'input' || tag === 'textarea' || el.getAttribute('contenteditable') === 'true') {
+                    let action = 'fill';
+                    let value = el.value;
+
+                    if (type === 'checkbox') {
+                        action = el.checked ? 'check' : 'uncheck';
+                        value = '';
+                    } else if (type === 'radio') {
+                        action = 'check';
+                        value = '';
+                    }
+
+                    const metadata = getElementMetadata(el);
+                    if (window.pythonOnInteractionRecorded) {
+                        window.pythonOnInteractionRecorded(JSON.stringify({
+                            action: action,
+                            element: metadata,
+                            value: value
+                        }));
+                    }
+                } else if (tag === 'select') {
+                    const metadata = getElementMetadata(el);
+                    if (window.pythonOnInteractionRecorded) {
+                        window.pythonOnInteractionRecorded(JSON.stringify({
+                            action: 'select_option',
+                            element: metadata,
+                            value: el.value
+                        }));
+                    }
+                }
+            }, true);
+        })();
+        """
+
+    @classmethod
+    async def set_recording_mode(cls, session_id: str, enabled: bool):
+        session = cls._sessions.get(session_id)
+        if session:
+            session["recording_enabled"] = enabled
+            try:
+                eval_script = (
+                    "(function() {\n"
+                    "    if (typeof window.__setLixionaryRecordingMode !== 'function') {\n"
+                    f"        {cls.get_recorder_js()}\n"
+                    "    }\n"
+                    "    if (typeof window.__setLixionaryRecordingMode === 'function') {\n"
+                    f"        window.__setLixionaryRecordingMode({json.dumps(enabled)});\n"
+                    "        return true;\n"
+                    "    }\n"
+                    "    return false;\n"
+                    "})()"
+                )
+                for frame in cls._active_page(session).frames:
+                    try:
+                        await frame.evaluate(eval_script)
+                    except Exception as fe:
+                        print(f"Warning: Failed to evaluate recording mode on frame {frame.url}: {fe}")
+            except Exception as e:
+                print(f"Error setting recording mode: {e}")
+
+    @classmethod
+    async def record_interaction(cls, session_id: str, action_data: dict):
+        session = cls._sessions.get(session_id)
+        if not session or not session.get("recording_enabled"):
+            return
+
+        action = action_data.get("action")
+        el_info = action_data.get("element")
+        value = action_data.get("value", "")
+
+        if not el_info:
+            return
+
+        # Rank locators for the element
+        ranked_locators = rank_locators(el_info)
+        if not ranked_locators:
+            return
+
+        best_locator = ranked_locators[0]
+        strategy = best_locator["strategy"]
+        selector = best_locator["selector"]
+
+        if strategy.startswith("locator"):
+            strategy = "locator"
+
+        strategy_args = ""
+        if strategy == "get_by_role":
+            match = re.match(r'([^\[]+)\[name="([^"]+)"\]', selector)
+            if match:
+                role_type = match.group(1)
+                role_name = match.group(2).replace('"', '\\"')
+                strategy_args = f'"{role_type}", name="{role_name}"'
+            else:
+                escaped_selector = selector.replace('"', '\\"')
+                strategy_args = f'"{escaped_selector}"'
+        else:
+            escaped_selector = selector.replace('"', '\\"')
+            strategy_args = f'"{escaped_selector}"'
+
+        frame_locators = el_info.get("frameLocators") or []
+        frame_chain = ""
+        for fl in frame_locators:
+            frame_chain += f".frame_locator('{fl}')"
+
+        # Format Playwright command
+        if action == "click":
+            step_code = f"page{frame_chain}.{strategy}({strategy_args}).click()"
+        elif action == "check":
+            step_code = f"page{frame_chain}.{strategy}({strategy_args}).check()"
+        elif action == "uncheck":
+            step_code = f"page{frame_chain}.{strategy}({strategy_args}).uncheck()"
+        elif action == "fill":
+            escaped_val = value.replace('"', '\\"')
+            step_code = f'page{frame_chain}.{strategy}({strategy_args}).fill("{escaped_val}")'
+        elif action == "select_option":
+            escaped_val = value.replace('"', '\\"')
+            step_code = f'page{frame_chain}.{strategy}({strategy_args}).select_option("{escaped_val}")'
+        else:
+            return
+
+        # Add to step list
+        session.setdefault("recorded_steps", []).append(step_code)
+
+        # Regenerate my_recording.py
+        user_home = os.path.expanduser("~")
+        workspace_dir = os.path.join(user_home, "Documents", "AutomationExplorer", "workspaces", "default")
+        os.makedirs(workspace_dir, exist_ok=True)
+        my_recording_path = os.path.join(workspace_dir, "my_recording.py")
+
+        steps = session["recorded_steps"]
+        content = "import os\n"
+        content += "from playwright.sync_api import sync_playwright\n\n"
+        content += "def run():\n"
+        content += "    cdp_url = os.environ.get(\"BROWSER_CDP_URL\", \"http://localhost:9222\")\n"
+        content += "    print(f\"Connecting to browser at {cdp_url}...\")\n"
+        content += "    with sync_playwright() as p:\n"
+        content += "        browser = p.chromium.connect_over_cdp(cdp_url)\n"
+        content += "        context = browser.contexts[0]\n"
+        content += "        page = context.pages[0]\n"
+        content += "        print(\"Connected! Replaying recorded steps...\")\n\n"
+
+        for step in steps:
+            content += f"        {step}\n"
+
+        content += "\nif __name__ == \"__main__\":\n"
+        content += "    run()\n"
+
+        with open(my_recording_path, "w") as f:
+            f.write(content)
+
+        # Notify client
+        if session.get("callback"):
+            await session["callback"]({
+                "type": "recording_step_added",
+                "data": {
+                    "step": step_code
+                }
+            })
 
     @classmethod
     async def set_inspect_mode(cls, session_id: str, enabled: bool):
