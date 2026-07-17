@@ -89,6 +89,9 @@ export default function WebExplorerPage() {
     setExplorePrompt,
     handleStartExplore,
     handleStopExplore,
+    isRecording,
+    handleStartRecording,
+    handleStopRecording,
     activeGenCodeTab,
     setActiveGenCodeTab,
     generatedPomCode,
@@ -750,7 +753,30 @@ export default function WebExplorerPage() {
     } catch (e: any) {
       alert(`Failed to stop script: ${e.message}`);
     }
+  const handleToggleRecord = async () => {
+    if (isRecording) {
+      handleStopRecording();
+    } else {
+      handleStartRecording();
+      setSelectedWorkspaceFile("my_recording.py");
+      setTimeout(async () => {
+        await fetchWorkspaceFiles();
+        await fetchFileContent("my_recording.py");
+      }, 500);
+    }
   };
+
+  useEffect(() => {
+    const handleStepAdded = async () => {
+      if (selectedWorkspaceFile === "my_recording.py") {
+        await fetchFileContent("my_recording.py");
+      }
+    };
+    window.addEventListener("recording-step-added", handleStepAdded);
+    return () => {
+      window.removeEventListener("recording-step-added", handleStepAdded);
+    };
+  }, [selectedWorkspaceFile]);
 
   useEffect(() => {
     if (sessionId) {
@@ -1644,6 +1670,30 @@ export default function WebExplorerPage() {
                 </div>
               )}
             </div>
+            <button
+              onClick={handleToggleRecord}
+              disabled={isVerifying || isExploring}
+              title={isRecording ? "Stop recording user interactions" : "Record all user interactions on the page"}
+              className={`h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border ${
+                isRecording
+                  ? "bg-red-50 border-red-300 text-red-700 hover:bg-red-100 font-semibold"
+                  : "bg-transparent border-line text-graphite hover:bg-panel"
+              }`}
+            >
+              {isRecording ? (
+                <>
+                  <span className="h-2.5 w-2.5 rounded-full bg-red-600 animate-pulse flex-shrink-0" />
+                  Recording…
+                </>
+              ) : (
+                <>
+                  <svg className="h-3.5 w-3.5 text-graphite" fill="currentColor" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="8" />
+                  </svg>
+                  Record
+                </>
+              )}
+            </button>
             <div className="relative" ref={exploreMenuRef}>
               {isExploring ? (
                 <button
@@ -1879,6 +1929,12 @@ export default function WebExplorerPage() {
                         onMouseMove={(e) => handlePreviewMouseEvent(e, "move")}
                         onClick={(e) => handlePreviewMouseEvent(e, "click")}
                       >
+                        {isRecording && (
+                          <div className="absolute top-4 left-4 z-40 flex items-center gap-2 px-3 py-1.5 bg-red-950 border border-red-500/50 rounded-lg shadow-md text-xs text-red-200 select-none pointer-events-none">
+                            <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse flex-shrink-0" />
+                            <span className="font-semibold uppercase tracking-wider text-[10px]">Recording Session</span>
+                          </div>
+                        )}
                         {latestFrame ? (
                           <img 
                             src={`data:image/jpeg;base64,${latestFrame}`} 
@@ -1949,6 +2005,12 @@ export default function WebExplorerPage() {
                           onMouseMove={(e) => handlePreviewMouseEvent(e, "move")}
                           onClick={(e) => handlePreviewMouseEvent(e, "click")}
                         >
+                          {isRecording && (
+                            <div className="absolute top-4 left-4 z-40 flex items-center gap-2 px-3 py-1.5 bg-red-950 border border-red-500/50 rounded-lg shadow-md text-xs text-red-200 select-none pointer-events-none">
+                              <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse flex-shrink-0" />
+                              <span className="font-semibold uppercase tracking-wider text-[10px]">Recording Session</span>
+                            </div>
+                          )}
                           {latestFrame ? (
                             <img 
                               src={`data:image/jpeg;base64,${latestFrame}`} 

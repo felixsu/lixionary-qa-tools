@@ -400,6 +400,9 @@ interface AppContextType {
   setExplorePrompt: (prompt: string) => void;
   handleStartExplore: (scope?: "page" | "selected") => void;
   handleStopExplore: () => void;
+  isRecording: boolean;
+  handleStartRecording: () => void;
+  handleStopRecording: () => void;
   activeGenCodeTab: "pom" | "client";
   setActiveGenCodeTab: (tab: "pom" | "client") => void;
   generatedPomCode: string;
@@ -625,6 +628,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [isExploring, setIsExploring] = useState(false);
   const [exploreSteps, setExploreSteps] = useState<any[]>([]);
   const [explorePrompt, setExplorePrompt] = useState("");
+  const [isRecording, setIsRecording] = useState(false);
   const [anchorElement, setAnchorElement] = useState<{ tagName: string; id: string; text: string } | null>(null);
   const [activeGenCodeTab, setActiveGenCodeTab] = useState<"pom" | "client">("pom");
   const [generatedPomCode, setGeneratedPomCode] = useState("");
@@ -1408,6 +1412,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setPageScanError(null);
           setPageScanStatus("scanning");
           break;
+        case "recording_started":
+          setIsRecording(true);
+          break;
+        case "recording_stopped":
+          setIsRecording(false);
+          break;
+        case "recording_step_added":
+          window.dispatchEvent(new CustomEvent("recording-step-added", { detail: msg.data }));
+          break;
         case "explore_step":
           setExploreSteps((prev) => [...prev, msg.data]);
           break;
@@ -1664,6 +1677,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // right away; pageScanStatus stays "scanning" until the real result lands,
     // which still keeps the Scan button disabled to avoid a result-overwrite race.
     setIsExploring(false);
+  };
+
+  const handleStartRecording = () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ action: "start-recording" }));
+    setIsRecording(true);
+  };
+
+  const handleStopRecording = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action: "stop-recording" }));
+    }
+    setIsRecording(false);
   };
 
   const handleClearNetworkLogs = () => {
@@ -2468,6 +2494,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setExplorePrompt,
         handleStartExplore,
         handleStopExplore,
+        isRecording,
+        handleStartRecording,
+        handleStopRecording,
         activeGenCodeTab,
         setActiveGenCodeTab,
         generatedPomCode,

@@ -1,6 +1,6 @@
 import re
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from jinja2 import Template
 
 POM_TEMPLATE = """from playwright.sync_api import Page
@@ -25,7 +25,7 @@ class {{ class_name }}:
     {% endfor %}
 """
 
-def build_pom_method_code(method_name: str, action: str, strategy: str, selector: str, frame_locators: List[str]) -> str:
+def build_pom_method_code(method_name: str, action: str, strategy: str, selector: str, frame_locators: List[str], page_url: Optional[str] = None) -> str:
     """
     Builds a single POM method body (indented for insertion into the MyPage class).
     """
@@ -64,7 +64,11 @@ def build_pom_method_code(method_name: str, action: str, strategy: str, selector
     # unlike fill()); getText maps to inner_text() and returns its result.
     playwright_call = {"type": "press_sequentially", "getText": "inner_text"}.get(action, action)
 
-    method_body = f"    def {method_name}({sig_args}) -> {return_type}:\n"
+    comment = ""
+    if page_url:
+        comment = f"    # Recorded from: {page_url}\n"
+
+    method_body = comment + f"    def {method_name}({sig_args}) -> {return_type}:\n"
     method_body += f'        """{docstring}"""\n'
     if action == "getText":
         method_body += f'        return self.page{frame_chain}.{strategy}({strategy_args}).{playwright_call}()\n'
