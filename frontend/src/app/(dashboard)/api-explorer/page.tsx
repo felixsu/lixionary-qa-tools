@@ -698,6 +698,17 @@ export default function ApiExplorerPage() {
     }
   };
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      if (e.key.toLowerCase() !== "s") return;
+      e.preventDefault();
+      if (selectedRequestId) onSave();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedRequestId, onSave]);
+
   const onCreateCollectionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newColName) return;
@@ -769,22 +780,19 @@ export default function ApiExplorerPage() {
     showToast("Collection ID copied — ready to share");
   };
 
-  const generateAiParserScript = async () => {
-    if (!aiPrompt) return;
+  const runGenerateParser = async (promptText: string) => {
     setIsGeneratingAiParser(true);
     try {
       const result = await apiCall("/api/ai/generate-parser", {
         method: "POST",
         body: JSON.stringify({
-          prompt: aiPrompt,
+          prompt: promptText,
           responseBodySample: apiResponse ? JSON.stringify(apiResponse.body, null, 2) : "",
           outputs: reqOutputs,
         }),
       });
       if (result.generatedScript) {
         setReqParserScript(result.generatedScript);
-        setShowAiModal(false);
-        setAiPrompt("");
         showToast("Parser script generated");
       }
     } catch (e: any) {
@@ -792,6 +800,21 @@ export default function ApiExplorerPage() {
     } finally {
       setIsGeneratingAiParser(false);
     }
+  };
+
+  const generateAiParserScript = async () => {
+    if (!aiPrompt) return;
+    await runGenerateParser(aiPrompt);
+    setShowAiModal(false);
+    setAiPrompt("");
+  };
+
+  const handleFixMissingOutputs = async () => {
+    const missing: string[] = apiResponse?.missingOutputs || [];
+    if (!missing.length) return;
+    await runGenerateParser(
+      `Update the parser script so these declared outputs are set on both the output object and as env vars (same name for both): ${missing.join(", ")}.`
+    );
   };
 
   const handleUrlPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
@@ -1785,20 +1808,42 @@ export default function ApiExplorerPage() {
                       )}
                       {reqOutputs.length ? (
                         <div className="flex flex-col gap-1.5">
+                          {(apiResponse.missingOutputs?.length ?? 0) > 0 && (
+                            <div className="flex items-center gap-2.5 px-3.5 py-2.5 mb-1 bg-amber-50 border border-amber-300 rounded-lg">
+                              <AlertCircle className="h-4 w-4 text-amber-600 flex-shrink-0" />
+                              <span className="text-[12px] text-amber-800 flex-1">
+                                {apiResponse.missingOutputs.length} declared output{apiResponse.missingOutputs.length === 1 ? "" : "s"} not set by the parser script
+                              </span>
+                              <button
+                                onClick={handleFixMissingOutputs}
+                                disabled={isGeneratingAiParser}
+                                className="flex items-center gap-1.5 px-2.5 py-1 bg-white border border-amber-300 rounded-md text-[11px] font-medium text-amber-800 hover:bg-amber-100 transition-colors disabled:opacity-50 flex-shrink-0"
+                              >
+                                <Sparkles className="h-3 w-3" /> Fix missing outputs
+                              </button>
+                            </div>
+                          )}
                           {reqOutputs.map((name) => {
                             const outputs = apiResponse.outputs || {};
-                            if (name in outputs) {
+                            const isMissing = (apiResponse.missingOutputs || []).includes(name);
+                            if (!isMissing) {
                               const v = outputs[name];
+                              const inEnv = !!(apiResponse.parsedVariables && name in apiResponse.parsedVariables);
                               return (
                                 <div
                                   key={name}
-                                  className="flex items-center gap-2.5 px-3.5 py-2.5 bg-panel border border-line rounded-lg"
+                                  className="flex flex-col gap-1 px-3.5 py-2.5 bg-panel border border-line rounded-lg"
                                 >
-                                  <span className="font-mono text-xs font-medium text-clay min-w-[120px]">{name}</span>
-                                  <span className="text-[11px] text-stone">=</span>
-                                  <span className="font-mono text-[11px] text-graphite flex-1 truncate">
-                                    {typeof v === "object" ? JSON.stringify(v) : String(v)}
-                                  </span>
+                                  <div className="flex items-center gap-2.5">
+                                    <span className="font-mono text-xs font-medium text-clay min-w-[120px]">{name}</span>
+                                    <span className="text-[11px] text-stone">=</span>
+                                    <span className="font-mono text-[11px] text-graphite flex-1 truncate">
+                                      {typeof v === "object" ? JSON.stringify(v) : String(v)}
+                                    </span>
+                                  </div>
+                                  {!inEnv && (
+                                    <span className="text-[11px] text-amber-700 pl-[132px]">not written to an env var</span>
+                                  )}
                                 </div>
                               );
                             }

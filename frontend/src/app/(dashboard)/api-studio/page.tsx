@@ -215,6 +215,10 @@ function StudioEditor() {
   const clipboardRef = useRef<{ nodes: FlowNode[]; edges: FlowEdge[] } | null>(null);
   const pasteCountRef = useRef(0);
   const undoStackRef = useRef<{ nodes: FlowNode[]; edges: FlowEdge[] }[]>([]);
+  // Cmd/Ctrl+S below is registered before `onSave` is defined (it's declared
+  // further down, alongside the other flow-canvas handlers) — kept fresh via
+  // this ref every render instead of reordering the file.
+  const onSaveRef = useRef<() => void>(() => {});
 
   const [showNewFlowModal, setShowNewFlowModal] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState(false);
@@ -356,7 +360,18 @@ function StudioEditor() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
       const key = e.key.toLowerCase();
-      if (key !== "c" && key !== "v" && key !== "z") return;
+      if (key !== "c" && key !== "v" && key !== "z" && key !== "s") return;
+
+      if (key === "s") {
+        // Unlike copy/paste/undo, Save must fire even while a text field on
+        // the canvas has focus — that's the whole point of the shortcut —
+        // so it's handled before the isTypingTarget bail-out below.
+        e.preventDefault();
+        if (showNewFlowModal || showRenameModal) return;
+        if (selectedFlow && dirty && !isSaving) onSaveRef.current();
+        return;
+      }
+
       if (isTypingTarget(document.activeElement) || showNewFlowModal || showRenameModal) return;
 
       if (key === "z") {
@@ -442,7 +457,7 @@ function StudioEditor() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [nodes, edges, selectedFlow, showNewFlowModal, showRenameModal, collections, setNodes, setEdges]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [nodes, edges, selectedFlow, showNewFlowModal, showRenameModal, collections, setNodes, setEdges, dirty, isSaving]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- validation ----
 
@@ -550,6 +565,10 @@ function StudioEditor() {
       setIsSaving(false);
     }
   };
+
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  });
 
   const onRun = async () => {
     if (!selectedFlow || isRunning) return;

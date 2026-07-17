@@ -12,6 +12,7 @@ import SyncConflictModal from "../components/SyncConflictModal";
 import BackendStatusIndicator from "../components/BackendStatusIndicator";
 import { useNowTick } from "../utils/useNowTick";
 import { useAppVersion } from "../utils/useAppVersion";
+import { useUpdateChecker } from "../utils/useUpdateChecker";
 
 type NavEntry =
   | { type: "section"; label: string }
@@ -77,6 +78,7 @@ export default function DashboardLayout({
   // Drives the "Synced Xm ago" label.
   const nowTick = useNowTick(15000);
   const appVersion = useAppVersion();
+  const updateChecker = useUpdateChecker();
 
   if (isLoadingAuth || !token) {
     return (
@@ -378,7 +380,18 @@ export default function DashboardLayout({
           </div>
 
           {!collapsed && appVersion && (
-            <div className="text-center text-[11px] text-mute/70">v{appVersion}</div>
+            <div className="flex items-center justify-center gap-1 text-[11px] text-mute/70">
+              <span>v{appVersion}</span>
+              <button
+                onClick={updateChecker.checkNow}
+                disabled={updateChecker.checking}
+                title="Check for update"
+                className="p-0.5 rounded hover:bg-panel hover:text-graphite transition-colors disabled:opacity-60"
+              >
+                <RefreshCw className={`h-3 w-3 ${updateChecker.checking ? "animate-spin" : ""}`} />
+              </button>
+              {updateChecker.justChecked && <span className="text-sage">Up to date</span>}
+            </div>
           )}
         </div>
       </aside>
@@ -417,7 +430,7 @@ export default function DashboardLayout({
           )}
         </header>
 
-        <UpdateBanner />
+        <UpdateBanner update={updateChecker.update} version={updateChecker.version} />
 
         {/* Content */}
         <main className="flex-1 overflow-hidden relative">

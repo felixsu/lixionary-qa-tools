@@ -1,45 +1,22 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Download, RefreshCw, X } from "lucide-react";
-import { isTauri } from "../utils/tauri";
 
-// Checks GitHub releases (latest.json) for a newer signed build on app start.
-// Renders nothing outside the Tauri desktop app.
-export default function UpdateBanner() {
-  const [updateRef, setUpdateRef] = useState<any>(null);
-  const [version, setVersion] = useState("");
+// Renders the "update available" prompt once useUpdateChecker (see
+// ../utils/useUpdateChecker.ts, the shared source of truth also driving the
+// sidebar's manual check button) finds a newer signed build.
+export default function UpdateBanner({ update, version }: { update: any; version: string }) {
   const [updating, setUpdating] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
-  const [dismissed, setDismissed] = useState(false);
-
-  useEffect(() => {
-    if (!isTauri()) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const { check } = await import("@tauri-apps/plugin-updater");
-        const update = await check();
-        if (!cancelled && update) {
-          setUpdateRef(update);
-          setVersion(update.version);
-        }
-      } catch (e) {
-        // Offline or endpoint unreachable — never block the app over updates
-        console.warn("Update check failed:", e);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const [dismissedVersion, setDismissedVersion] = useState("");
 
   const onUpdate = async () => {
-    if (!updateRef || updating) return;
+    if (!update || updating) return;
     setUpdating(true);
     setErrorMsg("");
     try {
-      await updateRef.downloadAndInstall();
+      await update.downloadAndInstall();
       const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
     } catch (e: any) {
@@ -49,7 +26,10 @@ export default function UpdateBanner() {
     }
   };
 
-  if (!version || dismissed) return null;
+  // A dismissal only hides the specific version the user dismissed — if the
+  // hourly check later finds a newer one, the banner reappears instead of
+  // staying silently hidden forever.
+  if (!version || version === dismissedVersion) return null;
 
   return (
     <div className="flex items-center gap-3 px-4 py-2 bg-clay text-white text-[13px] flex-shrink-0">
@@ -75,7 +55,7 @@ export default function UpdateBanner() {
         )}
       </button>
       <button
-        onClick={() => setDismissed(true)}
+        onClick={() => setDismissedVersion(version)}
         disabled={updating}
         className="h-7 w-7 rounded-md hover:bg-white/15 flex items-center justify-center transition-colors flex-shrink-0"
         title="Dismiss"
