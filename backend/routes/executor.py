@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 from routes.auth import get_current_user
 from services.executor import execute_request, resolve_request
+from services.sync_versioning import get_device_id
 
 router = APIRouter(prefix="/api/executor", tags=["executor"])
 
@@ -28,7 +29,11 @@ class ExecutorPayload(BaseModel):
     outputs: Optional[List[str]] = None
 
 @router.post("/run")
-async def run_request(payload: ExecutorPayload, current_user: dict = Depends(get_current_user)):
+async def run_request(
+    payload: ExecutorPayload,
+    current_user: dict = Depends(get_current_user),
+    device_id: str = Depends(get_device_id),
+):
     """
     Executes an API request using the proxy runner and resolves any environment variables or Auth Hooks.
     """
@@ -36,9 +41,9 @@ async def run_request(payload: ExecutorPayload, current_user: dict = Depends(get
         # Convert request body payload into dictionary
         req_data = payload.model_dump()
         env_id = payload.environmentId
-        
+
         # Execute proxy request
-        result = await execute_request(req_data, env_id)
+        result = await execute_request(req_data, env_id, device_id=device_id)
         return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Request execution failed: {str(e)}")
