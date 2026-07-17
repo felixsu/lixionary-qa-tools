@@ -553,7 +553,7 @@ export default function BrowserProfilesPage() {
         >
           <form
             onSubmit={onSaveSubmit}
-            className="bg-cream rounded-2xl p-8 w-[620px] max-h-[85vh] overflow-y-auto shadow-[0_24px_48px_-12px_rgba(20,20,19,0.18)] flex flex-col gap-5"
+            className="bg-cream rounded-2xl p-8 w-[760px] max-h-[85vh] overflow-y-auto shadow-[0_24px_48px_-12px_rgba(20,20,19,0.18)] flex flex-col gap-5"
           >
             <div className="flex items-start justify-between">
               <div className="flex flex-col gap-1">
@@ -816,115 +816,118 @@ export default function BrowserProfilesPage() {
                     )}
 
                     {fetchedData && (
-                      <div className="border border-line rounded-lg bg-cream p-3 flex flex-col gap-3 max-h-[250px] overflow-y-auto">
+                      <div className="border border-line rounded-lg bg-cream p-3 flex flex-col gap-3">
                         <div className="text-xs font-medium text-ink flex flex-col gap-0.5">
                           <span className="text-mute">Source URL:</span>
                           <span className="font-mono text-[10px] break-all bg-panel p-1.5 rounded border border-line">{fetchedData.url}</span>
                         </div>
 
-                        {/* Cookies selection list */}
-                        <div className="flex flex-col gap-1.5">
-                          <div className="flex items-center justify-between">
-                            <div className="text-[10px] font-semibold text-graphite uppercase tracking-wide">
-                              Cookies ({fetchedData.cookies?.length || 0})
+                        {/* Cookies + LocalStorage selection, side by side so both fit without stacking */}
+                        <div className="grid grid-cols-2 gap-3">
+                          {/* Cookies selection list */}
+                          <div className="flex flex-col gap-1.5 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <div className="text-[10px] font-semibold text-graphite uppercase tracking-wide">
+                                Cookies ({fetchedData.cookies?.length || 0})
+                              </div>
+                              {fetchedData.cookies && fetchedData.cookies.length > 0 && (
+                                <div className="flex gap-2 text-[9px] font-medium text-clay">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedCookies(fetchedData.cookies.map((c: any) => c.name))}
+                                    className="hover:underline cursor-pointer"
+                                  >
+                                    Select All
+                                  </button>
+                                  <span className="text-mute">|</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedCookies([])}
+                                    className="hover:underline cursor-pointer"
+                                  >
+                                    Select None
+                                  </button>
+                                </div>
+                              )}
                             </div>
-                            {fetchedData.cookies && fetchedData.cookies.length > 0 && (
-                              <div className="flex gap-2 text-[9px] font-medium text-clay">
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedCookies(fetchedData.cookies.map((c: any) => c.name))}
-                                  className="hover:underline cursor-pointer"
-                                >
-                                  Select All
-                                </button>
-                                <span className="text-mute">|</span>
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedCookies([])}
-                                  className="hover:underline cursor-pointer"
-                                >
-                                  Select None
-                                </button>
+                            {(!fetchedData.cookies || fetchedData.cookies.length === 0) ? (
+                              <div className="text-xs text-mute italic px-1">No cookies found for this domain.</div>
+                            ) : (
+                              <div className="max-h-[280px] overflow-y-auto border border-line rounded p-2 flex flex-col gap-1 bg-panel">
+                                {fetchedData.cookies.map((c: any, i: number) => (
+                                  <label key={i} className="flex items-start gap-2 text-xs text-graphite cursor-pointer select-none py-0.5 hover:bg-cream rounded px-1">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedCookies.includes(c.name)}
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          setSelectedCookies([...selectedCookies, c.name]);
+                                        } else {
+                                          setSelectedCookies(selectedCookies.filter(n => n !== c.name));
+                                        }
+                                      }}
+                                      className="mt-0.5 rounded text-clay focus:ring-clay h-3.5 w-3.5"
+                                    />
+                                    <div className="flex-1 min-w-0 flex flex-col">
+                                      <span className="font-mono text-[11px] font-medium truncate">{c.name}</span>
+                                      <span className="text-[9px] text-mute truncate">{c.value}</span>
+                                    </div>
+                                  </label>
+                                ))}
                               </div>
                             )}
                           </div>
-                          {(!fetchedData.cookies || fetchedData.cookies.length === 0) ? (
-                            <div className="text-xs text-mute italic px-1">No cookies found for this domain.</div>
-                          ) : (
-                            <div className="max-h-[90px] overflow-y-auto border border-line rounded p-2 flex flex-col gap-1 bg-panel">
-                              {fetchedData.cookies.map((c: any, i: number) => (
-                                <label key={i} className="flex items-start gap-2 text-xs text-graphite cursor-pointer select-none py-0.5 hover:bg-cream rounded px-1">
-                                  <input
-                                    type="checkbox"
-                                    checked={selectedCookies.includes(c.name)}
-                                    onChange={(e) => {
-                                      if (e.target.checked) {
-                                        setSelectedCookies([...selectedCookies, c.name]);
-                                      } else {
-                                        setSelectedCookies(selectedCookies.filter(n => n !== c.name));
-                                      }
-                                    }}
-                                    className="mt-0.5 rounded text-clay focus:ring-clay h-3.5 w-3.5"
-                                  />
-                                  <div className="flex-1 min-w-0 flex flex-col">
-                                    <span className="font-mono text-[11px] font-medium truncate">{c.name}</span>
-                                    <span className="text-[9px] text-mute truncate">{c.value}</span>
-                                  </div>
-                                </label>
-                              ))}
-                            </div>
-                          )}
-                        </div>
 
-                        {/* LocalStorage selection list */}
-                        <div className="flex flex-col gap-1.5">
-                          <div className="flex items-center justify-between">
-                            <div className="text-[10px] font-semibold text-graphite uppercase tracking-wide">
-                              LocalStorage Keys ({Object.keys(fetchedData.localStorage || {}).length})
+                          {/* LocalStorage selection list */}
+                          <div className="flex flex-col gap-1.5 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <div className="text-[10px] font-semibold text-graphite uppercase tracking-wide">
+                                LocalStorage Keys ({Object.keys(fetchedData.localStorage || {}).length})
+                              </div>
+                              {Object.keys(fetchedData.localStorage || {}).length > 0 && (
+                                <div className="flex gap-2 text-[9px] font-medium text-clay">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedLocalStorageKeys(Object.keys(fetchedData.localStorage))}
+                                    className="hover:underline cursor-pointer"
+                                  >
+                                    Select All
+                                  </button>
+                                  <span className="text-mute">|</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedLocalStorageKeys([])}
+                                    className="hover:underline cursor-pointer"
+                                  >
+                                    Select None
+                                  </button>
+                                </div>
+                              )}
                             </div>
-                            {Object.keys(fetchedData.localStorage || {}).length > 0 && (
-                              <div className="flex gap-2 text-[9px] font-medium text-clay">
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedLocalStorageKeys(Object.keys(fetchedData.localStorage))}
-                                  className="hover:underline cursor-pointer"
-                                >
-                                  Select All
-                                </button>
-                                <span className="text-mute">|</span>
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedLocalStorageKeys([])}
-                                  className="hover:underline cursor-pointer"
-                                >
-                                  Select None
-                                </button>
+                            {Object.keys(fetchedData.localStorage || {}).length === 0 ? (
+                              <div className="text-xs text-mute italic px-1">No LocalStorage keys found.</div>
+                            ) : (
+                              <div className="max-h-[280px] overflow-y-auto border border-line rounded p-2 flex flex-col gap-1 bg-panel">
+                                {Object.keys(fetchedData.localStorage).map((k) => (
+                                  <label key={k} className="flex items-start gap-2 text-xs text-graphite cursor-pointer select-none py-0.5 hover:bg-cream rounded px-1">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedLocalStorageKeys.includes(k)}
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          setSelectedLocalStorageKeys([...selectedLocalStorageKeys, k]);
+                                        } else {
+                                          setSelectedLocalStorageKeys(selectedLocalStorageKeys.filter(n => n !== k));
+                                        }
+                                      }}
+                                      className="mt-0.5 rounded text-clay focus:ring-clay h-3.5 w-3.5"
+                                    />
+                                    <span className="font-mono text-[11px] truncate flex-1">{k}</span>
+                                  </label>
+                                ))}
                               </div>
                             )}
                           </div>
-                          {Object.keys(fetchedData.localStorage || {}).length === 0 ? (
-                            <div className="text-xs text-mute italic px-1">No LocalStorage keys found.</div>
-                          ) : (
-                            <div className="max-h-[90px] overflow-y-auto border border-line rounded p-2 flex flex-col gap-1 bg-panel">
-                              {Object.keys(fetchedData.localStorage).map((k) => (
-                                <label key={k} className="flex items-start gap-2 text-xs text-graphite cursor-pointer select-none py-0.5 hover:bg-cream rounded px-1">
-                                  <input
-                                    type="checkbox"
-                                    checked={selectedLocalStorageKeys.includes(k)}
-                                    onChange={(e) => {
-                                      if (e.target.checked) {
-                                        setSelectedLocalStorageKeys([...selectedLocalStorageKeys, k]);
-                                      } else {
-                                        setSelectedLocalStorageKeys(selectedLocalStorageKeys.filter(n => n !== k));
-                                      }
-                                    }}
-                                    className="mt-0.5 rounded text-clay focus:ring-clay h-3.5 w-3.5"
-                                  />
-                                  <span className="font-mono text-[11px] truncate flex-1">{k}</span>
-                                </label>
-                              ))}
-                            </div>
-                          )}
                         </div>
 
                         <button

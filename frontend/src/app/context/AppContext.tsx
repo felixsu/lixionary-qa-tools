@@ -1807,8 +1807,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         environmentId: selectedEnvCloudId
       };
 
+      if (!deviceIdRef.current) {
+        const { deviceId } = await apiCall("/api/local-store/device-id");
+        deviceIdRef.current = deviceId;
+      }
+
       const result = await apiCall("/api/executor/run", {
         method: "POST",
+        headers: { "X-Device-Id": deviceIdRef.current! },
         body: JSON.stringify(payload)
       });
 
@@ -1817,6 +1823,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setLastApiResponse(result);
       }
       fetchEnvironments();
+      triggerSync(["environment"]);
     } catch (e: any) {
       setApiResponse({
         status: 500,

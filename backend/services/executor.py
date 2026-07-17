@@ -10,6 +10,7 @@ from bson import ObjectId
 
 from db.mongo import MongoDB
 from services.auth_sandbox import run_unsafe_auth_script, run_unsafe_response_parser
+from services.sync_versioning import apply_versioned_update
 
 _DATE_FORMAT_TOKENS = [
     ("YYYY", "%Y"), ("YY", "%y"),
@@ -288,7 +289,7 @@ async def resolve_request(request_data: Dict[str, Any], environment_id: str = No
 
     return {"url": url, "headers": headers, "params": params, "body": body_content}
 
-async def execute_request(request_data: Dict[str, Any], environment_id: str = None) -> Dict[str, Any]:
+async def execute_request(request_data: Dict[str, Any], environment_id: str = None, device_id: str = "unknown") -> Dict[str, Any]:
     """
     Runs the full Request Execution Loop:
     1. Resolves URL, headers, query params, body, and auth via resolve_request().
@@ -366,10 +367,12 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
                 parser_script=parser_script
             )
 
-            # If env writes were made, save them back to the active environment
+            # If env writes were made, save them back to the active environment.
+            # Goes through apply_versioned_update (same path as PUT /api/environments/{id})
+            # so the version bump lets the sync engine notice the change — a raw $set here
+            # is invisible to the local-first sync diff and gets silently lost/overwritten.
             if parsed_variables and environment_id:
                 env_col = MongoDB.get_collection("environments")
-                # Retrieve current variables
                 env_doc = await env_col.find_one({"_id": ObjectId(environment_id)})
                 if env_doc:
                     updated_vars = {v["key"]: v for v in env_doc.get("variables", [])}
@@ -382,9 +385,12 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
                             "isSecret": False
                         }
 
-                    await env_col.update_one(
-                        {"_id": ObjectId(environment_id)},
-                        {"$set": {"variables": list(updated_vars.values())}}
+                    await apply_versioned_update(
+                        env_col, ObjectId(environment_id),
+                        {"variables": list(updated_vars.values())},
+                        device_id=device_id,
+                        force=True,
+                        serialize=lambda d: d,
                     )
         except Exception as e:
             parser_error = str(e)

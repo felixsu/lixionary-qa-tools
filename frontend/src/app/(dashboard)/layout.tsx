@@ -4,7 +4,7 @@ import React, { useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint, FolderOpen, Cloud, CloudOff, RefreshCw, AlertTriangle, Workflow } from "lucide-react";
+import { Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint, FolderOpen, Cloud, CloudOff, RefreshCw, AlertTriangle, Workflow, ExternalLink } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import Dropdown from "../components/Dropdown";
 import UpdateBanner from "../components/UpdateBanner";
@@ -13,6 +13,7 @@ import BackendStatusIndicator from "../components/BackendStatusIndicator";
 import { useNowTick } from "../utils/useNowTick";
 import { useAppVersion } from "../utils/useAppVersion";
 import { useUpdateChecker } from "../utils/useUpdateChecker";
+import { isTauri } from "../utils/tauri";
 
 type NavEntry =
   | { type: "section"; label: string }
@@ -67,6 +68,16 @@ export default function DashboardLayout({
     window.history.replaceState(null, "", `?${params.toString()}`);
     // Force re-render via a shallow router replace so useSearchParams picks up the change.
     router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  };
+
+  const openSuperTools = async () => {
+    const url = "https://super-tools.lixionary.com/";
+    if (isTauri()) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("open_external", { url });
+    } else {
+      window.open(url, "_blank");
+    }
   };
 
   useEffect(() => {
@@ -306,6 +317,17 @@ export default function DashboardLayout({
               ? <PanelLeftOpen className="h-3.5 w-3.5 flex-shrink-0" />
               : <PanelLeftClose className="h-3.5 w-3.5 flex-shrink-0" />}
             {!collapsed && <span className="text-[13px]">Collapse</span>}
+          </button>
+
+          {/* Tools */}
+          <button
+            onClick={openSuperTools}
+            title="Open Tools"
+            className="flex items-center gap-2.5 rounded-lg px-2 py-2 w-full transition-colors hover:bg-panel text-mute hover:text-graphite"
+            style={{ justifyContent: collapsed ? "center" : undefined }}
+          >
+            <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
+            {!collapsed && <span className="text-[13px]">Tools</span>}
           </button>
 
           {/* Sync status */}
