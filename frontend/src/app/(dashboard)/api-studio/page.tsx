@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -10,6 +11,7 @@ import {
   useEdgesState,
   addEdge,
   useReactFlow,
+  SelectionMode,
   type Connection,
   type Edge,
 } from "@xyflow/react";
@@ -117,6 +119,71 @@ const requestInputNames = (collections: Collection[], requestId: string): string
   return names;
 };
 
+// ---- copy/paste helpers ------------------------------------------------------
+
+// Unique name for a pasted copy: keep the original shape, bump a _n suffix.
+const uniqueCopyName = (name: string, taken: Set<string>): string => {
+  if (!taken.has(name)) return name;
+  const base = name.replace(/_\d+$/, "") || name;
+  let i = 2;
+  while (taken.has(`${base}_${i}`)) i++;
+  return `${base}_${i}`;
+};
+
+// Rename the head of a "node.path" reference when it points at a copied node.
+const renameRef = (ref: string, renames: Map<string, string>): string => {
+  const segments = ref.split(".");
+  const renamed = renames.get(segments[0]?.trim());
+  return renamed ? [renamed, ...segments.slice(1)].join(".") : ref;
+};
+
+// Rename {{node.path}} tokens inside static values ({{env.X}} / {{$...}} heads
+// never appear in the rename map, so they pass through untouched).
+const renameStaticTokens = (text: string, renames: Map<string, string>): string =>
+  text.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (match, key: string) => {
+    const segments = key.split(".");
+    const renamed = renames.get(segments[0]?.trim());
+    return renamed ? `{{${[renamed, ...segments.slice(1)].join(".")}}}` : match;
+  });
+
+const renameRequestConfig = (cfg: RequestNodeConfig, renames: Map<string, string>): RequestNodeConfig => ({
+  ...cfg,
+  mappings: (cfg.mappings || []).map((m) =>
+    m.source === "reference"
+      ? { ...m, value: renameRef(m.value, renames) }
+      : { ...m, value: renameStaticTokens(m.value, renames) }
+  ),
+});
+
+// Rewrite references inside a pasted node's config so links between copied
+// nodes follow the copies; references to non-copied nodes stay as they are.
+const renameNodeConfig = (node: FlowNode, renames: Map<string, string>): FlowNode["config"] => {
+  switch (node.type) {
+    case "request":
+      return renameRequestConfig(node.config as RequestNodeConfig, renames);
+    case "looper": {
+      const cfg = node.config as LooperNodeConfig;
+      return {
+        ...cfg,
+        itemsValue: cfg.itemsSource === "reference" ? renameRef(cfg.itemsValue, renames) : cfg.itemsValue,
+        request: renameRequestConfig(cfg.request, renames),
+      };
+    }
+    case "verifier": {
+      const cfg = node.config as VerifierNodeConfig;
+      return {
+        ...cfg,
+        request: renameRequestConfig(cfg.request, renames),
+        comparisons: (cfg.comparisons || []).map((c) =>
+          c.expectedSource === "reference" ? { ...c, expected: renameRef(c.expected, renames) } : c
+        ),
+      };
+    }
+    case "delay":
+      return node.config;
+  }
+};
+
 // ---- page -------------------------------------------------------------------
 
 export default function ApiStudioPage() {
@@ -145,6 +212,9 @@ function StudioEditor() {
   const [records, setRecords] = useState<RunRecord[]>([]);
   const [lastSummary, setLastSummary] = useState<FlowRunSummary | null>(null);
   const runHandleRef = useRef<RunHandle | null>(null);
+  const clipboardRef = useRef<{ nodes: FlowNode[]; edges: FlowEdge[] } | null>(null);
+  const pasteCountRef = useRef(0);
+  const undoStackRef = useRef<{ nodes: FlowNode[]; edges: FlowEdge[] }[]>([]);
 
   const [showNewFlowModal, setShowNewFlowModal] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState(false);
@@ -177,6 +247,7 @@ function StudioEditor() {
     setEdges(flow.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })));
     setSavedSignature(flowSignature(flow.nodes, flow.edges));
     setSelectedNodeId(null);
+    undoStackRef.current = [];
     setRecords(lastRun?.records || []);
     setLastSummary(lastRun);
   }, [collections, setNodes, setEdges]);
@@ -264,6 +335,114 @@ function StudioEditor() {
   const onConnect = useCallback((conn: Connection) => {
     setEdges((prev) => addEdge({ ...conn, id: crypto.randomUUID() }, prev));
   }, [setEdges]);
+
+  // Every deletion (canvas Backspace/Delete or the inspector trash button)
+  // lands here so Cmd/Ctrl+Z can restore it. Cleared on flow switch.
+  const pushUndo = useCallback((deletedNodes: FlowNode[], deletedEdges: FlowEdge[]) => {
+    if (!deletedNodes.length && !deletedEdges.length) return;
+    undoStackRef.current.push({ nodes: deletedNodes, edges: deletedEdges });
+    if (undoStackRef.current.length > 20) undoStackRef.current.shift();
+  }, []);
+
+  // Copy/paste selected blocks (Cmd/Ctrl+C / V) and undo deletion (Cmd/Ctrl+Z).
+  // Skipped while a text field has focus so normal text editing keeps working.
+  useEffect(() => {
+    const isTypingTarget = (el: Element | null): boolean => {
+      if (!el) return false;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (el as HTMLElement).isContentEditable;
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      const key = e.key.toLowerCase();
+      if (key !== "c" && key !== "v" && key !== "z") return;
+      if (isTypingTarget(document.activeElement) || showNewFlowModal || showRenameModal) return;
+
+      if (key === "z") {
+        const entry = undoStackRef.current.pop();
+        if (!entry) return;
+        e.preventDefault();
+        const existingNodeIds = new Set(nodes.map((n) => n.id));
+        const restoredNodes = entry.nodes.filter((fn) => !existingNodeIds.has(fn.id));
+        const allNodeIds = new Set([...existingNodeIds, ...restoredNodes.map((fn) => fn.id)]);
+        const existingEdgeIds = new Set(edges.map((ed) => ed.id));
+        const restoredEdges = entry.edges.filter(
+          (ed) => !existingEdgeIds.has(ed.id) && allNodeIds.has(ed.source) && allNodeIds.has(ed.target)
+        );
+        if (!restoredNodes.length && !restoredEdges.length) return;
+        if (restoredNodes.length) {
+          setNodes((prev) => [...prev, ...restoredNodes.map((fn) => toStudioNode(fn, "idle", collections))]);
+        }
+        if (restoredEdges.length) {
+          setEdges((prev) => [...prev, ...restoredEdges.map((ed) => ({ id: ed.id, source: ed.source, target: ed.target }))]);
+        }
+        showToast(
+          restoredNodes.length
+            ? `Restored ${restoredNodes.length} block${restoredNodes.length === 1 ? "" : "s"}`
+            : "Restored connection"
+        );
+        return;
+      }
+
+      if (key === "c") {
+        const selected = nodes.filter((n) => n.selected);
+        if (!selected.length) return;
+        const ids = new Set(selected.map((n) => n.id));
+        clipboardRef.current = {
+          nodes: serializeNodes(selected),
+          edges: serializeEdges(edges.filter((ed) => ids.has(ed.source) && ids.has(ed.target))),
+        };
+        pasteCountRef.current = 0;
+        showToast(`Copied ${selected.length} block${selected.length === 1 ? "" : "s"}`);
+        return;
+      }
+
+      const clip = clipboardRef.current;
+      if (!clip?.nodes.length || !selectedFlow) return;
+      e.preventDefault();
+
+      pasteCountRef.current += 1;
+      const offset = 40 * pasteCountRef.current;
+      const taken = new Set(nodes.map((n) => n.data.flowNode.name));
+      const renames = new Map<string, string>();
+      const idMap = new Map<string, string>();
+      for (const fn of clip.nodes) {
+        const newName = uniqueCopyName(fn.name, taken);
+        taken.add(newName);
+        renames.set(fn.name, newName);
+        idMap.set(fn.id, crypto.randomUUID());
+      }
+      const pasted: FlowNode[] = clip.nodes.map((fn) => {
+        const copy: FlowNode = {
+          ...(JSON.parse(JSON.stringify(fn)) as FlowNode),
+          id: idMap.get(fn.id)!,
+          name: renames.get(fn.name)!,
+          position: { x: fn.position.x + offset, y: fn.position.y + offset },
+        };
+        copy.config = renameNodeConfig(copy, renames);
+        return copy;
+      });
+
+      setNodes((prev) => [
+        ...prev.map((n) => ({ ...n, selected: false })),
+        ...pasted.map((fn) => ({ ...toStudioNode(fn, "idle", collections), selected: true })),
+      ]);
+      setEdges((prev) => [
+        ...prev.map((ed) => ({ ...ed, selected: false })),
+        ...clip.edges.map((ed) => ({
+          id: crypto.randomUUID(),
+          source: idMap.get(ed.source)!,
+          target: idMap.get(ed.target)!,
+          selected: true,
+        })),
+      ]);
+      setSelectedNodeId(pasted.length === 1 ? pasted[0].id : null);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [nodes, edges, selectedFlow, showNewFlowModal, showRenameModal, collections, setNodes, setEdges]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- validation ----
 
@@ -581,7 +760,12 @@ function StudioEditor() {
 
         {/* Canvas */}
         {selectedFlow ? (
-          <div className="flex-1 min-w-0 min-h-0 relative" onDrop={onDrop} onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}>
+          <div
+            className="flex-1 min-w-0 min-h-0 relative"
+            onDrop={onDrop}
+            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
+            onContextMenu={(e) => e.preventDefault()}
+          >
             <ReactFlow
               nodes={nodes}
               edges={edges}
@@ -593,6 +777,12 @@ function StudioEditor() {
               onNodeClick={(_, node) => setSelectedNodeId(node.id)}
               onPaneClick={() => setSelectedNodeId(null)}
               deleteKeyCode={["Backspace", "Delete"]}
+              onDelete={({ nodes: deletedNodes, edges: deletedEdges }) =>
+                pushUndo(serializeNodes(deletedNodes as StudioNode[]), serializeEdges(deletedEdges))
+              }
+              panOnDrag={[1, 2]}
+              selectionOnDrag
+              selectionMode={SelectionMode.Partial}
               fitView
               proOptions={{ hideAttribution: true }}
             >
@@ -624,6 +814,10 @@ function StudioEditor() {
             onChange={(patch) => updateFlowNode(selectedNode.id, patch)}
             onClose={() => setSelectedNodeId(null)}
             onDelete={() => {
+              pushUndo(
+                serializeNodes([selectedNode]),
+                serializeEdges(edges.filter((e) => e.source === selectedNode.id || e.target === selectedNode.id))
+              );
               setNodes((prev) => prev.filter((n) => n.id !== selectedNode.id));
               setEdges((prev) => prev.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id));
               setSelectedNodeId(null);
@@ -701,6 +895,7 @@ function NodeInspector({
   const fn = node.data.flowNode;
   const flowNodes = allNodes.map((n) => n.data.flowNode);
   const nameError = validateNodeName(fn.name, flowNodes, fn.id);
+  const [detailRecord, setDetailRecord] = useState<RunRecord | null>(null);
 
   // Reference options: only edge-ancestors' published outputs.
   const referenceOptions = useMemo(() => {
@@ -883,6 +1078,15 @@ function NodeInspector({
                     {r.attempt !== undefined ? ` · attempt ${r.attempt}` : ""}
                   </span>
                   <span className="ml-auto text-mute">{r.durationMs} ms</span>
+                  {(r.requestPayload || r.response) && (
+                    <button
+                      onClick={() => setDetailRecord(r)}
+                      title="View the exact request and response"
+                      className="font-medium text-clay hover:text-clay-dark transition-colors"
+                    >
+                      Details
+                    </button>
+                  )}
                 </div>
                 {r.error && <p className="m-0 mt-1 text-red-700 break-words">{r.error}</p>}
                 {r.outputs && Object.keys(r.outputs).length > 0 && (
@@ -895,12 +1099,101 @@ function NodeInspector({
           </div>
         )}
       </div>
+
+      {detailRecord && (
+        <RunRecordDetailModal record={detailRecord} onClose={() => setDetailRecord(null)} />
+      )}
     </div>
+  );
+}
+
+// ---- run record detail modal -------------------------------------------------
+
+const prettyJson = (value: any): string => {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") {
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2);
+    } catch {
+      return value;
+    }
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+};
+
+const preCls =
+  "m-0 p-3 rounded-lg bg-ink-900 text-[#e8e6e1] font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all overflow-y-auto max-h-[280px]";
+
+function RunRecordDetailModal({ record, onClose }: { record: RunRecord; onClose: () => void }) {
+  const req = record.requestPayload;
+  const res = record.response;
+  const meta = [
+    record.nodeName,
+    record.iteration !== undefined ? `iteration ${record.iteration}` : null,
+    record.attempt !== undefined ? `attempt ${record.attempt}` : null,
+    record.status,
+    `${record.durationMs} ms`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <Modal title="Request & response" onClose={onClose} width={720}>
+      <div className="flex flex-col gap-4 max-h-[70vh] overflow-y-auto -mr-3 pr-3">
+        <span className="text-xs text-stone">{meta}</span>
+
+        {record.error && (
+          <div className="px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-[12px] text-red-700 break-words">
+            {record.error}
+          </div>
+        )}
+
+        {Object.keys(record.resolvedInputs || {}).length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-stone">Resolved inputs</label>
+            <pre className={preCls}>{prettyJson(record.resolvedInputs)}</pre>
+          </div>
+        )}
+
+        {req ? (
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-stone">Request (exact executor payload)</label>
+            <span className="font-mono text-[11px] text-graphite break-all">
+              {req.method} {req.url}
+            </span>
+            <pre className={preCls}>{prettyJson(req)}</pre>
+          </div>
+        ) : (
+          <span className="text-[11px] text-mute">No request was sent — the node failed before executing.</span>
+        )}
+
+        {res && (
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-stone">
+              Response — {res.status} {res.statusText || ""}
+            </label>
+            {Object.keys(res.headers || {}).length > 0 && (
+              <details>
+                <summary className="text-[11px] text-mute cursor-pointer select-none">Headers</summary>
+                <pre className={`${preCls} mt-1.5`}>{prettyJson(res.headers)}</pre>
+              </details>
+            )}
+            <pre className={preCls}>{prettyJson(res.body)}</pre>
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 
 // ---- config sub-editors ----------------------------------------------------
 
+// Text input with a styled suggestion popup. Replaces the native <datalist>,
+// whose popup the Tauri webview renders with unreadable (white-on-white) text.
 function ReferenceInput({
   value,
   onChange,
@@ -912,21 +1205,121 @@ function ReferenceInput({
   options: string[];
   placeholder?: string;
 }) {
-  const listId = React.useId();
+  const [open, setOpen] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(-1);
+  const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const filtered = useMemo(() => {
+    const q = value.trim().toLowerCase();
+    return q ? options.filter((o) => o.toLowerCase().includes(q)) : options;
+  }, [value, options]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const r = inputRef.current?.getBoundingClientRect();
+      if (r) setCoords({ top: r.bottom + 4, left: r.left, width: r.width });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (inputRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointer);
+    return () => document.removeEventListener("mousedown", onPointer);
+  }, [open]);
+
+  const commit = (opt: string) => {
+    onChange(opt);
+    setOpen(false);
+    setActiveIdx(-1);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (!open) {
+      if (e.key === "ArrowDown" && filtered.length) {
+        e.preventDefault();
+        setOpen(true);
+        setActiveIdx(0);
+      }
+      return;
+    }
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        setActiveIdx((i) => Math.min(i + 1, filtered.length - 1));
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        setActiveIdx((i) => Math.max(i - 1, 0));
+        break;
+      case "Enter":
+        if (activeIdx >= 0 && filtered[activeIdx]) {
+          e.preventDefault();
+          commit(filtered[activeIdx]);
+        }
+        break;
+      case "Escape":
+        e.preventDefault();
+        setOpen(false);
+        break;
+      case "Tab":
+        setOpen(false);
+        break;
+    }
+  };
+
   return (
     <>
       <input
+        ref={inputRef}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
-        list={listId}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setOpen(true);
+          setActiveIdx(-1);
+        }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={onKeyDown}
         placeholder={placeholder || "nodeName.output"}
         className={`${inputCls} w-full`}
       />
-      <datalist id={listId}>
-        {options.map((o) => (
-          <option key={o} value={o} />
-        ))}
-      </datalist>
+      {open && coords && filtered.length > 0 &&
+        createPortal(
+          <div
+            ref={menuRef}
+            style={{ position: "fixed", top: coords.top, left: coords.left, minWidth: coords.width }}
+            className="z-[100] max-h-56 overflow-y-auto rounded-lg border border-line bg-cream py-1 shadow-lg shadow-ink/5 animate-[fadeUp_0.12s_ease-out]"
+          >
+            {filtered.map((opt, idx) => (
+              <div
+                key={opt}
+                onMouseEnter={() => setActiveIdx(idx)}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => commit(opt)}
+                className={`mx-1 px-2.5 py-1.5 rounded-md font-mono text-[11px] cursor-pointer transition-colors ${
+                  idx === activeIdx ? "bg-hover" : ""
+                } ${opt === value ? "text-clay font-medium" : "text-ink"}`}
+              >
+                {opt}
+              </div>
+            ))}
+          </div>,
+          document.body
+        )}
     </>
   );
 }
