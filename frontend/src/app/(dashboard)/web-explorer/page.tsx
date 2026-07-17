@@ -768,6 +768,16 @@ export default function WebExplorerPage() {
     }
   };
 
+  // Recording and inspecting shouldn't run at once — auto turn off inspect mode
+  // whenever recording starts, whether triggered by the button above or a
+  // server-pushed "recording_started" WS message.
+  useEffect(() => {
+    if (isRecording && inspectMode) {
+      handleToggleInspect();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRecording]);
+
   useEffect(() => {
     const handleStepAdded = async () => {
       if (selectedWorkspaceFile === "my_recording.py") {
@@ -1520,33 +1530,37 @@ export default function WebExplorerPage() {
                   </Field>
                 </div>
                 
-                {logDetails.request.postData && (
-                  <Field label="Request Payload">
-                    <pre className="mt-1 p-2 bg-panel rounded border border-line overflow-auto max-h-40 whitespace-pre-wrap font-mono text-[10px]">
-                      {(() => {
-                        try {
-                          return JSON.stringify(JSON.parse(logDetails.request.postData), null, 2);
-                        } catch {
-                          return logDetails.request.postData;
-                        }
-                      })()}
-                    </pre>
-                  </Field>
-                )}
-                
-                {logDetails.response?.body && (
-                  <Field label="Response Payload">
-                    <pre className="mt-1 p-2 bg-panel rounded border border-line overflow-auto max-h-64 whitespace-pre-wrap font-mono text-[10px]">
-                      {(() => {
-                        try {
-                          return JSON.stringify(JSON.parse(logDetails.response.body), null, 2);
-                        } catch {
-                          return logDetails.response.body;
-                        }
-                      })()}
-                    </pre>
-                  </Field>
-                )}
+                {logDetails.request.postData && (() => {
+                  let requestPayloadText: string;
+                  try {
+                    requestPayloadText = JSON.stringify(JSON.parse(logDetails.request.postData), null, 2);
+                  } catch {
+                    requestPayloadText = logDetails.request.postData;
+                  }
+                  return (
+                    <Field label="Request Payload" copyText={requestPayloadText}>
+                      <pre className="mt-1 p-2 bg-panel rounded border border-line overflow-auto max-h-40 whitespace-pre-wrap font-mono text-[10px]">
+                        {requestPayloadText}
+                      </pre>
+                    </Field>
+                  );
+                })()}
+
+                {logDetails.response?.body && (() => {
+                  let responsePayloadText: string;
+                  try {
+                    responsePayloadText = JSON.stringify(JSON.parse(logDetails.response.body), null, 2);
+                  } catch {
+                    responsePayloadText = logDetails.response.body;
+                  }
+                  return (
+                    <Field label="Response Payload" copyText={responsePayloadText}>
+                      <pre className="mt-1 p-2 bg-panel rounded border border-line overflow-auto max-h-64 whitespace-pre-wrap font-mono text-[10px]">
+                        {responsePayloadText}
+                      </pre>
+                    </Field>
+                  );
+                })()}
 
                 <Field label="Request Headers">
                   <div className="mt-1 p-2 bg-panel rounded border border-line flex flex-col gap-1 overflow-auto max-h-40 text-[10px] font-mono">
@@ -1621,8 +1635,8 @@ export default function WebExplorerPage() {
             </button>
             <button
               onClick={handleToggleInspect}
-              disabled={isVerifying || isExploring}
-              title={isVerifying ? "Inspect is disabled while verification is running" : isExploring ? "Inspect is disabled while exploration is running" : undefined}
+              disabled={isVerifying || isExploring || isRecording}
+              title={isVerifying ? "Inspect is disabled while verification is running" : isExploring ? "Inspect is disabled while exploration is running" : isRecording ? "Inspect is disabled while recording" : undefined}
               className="h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border disabled:opacity-60"
               style={
                 inspectMode
@@ -1636,8 +1650,8 @@ export default function WebExplorerPage() {
             <div className="relative" ref={scanMenuRef}>
               <button
                 onClick={() => setShowScanMenu((v) => !v)}
-                disabled={pageScanStatus === "scanning" || isVerifying || isExploring}
-                title={isVerifying ? "Scan is disabled while verification is running" : isExploring ? "Scan is disabled while exploration is running" : "Detect interactive elements and propose POM methods"}
+                disabled={pageScanStatus === "scanning" || isVerifying || isExploring || isRecording}
+                title={isVerifying ? "Scan is disabled while verification is running" : isExploring ? "Scan is disabled while exploration is running" : isRecording ? "Scan is disabled while recording" : "Detect interactive elements and propose POM methods"}
                 className="h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border bg-transparent border-line text-graphite hover:bg-panel disabled:opacity-60"
               >
                 {pageScanStatus === "scanning" ? (
@@ -1709,8 +1723,8 @@ export default function WebExplorerPage() {
               ) : (
                 <button
                   onClick={() => setShowExploreMenu((v) => !v)}
-                  disabled={isVerifying}
-                  title="Let AI autonomously click/fill around the page to discover interactive elements"
+                  disabled={isVerifying || isRecording}
+                  title={isRecording ? "Explore is disabled while recording" : "Let AI autonomously click/fill around the page to discover interactive elements"}
                   className="h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border bg-transparent border-line text-graphite hover:bg-panel disabled:opacity-60"
                 >
                   <Sparkles className="h-3.5 w-3.5" />
@@ -1929,7 +1943,6 @@ export default function WebExplorerPage() {
                         onMouseDown={(e) => handlePreviewMouseEvent(e, "down")}
                         onMouseUp={(e) => handlePreviewMouseEvent(e, "up")}
                         onMouseMove={(e) => handlePreviewMouseEvent(e, "move")}
-                        onClick={(e) => handlePreviewMouseEvent(e, "click")}
                       >
                         {isRecording && (
                           <div className="absolute top-4 left-4 z-40 flex items-center gap-2 px-3 py-1.5 bg-red-950 border border-red-500/50 rounded-lg shadow-md text-xs text-red-200 select-none pointer-events-none">
@@ -2005,7 +2018,6 @@ export default function WebExplorerPage() {
                           onMouseDown={(e) => handlePreviewMouseEvent(e, "down")}
                           onMouseUp={(e) => handlePreviewMouseEvent(e, "up")}
                           onMouseMove={(e) => handlePreviewMouseEvent(e, "move")}
-                          onClick={(e) => handlePreviewMouseEvent(e, "click")}
                         >
                           {isRecording && (
                             <div className="absolute top-4 left-4 z-40 flex items-center gap-2 px-3 py-1.5 bg-red-950 border border-red-500/50 rounded-lg shadow-md text-xs text-red-200 select-none pointer-events-none">
@@ -2716,11 +2728,54 @@ export default function WebExplorerPage() {
   );
 }
 
-function Field({ label, children, className = "" }: { label: string; children: React.ReactNode; className?: string }) {
+function Field({ label, children, className = "", copyText }: { label: string; children: React.ReactNode; className?: string; copyText?: string }) {
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
+      const el = contentRef.current;
+      if (!el) return;
+      e.preventDefault();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+  };
+
+  const handleCopy = async () => {
+    if (!copyText) return;
+    try {
+      await navigator.clipboard.writeText(copyText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {}
+  };
+
   return (
     <div className={className}>
-      <h4 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-mute mb-1.5">{label}</h4>
-      <div className="bg-panel p-2.5 rounded-lg border border-line">{children}</div>
+      <div className="flex items-center justify-between mb-1.5">
+        <h4 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-mute">{label}</h4>
+        {copyText !== undefined && (
+          <button
+            onClick={handleCopy}
+            title="Copy to clipboard"
+            className="h-5 w-5 rounded flex items-center justify-center text-stone hover:text-clay hover:bg-line transition-colors"
+          >
+            {copied ? <Check className="h-3 w-3 text-sage" /> : <Copy className="h-3 w-3" />}
+          </button>
+        )}
+      </div>
+      <div
+        ref={contentRef}
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
+        className="bg-panel p-2.5 rounded-lg border border-line outline-none focus:ring-1 focus:ring-clay/40"
+      >
+        {children}
+      </div>
     </div>
   );
 }
