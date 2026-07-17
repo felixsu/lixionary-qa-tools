@@ -846,8 +846,18 @@ async def add_local_pom_method(payload: AddPOMMethodPayload):
     my_page_path = os.path.join(session_workspace, "inspection_code", "my_page.py")
 
     method_name = sanitize_method_name(payload.methodName)
+
+    page_url = None
+    session = _active_sessions.get(payload.sessionId)
+    if session:
+        try:
+            active_page = session["pages"][session["active_page_index"]]
+            page_url = active_page.url
+        except Exception:
+            pass
+
     method_body = build_pom_method_code(
-        method_name, payload.action, payload.strategy, payload.selector, payload.frameLocators or []
+        method_name, payload.action, payload.strategy, payload.selector, payload.frameLocators or [], page_url
     )
 
     try:
@@ -882,6 +892,15 @@ async def add_local_pom_methods_bulk(payload: AddPOMMethodsBulkPayload):
     os.makedirs(os.path.join(session_workspace, "inspection_code"), exist_ok=True)
     my_page_path = os.path.join(session_workspace, "inspection_code", "my_page.py")
 
+    page_url = None
+    session = _active_sessions.get(payload.sessionId)
+    if session:
+        try:
+            active_page = session["pages"][session["active_page_index"]]
+            page_url = active_page.url
+        except Exception:
+            pass
+
     try:
         if not os.path.exists(my_page_path):
             with open(my_page_path, "w") as f:
@@ -905,6 +924,7 @@ async def add_local_pom_methods_bulk(payload: AddPOMMethodsBulkPayload):
                 method.strategy,
                 method.selector,
                 method.frameLocators or [],
+                page_url,
             )
 
             if not content.endswith("\n"):
