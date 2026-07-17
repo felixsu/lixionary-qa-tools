@@ -783,11 +783,12 @@ export default function ApiExplorerPage() {
   const runGenerateParser = async (promptText: string) => {
     setIsGeneratingAiParser(true);
     try {
+      const responseSource = apiResponse ?? activeRequest?.lastResponse;
       const result = await apiCall("/api/ai/generate-parser", {
         method: "POST",
         body: JSON.stringify({
           prompt: promptText,
-          responseBodySample: apiResponse ? JSON.stringify(apiResponse.body, null, 2) : "",
+          responseBodySample: responseSource ? JSON.stringify(responseSource.body, null, 2) : "",
           outputs: reqOutputs,
         }),
       });
@@ -810,7 +811,7 @@ export default function ApiExplorerPage() {
   };
 
   const handleFixMissingOutputs = async () => {
-    const missing: string[] = apiResponse?.missingOutputs || [];
+    const missing: string[] = (apiResponse ?? activeRequest?.lastResponse)?.missingOutputs || [];
     if (!missing.length) return;
     await runGenerateParser(
       `Update the parser script so these declared outputs are set on both the output object and as env vars (same name for both): ${missing.join(", ")}.`
@@ -1605,7 +1606,8 @@ export default function ApiExplorerPage() {
                         </span>
                         <button
                           onClick={() => setShowAiModal(true)}
-                          disabled={!apiResponse}
+                          disabled={!apiResponse && !activeRequest?.lastResponse}
+                          title={!apiResponse && !activeRequest?.lastResponse ? "Trigger a successful request at least once to enable the AI agent parser" : undefined}
                           className="flex items-center gap-1.5 px-3 py-1.5 bg-cream border border-line rounded-md text-xs font-medium text-clay hover:bg-panel transition-colors disabled:opacity-50 flex-shrink-0"
                         >
                           <Sparkles className="h-3.5 w-3.5" /> AI agent parser
