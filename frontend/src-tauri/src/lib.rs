@@ -134,6 +134,10 @@ pub fn run() {
         .title("Lixionary QA Tools")
         .inner_size(800.0, 600.0)
         .resizable(true)
+        // The native drag-drop handler swallows HTML5 drag events, breaking
+        // in-page drag & drop (API Studio palette). We never use Tauri's
+        // onDragDropEvent, so hand drags back to the webview.
+        .disable_drag_drop_handler()
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .build()?;
 
