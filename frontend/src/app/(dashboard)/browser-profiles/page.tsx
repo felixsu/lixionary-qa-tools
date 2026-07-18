@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Plus, Trash2, Pencil, X, Key, Globe, RefreshCw, Layers } from "lucide-react";
+import { Plus, Trash2, Pencil, Copy, X, Key, Globe, RefreshCw, Layers } from "lucide-react";
 import { useAppContext, BrowserProfile } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
 import { isTauri } from "../../utils/tauri";
@@ -32,7 +32,7 @@ const STEP_LABELS: Record<WizardStep, string> = {
 };
 
 export default function BrowserProfilesPage() {
-  const { profiles, authFunctions, handleSaveProfile, handleDeleteProfile, apiCall } = useAppContext();
+  const { profiles, authFunctions, handleSaveProfile, handleDeleteProfile, handleDuplicateProfile, apiCall } = useAppContext();
 
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -510,6 +510,13 @@ export default function BrowserProfilesPage() {
                       title="Edit"
                     >
                       <Pencil className="h-3.5 w-3.5 text-graphite" />
+                    </button>
+                    <button
+                      onClick={() => handleDuplicateProfile(p)}
+                      className="h-7 w-7 rounded-md border border-line flex items-center justify-center hover:bg-panel transition-colors flex-shrink-0"
+                      title="Duplicate"
+                    >
+                      <Copy className="h-3.5 w-3.5 text-graphite" />
                     </button>
                     <button
                       onClick={async () => {
