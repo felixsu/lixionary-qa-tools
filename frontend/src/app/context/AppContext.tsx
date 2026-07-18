@@ -7,6 +7,7 @@ import type { SyncConflict } from "./syncEngine";
 import { setScreencastFrame } from "../utils/screencastFrameStore";
 import { scanInputNames } from "../utils/requestTokens";
 import type { Flow } from "../utils/flowTypes";
+import { generateDuplicateName } from "../utils/uniqueName";
 
 const VPS_API_URL = process.env.NEXT_PUBLIC_VPS_API_URL ||
   (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://qa-tools-api.lixionary.com');
@@ -485,6 +486,7 @@ interface AppContextType {
   handleAddCollaborator: (email: string) => Promise<void>;
   handleSaveEnv: (name: string, variables: { key: string; value: string; isSecret: boolean }[], id: string | null) => Promise<void>;
   handleDeleteEnv: (id: string) => Promise<void>;
+  handleDuplicateEnv: (env: Environment) => Promise<void>;
   handleSaveAuthFunc: (name: string, description: string, script: string, expires_in: number | null, id: string | null) => Promise<void>;
   handleDeleteAuthFunc: (id: string) => Promise<void>;
 
@@ -498,6 +500,7 @@ interface AppContextType {
     id: string | null
   ) => Promise<void>;
   handleDeleteProfile: (id: string) => Promise<void>;
+  handleDuplicateProfile: (profile: BrowserProfile) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -2320,6 +2323,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const handleDuplicateEnv = async (env: Environment) => {
+    const newName = generateDuplicateName(env.name, environments.map((e) => e.name));
+    await handleSaveEnv(newName, env.variables, null);
+  };
+
   const handleSaveAuthFunc = async (name: string, description: string, script: string, expires_in: number | null, id: string | null) => {
     try {
       if (id) {
@@ -2387,6 +2395,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } catch (e: any) {
       throw new Error(`Delete failed: ${e.message}`);
     }
+  };
+
+  const handleDuplicateProfile = async (profile: BrowserProfile) => {
+    const newName = generateDuplicateName(profile.name, profiles.map((p) => p.name));
+    await handleSaveProfile(
+      newName,
+      profile.cookies,
+      profile.localStorage,
+      profile.authFunctionId ?? null,
+      profile.authInjection ?? null,
+      profile.defaultUrl ?? "",
+      null
+    );
   };
 
   return (
@@ -2584,11 +2605,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         handleAddCollaborator,
         handleSaveEnv,
         handleDeleteEnv,
+        handleDuplicateEnv,
         handleSaveAuthFunc,
         handleDeleteAuthFunc,
 
         handleSaveProfile,
-        handleDeleteProfile
+        handleDeleteProfile,
+        handleDuplicateProfile
       }}
     >
       {children}

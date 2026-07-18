@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Plus, Trash2, Pencil, X, Check } from "lucide-react";
+import { Plus, Trash2, Pencil, Copy, X, Check } from "lucide-react";
 import { useAppContext, Environment } from "../../context/AppContext";
 import { confirmDialog } from "../../utils/confirmDialog";
 
@@ -12,6 +12,7 @@ export default function EnvironmentsPage() {
     setSelectedEnvId,
     handleSaveEnv,
     handleDeleteEnv,
+    handleDuplicateEnv,
   } = useAppContext();
 
   const [showEnvModal, setShowEnvModal] = useState(false);
@@ -98,6 +99,13 @@ export default function EnvironmentsPage() {
                       title="Edit"
                     >
                       <Pencil className="h-3.5 w-3.5 text-graphite" />
+                    </button>
+                    <button
+                      onClick={() => handleDuplicateEnv(env)}
+                      className="h-7 w-7 rounded-md border border-line flex items-center justify-center hover:bg-panel transition-colors"
+                      title="Duplicate"
+                    >
+                      <Copy className="h-3.5 w-3.5 text-graphite" />
                     </button>
                     <button
                       onClick={async () => {
