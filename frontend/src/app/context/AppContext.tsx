@@ -8,6 +8,7 @@ import { setScreencastFrame } from "../utils/screencastFrameStore";
 import { scanInputNames } from "../utils/requestTokens";
 import type { Flow } from "../utils/flowTypes";
 import { generateDuplicateName } from "../utils/uniqueName";
+import { useBackendStatus } from "./BackendStatusContext";
 
 const VPS_API_URL = process.env.NEXT_PUBLIC_VPS_API_URL ||
   (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://qa-tools-api.lixionary.com');
@@ -327,8 +328,6 @@ interface AppContextType {
   // API Explorer Response State
   apiResponse: any;
   setApiResponse: (res: any) => void;
-  lastApiResponse: any;
-  setLastApiResponse: (res: any) => void;
   isExecutingApi: boolean;
   setIsExecutingApi: (executing: boolean) => void;
   responseTab: "pretty" | "headers" | "raw" | "extracted" | "last";
@@ -508,6 +507,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const { localDb } = useBackendStatus();
 
   // Authentication State
   const [token, setTokenState] = useState<string | null>(null);
@@ -586,16 +586,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // API Explorer Response State
   const [apiResponse, setApiResponse] = useState<any>(null);
-  const [lastApiResponse, setLastApiResponseState] = useState<any>(() => {
-    try {
-      const s = localStorage.getItem("nv_last_api_response");
-      return s ? JSON.parse(s) : null;
-    } catch { return null; }
-  });
-  const setLastApiResponse = (res: any) => {
-    setLastApiResponseState(res);
-    try { localStorage.setItem("nv_last_api_response", JSON.stringify(res)); } catch {}
-  };
   const [isExecutingApi, setIsExecutingApi] = useState(false);
   const [responseTab, setResponseTab] = useState<"pretty" | "headers" | "raw" | "extracted" | "last">("pretty");
   const [showAiModal, setShowAiModal] = useState(false);
@@ -748,6 +738,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       clearInterval(interval);
     };
   }, [token]);
+
+  // The very first sync attempt on a fresh/cold launch (see the [token] effect
+  // above) can lose the race against a still-booting sidecar and silently fail
+  // — after that, the focus listener and 5-minute interval above are the only
+  // retries, neither of which fires promptly right when the sidecar actually
+  // becomes ready. Watch the backend-status panel's localDb signal (only "ok"
+  // once the exact endpoint triggerSync needs has been proven reachable) and
+  // fire an immediate sync the moment it flips ready. deviceIdRef being cached
+  // after the first successful sync means this is a no-op on warm launches.
+  const prevLocalDbStatusRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prevStatus = prevLocalDbStatusRef.current;
+    prevLocalDbStatusRef.current = localDb?.status ?? null;
+    if (token && user && localDb?.status === "ok" && prevStatus !== "ok") {
+      triggerSync();
+    }
+  }, [localDb?.status, token, user]);
 
   // Ref to suppress the auth-persist write on the render right after a selection
   // change (when reqAuthType/reqAuthConfig haven't synced to the new request yet).
@@ -1846,7 +1853,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       setApiResponse(result);
       if (result.status < 400) {
-        setLastApiResponse(result);
         try {
           const col = collections.find(c => findRequestInTree(c, selectedRequestId) !== null);
           const req = col ? findRequestInTree(col, selectedRequestId) : null;
@@ -2249,6 +2255,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ...req,
         id: `req_${Math.random().toString(36).substring(2, 9)}`,
         name: newName,
+        lastResponse: undefined,
       };
 
       const updatedCol = addRequestToNode(rootCol, parentNode.id, newRequest);
@@ -2503,8 +2510,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         apiResponse,
         setApiResponse,
-        lastApiResponse,
-        setLastApiResponse,
         isExecutingApi,
         setIsExecutingApi,
         responseTab,

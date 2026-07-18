@@ -571,7 +571,6 @@ export default function ApiExplorerPage() {
     resolveAuthFunctionCloudId,
 
     apiResponse,
-    lastApiResponse,
     isExecutingApi,
     responseTab,
     setResponseTab,
@@ -878,10 +877,11 @@ export default function ApiExplorerPage() {
 
   const getResponseText = (): string => {
     if (responseTab === "last") {
-      if (!lastApiResponse) return "";
-      return typeof lastApiResponse.body === "object"
-        ? JSON.stringify(lastApiResponse.body, null, 2)
-        : String(lastApiResponse.body ?? "");
+      const lastResponse = activeRequest?.lastResponse;
+      if (!lastResponse) return "";
+      return typeof lastResponse.body === "object"
+        ? JSON.stringify(lastResponse.body, null, 2)
+        : String(lastResponse.body ?? "");
     }
     if (!apiResponse) return "";
     if (responseTab === "headers") return JSON.stringify(apiResponse.headers || {}, null, 2);
@@ -1005,7 +1005,7 @@ export default function ApiExplorerPage() {
     }
     const hasRequestModel = requestBodyObj && typeof requestBodyObj === "object" && !Array.isArray(requestBodyObj);
 
-    const responseBodyObj = lastApiResponse?.body;
+    const responseBodyObj = activeRequest?.lastResponse?.body;
     let responseModelName = "";
     let responseModelBlock = "";
 
@@ -1752,7 +1752,7 @@ export default function ApiExplorerPage() {
                 })}
                 <div className="flex-1" />
                 {(() => {
-                  const d = responseTab === "last" ? lastApiResponse : apiResponse;
+                  const d = responseTab === "last" ? activeRequest?.lastResponse : apiResponse;
                   if (!d) return null;
                   return (
                     <div className="flex items-center gap-2 px-4">
@@ -1781,10 +1781,10 @@ export default function ApiExplorerPage() {
 
               {responseTab === "last" ? (
                 <pre className="flex-1 m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap">
-                  {lastApiResponse
-                    ? (typeof lastApiResponse.body === "object"
-                        ? JSON.stringify(lastApiResponse.body, null, 2)
-                        : String(lastApiResponse.body))
+                  {activeRequest?.lastResponse
+                    ? (typeof activeRequest.lastResponse.body === "object"
+                        ? JSON.stringify(activeRequest.lastResponse.body, null, 2)
+                        : String(activeRequest.lastResponse.body))
                     : "No successful response recorded yet."}
                 </pre>
               ) : !apiResponse ? (

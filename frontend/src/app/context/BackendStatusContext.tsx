@@ -65,7 +65,20 @@ export function BackendStatusProvider({ children }: { children: React.ReactNode 
   useEffect(() => {
     runChecks();
     const interval = setInterval(runChecks, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
+    // Webviews can throttle/suspend setInterval while the window is
+    // backgrounded — exactly the window during a slow first-launch sidecar
+    // boot. Re-check immediately once the window is actually being looked at
+    // again instead of waiting for the throttled interval to catch up.
+    const handleVisible = () => {
+      if (document.visibilityState === "visible") runChecks();
+    };
+    window.addEventListener("focus", runChecks);
+    document.addEventListener("visibilitychange", handleVisible);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", runChecks);
+      document.removeEventListener("visibilitychange", handleVisible);
+    };
   }, []);
 
   return (
