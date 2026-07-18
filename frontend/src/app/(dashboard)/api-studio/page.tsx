@@ -17,7 +17,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  Plus, Play, Square, Save, Download, Trash2, Pencil, Send, Repeat2, Timer,
+  Plus, Play, Square, Save, Download, Trash2, Pencil, Copy, Send, Repeat2, Timer,
   ShieldCheck, CheckCircle2, AlertCircle, X,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
@@ -27,6 +27,7 @@ import Dropdown from "../../components/Dropdown";
 import { Modal, ModalFooter } from "../../components/Modal";
 import { confirmDialog } from "../../utils/confirmDialog";
 import { scanInputNames, scanEnvNames } from "../../utils/requestTokens";
+import { generateDuplicateName } from "../../utils/uniqueName";
 import {
   type Flow, type FlowNode, type FlowEdge, type FlowNodeType,
   type RequestNodeConfig, type LooperNodeConfig, type DelayNodeConfig, type VerifierNodeConfig,
@@ -661,6 +662,28 @@ function StudioEditor() {
     }
   };
 
+  const onDuplicateFlow = async () => {
+    if (!selectedFlow) return;
+    try {
+      // Clone the live canvas state (including unsaved edits), not the
+      // last-persisted selectedFlow.nodes/edges.
+      const flowNodes = serializeNodes(nodes);
+      const flowEdges = serializeEdges(edges);
+      const newName = generateDuplicateName(selectedFlow.name, flows.map((f) => f.name));
+
+      const created = await createFlow(newName);
+      // Pass `created` as baseFlow — `flows` state doesn't contain `created`
+      // yet at this point (see updateFlow's baseFlow param).
+      await updateFlow(created.id, { description: selectedFlow.description, nodes: flowNodes, edges: flowEdges }, created);
+
+      setSelectedFlowId(created.id);
+      loadFlow({ ...created, description: selectedFlow.description, nodes: flowNodes, edges: flowEdges });
+      showToast("Flow duplicated");
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) || null;
   const selectedNodeRecords = useMemo(
     () => (selectedNode ? records.filter((r) => r.nodeId === selectedNode.id) : []),
@@ -693,6 +716,13 @@ function StudioEditor() {
               className="h-8 w-8 flex items-center justify-center bg-cream border border-line rounded-md text-graphite hover:bg-panel transition-colors"
             >
               <Pencil className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={onDuplicateFlow}
+              title="Duplicate flow"
+              className="h-8 w-8 flex items-center justify-center bg-cream border border-line rounded-md text-graphite hover:bg-panel transition-colors"
+            >
+              <Copy className="h-3.5 w-3.5" />
             </button>
             <button
               onClick={onDeleteFlow}

@@ -295,7 +295,7 @@ interface AppContextType {
   flows: Flow[];
   fetchFlows: () => Promise<void>;
   createFlow: (name: string) => Promise<Flow>;
-  updateFlow: (id: string, updates: Partial<Pick<Flow, "name" | "description" | "nodes" | "edges">>) => Promise<void>;
+  updateFlow: (id: string, updates: Partial<Pick<Flow, "name" | "description" | "nodes" | "edges">>, baseFlow?: Flow) => Promise<void>;
   deleteFlow: (id: string) => Promise<void>;
 
   // API Explorer Active Request Editor State
@@ -481,6 +481,7 @@ interface AppContextType {
   handleMoveNode: (nodeId: string, nodeType: "request" | "collection", targetColId: string) => Promise<void>;
   handleDeleteNode: (nodeId: string, nodeType: "request" | "collection") => Promise<void>;
   handleRenameNode: (nodeId: string, nodeType: "request" | "collection", newName: string) => Promise<void>;
+  handleDuplicateRequest: (req: RequestItem) => Promise<void>;
   handleCreateCollection: (name: string) => Promise<void>;
   handleImportCollection: (id: string) => Promise<void>;
   handleAddCollaborator: (email: string) => Promise<void>;
@@ -1159,9 +1160,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // overwrites the payload with the merged object.
   const updateFlow = async (
     id: string,
-    updates: Partial<Pick<Flow, "name" | "description" | "nodes" | "edges">>
+    updates: Partial<Pick<Flow, "name" | "description" | "nodes" | "edges">>,
+    // Callers that just created `id` in the same tick (e.g. duplicating a
+    // flow) must pass the just-created record here directly — `flows` state
+    // won't reflect it yet since createFlow's setState hasn't re-rendered
+    // this closure, so the state lookup below would wrongly throw "Flow not found."
+    baseFlow?: Flow
   ): Promise<void> => {
-    const current = flows.find((f) => f.id === id);
+    const current = baseFlow ?? flows.find((f) => f.id === id);
     if (!current) throw new Error("Flow not found.");
     const merged: Flow = { ...current, ...updates };
     await apiCall(`/api/local-store/flow/${id}`, {
@@ -2231,6 +2237,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const handleDuplicateRequest = async (req: RequestItem) => {
+    try {
+      const rootCol = findRequestOwnerCollection(collections, req.id);
+      if (!rootCol) throw new Error("Request not found in any collection.");
+      const parentNode = findParentNodeInTree(rootCol, req.id);
+      if (!parentNode) throw new Error("Parent collection not found.");
+
+      const newName = generateDuplicateName(req.name, (parentNode.requests || []).map(r => r.name));
+      const newRequest: RequestItem = {
+        ...req,
+        id: `req_${Math.random().toString(36).substring(2, 9)}`,
+        name: newName,
+      };
+
+      const updatedCol = addRequestToNode(rootCol, parentNode.id, newRequest);
+      await persistCollectionTree(rootCol.id, { requests: updatedCol.requests, children: updatedCol.children || [] });
+      setSelectedRequestId(newRequest.id);
+    } catch (e: any) {
+      throw new Error(`Failed to duplicate request: ${e.message}`);
+    }
+  };
+
   const createCollection = async (name: string): Promise<Collection> => {
     const result = await apiCall("/api/local-store/collection", {
       method: "POST",
@@ -2600,6 +2628,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         handleMoveNode,
         handleDeleteNode,
         handleRenameNode,
+        handleDuplicateRequest,
         handleCreateCollection,
         handleImportCollection,
         handleAddCollaborator,

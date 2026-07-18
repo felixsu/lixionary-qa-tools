@@ -161,6 +161,7 @@ interface CollectionNodeProps {
   handleMoveNode: (nodeId: string, nodeType: "request" | "collection", targetColId: string) => Promise<void>;
   handleDeleteNode: (nodeId: string, nodeType: "request" | "collection") => Promise<void>;
   handleRenameNode: (nodeId: string, nodeType: "request" | "collection", newName: string) => Promise<void>;
+  handleDuplicateRequest: (req: any) => Promise<void>;
   handleCopyId: (id: string) => void;
   copiedId: string | null;
   methodStyle: (method: string) => React.CSSProperties;
@@ -185,6 +186,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
   handleMoveNode,
   handleDeleteNode,
   handleRenameNode,
+  handleDuplicateRequest,
   handleCopyId,
   copiedId,
   methodStyle,
@@ -376,6 +378,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
               handleMoveNode={handleMoveNode}
               handleDeleteNode={handleDeleteNode}
               handleRenameNode={handleRenameNode}
+              handleDuplicateRequest={handleDuplicateRequest}
               handleCopyId={handleCopyId}
               copiedId={copiedId}
               methodStyle={methodStyle}
@@ -461,6 +464,20 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
                         className="text-stone hover:text-clay transition flex-shrink-0"
                       >
                         <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          try {
+                            await handleDuplicateRequest(req);
+                          } catch (err: any) {
+                            alert(err.message);
+                          }
+                        }}
+                        title="Duplicate request"
+                        className="text-stone hover:text-clay transition flex-shrink-0"
+                      >
+                        <Copy className="h-3.5 w-3.5" />
                       </button>
                       <button
                         onClick={async (e) => {
@@ -573,6 +590,7 @@ export default function ApiExplorerPage() {
     handleMoveNode,
     handleDeleteNode,
     handleRenameNode,
+    handleDuplicateRequest,
     handleCreateCollection,
     handleImportCollection,
     handleAddCollaborator,
@@ -1222,6 +1240,7 @@ export default function ApiExplorerPage() {
               handleMoveNode={handleMoveNode}
               handleDeleteNode={handleDeleteNode}
               handleRenameNode={handleRenameNode}
+              handleDuplicateRequest={handleDuplicateRequest}
               handleCopyId={handleCopyId}
               copiedId={copiedId}
               methodStyle={methodStyle}
