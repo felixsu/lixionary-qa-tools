@@ -338,9 +338,11 @@ export default function DashboardLayout({
               collapsed
                 ? (syncConflicts.length > 0
                     ? `${syncConflicts.length} sync conflict(s) — click to sync now`
-                    : !isOnline
-                      ? "Offline — click to retry"
-                      : `Synced ${formatRelativeTime(lastSyncAt, nowTick)} — click to sync now`)
+                    : syncStatus === "error"
+                      ? "Sync failed — click to retry"
+                      : !isOnline
+                        ? "Offline — click to retry"
+                        : `Synced ${formatRelativeTime(lastSyncAt, nowTick)} — click to sync now`)
                 : "Sync now"
             }
             className="flex items-center gap-2.5 rounded-lg px-2 py-2 w-full transition-colors hover:bg-panel text-mute hover:text-graphite disabled:cursor-wait"
@@ -350,6 +352,8 @@ export default function DashboardLayout({
               <RefreshCw className="h-3.5 w-3.5 flex-shrink-0 animate-spin" />
             ) : syncConflicts.length > 0 ? (
               <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 text-amber-600" />
+            ) : syncStatus === "error" ? (
+              <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 text-danger" />
             ) : !isOnline ? (
               <CloudOff className="h-3.5 w-3.5 flex-shrink-0 text-danger" />
             ) : (
@@ -361,9 +365,11 @@ export default function DashboardLayout({
                   ? "Syncing…"
                   : syncConflicts.length > 0
                     ? `${syncConflicts.length} conflict${syncConflicts.length === 1 ? "" : "s"}`
-                    : !isOnline
-                      ? "Offline"
-                      : `Synced ${formatRelativeTime(lastSyncAt, nowTick)}`}
+                    : syncStatus === "error"
+                      ? "Sync failed — click to retry"
+                      : !isOnline
+                        ? "Offline"
+                        : `Synced ${formatRelativeTime(lastSyncAt, nowTick)}`}
               </span>
             )}
           </button>
