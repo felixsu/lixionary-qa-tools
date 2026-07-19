@@ -71,6 +71,8 @@ export interface RequestItem {
   outputs?: string[];
   // Output name -> description, purely descriptive metadata (never sent to the executor).
   outputDescriptions?: Record<string, string>;
+  // Markdown documentation for the request (never sent to the executor).
+  description?: string;
   lastResponse?: any;
 }
 
@@ -328,6 +330,8 @@ interface AppContextType {
   setReqOutputs: React.Dispatch<React.SetStateAction<string[]>>;
   reqOutputDescriptions: Record<string, string>;
   setReqOutputDescriptions: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  reqDescription: string;
+  setReqDescription: React.Dispatch<React.SetStateAction<string>>;
 
   // API Explorer Response State
   apiResponse: any;
@@ -588,6 +592,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [reqInputs, setReqInputs] = useState<InputBinding[]>([]);
   const [reqOutputs, setReqOutputs] = useState<string[]>([]);
   const [reqOutputDescriptions, setReqOutputDescriptions] = useState<Record<string, string>>({});
+  const [reqDescription, setReqDescription] = useState("");
 
   // API Explorer Response State
   const [apiResponse, setApiResponse] = useState<any>(null);
@@ -768,6 +773,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Same suppression, for the declared-outputs auto-persist effect below.
   const outputsPersistIdRef = useRef<string>("");
 
+  // Same suppression, for the description auto-persist effect below.
+  const descriptionPersistIdRef = useRef<string>("");
+
   // Ref to skip re-hydrating the editor when `collections` merely gets a new
   // array identity from a background refetch (e.g. after Save or an execute
   // auto-persist) while the same request stays selected — otherwise every
@@ -853,6 +861,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           } catch { /* ignore malformed override */ }
         });
 
+        // Description: saved value first, then overlay an unsaved draft.
+        // Stored as the raw markdown string; null means "no draft", while an
+        // empty string is a deliberately cleared draft and must still apply.
+        setReqDescription(req.description || "");
+        getPref(`description_override:${reqId}`).then((override) => {
+          if (override === null || prevSelectedRequestIdRef.current !== reqId) return;
+          setReqDescription(override);
+        });
+
         setApiResponse(null);
       }
     }
@@ -883,6 +900,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     setPref(`outputs_override:${selectedRequestId}`, JSON.stringify({ outputs: reqOutputs, outputDescriptions: reqOutputDescriptions }));
   }, [reqOutputs, reqOutputDescriptions, selectedRequestId]);
+
+  // Auto-persist description edits per request so they survive
+  // switches/reloads without a manual Save.
+  useEffect(() => {
+    if (!selectedRequestId) return;
+    if (descriptionPersistIdRef.current !== selectedRequestId) {
+      // Selection just changed; description state not yet synced to this request — skip
+      // this run. The follow-up render (once description state updates) writes correctly.
+      descriptionPersistIdRef.current = selectedRequestId;
+      return;
+    }
+    setPref(`description_override:${selectedRequestId}`, reqDescription);
+  }, [reqDescription, selectedRequestId]);
 
   // REST API helpers
   const apiCall = async (path: string, options: RequestInit = {}) => {
@@ -1980,7 +2010,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         outputs: reqOutputs.filter(Boolean),
         outputDescriptions: Object.fromEntries(
           Object.entries(reqOutputDescriptions).filter(([name]) => reqOutputs.includes(name))
-        )
+        ),
+        description: reqDescription
       };
 
       const updatedCol = updateRequestInTree(col, selectedRequestId, updatedRequest);
@@ -1993,6 +2024,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         deletePref(`auth_override:${selectedRequestId}`);
       }
       deletePref(`outputs_override:${selectedRequestId}`);
+      deletePref(`description_override:${selectedRequestId}`);
     } catch (e: any) {
       throw new Error(`Save failed: ${e.message}`);
     }
@@ -2574,6 +2606,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setReqOutputs,
         reqOutputDescriptions,
         setReqOutputDescriptions,
+        reqDescription,
+        setReqDescription,
 
         apiResponse,
         setApiResponse,

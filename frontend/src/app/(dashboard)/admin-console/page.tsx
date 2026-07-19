@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Shield, RefreshCw, X, Play, Users, ChevronRight, ChevronDown, Trash2, Plus, AlertCircle } from "lucide-react";
+import { Shield, RefreshCw, X, Play, Users, ChevronRight, ChevronDown, Trash2, Plus, AlertCircle, Sparkles } from "lucide-react";
 import { useAppContext } from "../../context/AppContext";
 
 interface UserProfile {
@@ -57,6 +57,46 @@ export default function AdminConsolePage() {
   const [collabError, setCollabError] = useState("");
   const [isCollabSubmitting, setIsCollabSubmitting] = useState(false);
 
+  // AI description base prompt setting
+  const [basePrompt, setBasePrompt] = useState("");
+  const [basePromptIsDefault, setBasePromptIsDefault] = useState(true);
+  const [basePromptUpdatedByName, setBasePromptUpdatedByName] = useState<string | null>(null);
+  const [isSavingPrompt, setIsSavingPrompt] = useState(false);
+  const [promptStatus, setPromptStatus] = useState<{ kind: "success" | "error"; msg: string } | null>(null);
+
+  const loadBasePrompt = async () => {
+    try {
+      const data = await apiCall("/api/admin/settings/description-base-prompt");
+      setBasePrompt(data.value || "");
+      setBasePromptIsDefault(!!data.isDefault);
+      setBasePromptUpdatedByName(data.updatedByName || null);
+    } catch (e: any) {
+      setPromptStatus({ kind: "error", msg: e.message || "Failed to load the AI base prompt." });
+    }
+  };
+
+  const handleSaveBasePrompt = async () => {
+    setIsSavingPrompt(true);
+    setPromptStatus(null);
+    try {
+      const data = await apiCall("/api/admin/settings/description-base-prompt", {
+        method: "PUT",
+        body: JSON.stringify({ value: basePrompt }),
+      });
+      setBasePrompt(data.value || "");
+      setBasePromptIsDefault(!!data.isDefault);
+      setBasePromptUpdatedByName(data.updatedByName || null);
+      setPromptStatus({
+        kind: "success",
+        msg: data.isDefault ? "Reverted to the built-in default prompt." : "Base prompt saved.",
+      });
+    } catch (e: any) {
+      setPromptStatus({ kind: "error", msg: e.message || "Failed to save the AI base prompt." });
+    } finally {
+      setIsSavingPrompt(false);
+    }
+  };
+
   // Load collections data
   const loadData = async () => {
     setIsLoading(true);
@@ -74,6 +114,7 @@ export default function AdminConsolePage() {
   useEffect(() => {
     if (user?.role === "admin") {
       loadData();
+      loadBasePrompt();
     }
   }, [user]);
 
@@ -159,7 +200,7 @@ export default function AdminConsolePage() {
       {/* Header Tabs */}
       <div className="h-14 flex items-center justify-between px-6 border-b border-line flex-shrink-0 bg-cream">
         <h2 className="text-[13px] font-semibold text-graphite uppercase tracking-wider">
-          Collection Management
+          Admin Console
         </h2>
 
         <button
@@ -180,6 +221,64 @@ export default function AdminConsolePage() {
             <p>{errorMsg}</p>
           </div>
         )}
+
+        {/* AI Settings */}
+        <div className="mb-6 max-w-4xl border border-line rounded-xl bg-cream overflow-hidden shadow-sm">
+          <div className="px-5 py-4 border-b border-line flex items-center gap-2.5">
+            <Sparkles className="h-4 w-4 text-clay flex-shrink-0" />
+            <div>
+              <h4 className="text-sm font-bold text-ink">AI description base prompt</h4>
+              <p className="text-[11px] text-stone mt-0.5">
+                Base system prompt used when AI improves a request description. Final prompt = this
+                base prompt + the request&apos;s method, URL, body, inputs and outputs.
+              </p>
+            </div>
+            {basePromptIsDefault ? (
+              <span className="ml-auto text-[10px] uppercase font-bold tracking-wider text-stone bg-panel border border-line rounded px-2 py-1 flex-shrink-0">
+                Default
+              </span>
+            ) : (
+              <span className="ml-auto text-[10px] uppercase font-bold tracking-wider text-clay bg-clay/10 border border-clay/30 rounded px-2 py-1 flex-shrink-0">
+                Custom
+              </span>
+            )}
+          </div>
+          <div className="px-5 py-4 space-y-3">
+            <textarea
+              rows={8}
+              value={basePrompt}
+              onChange={(e) => setBasePrompt(e.target.value)}
+              placeholder="Base system prompt for AI description improvement…"
+              className="w-full bg-panel border border-line rounded-lg px-3 py-2.5 text-xs text-ink font-mono leading-relaxed placeholder-mute focus:outline-none focus:border-clay resize-y"
+            />
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleSaveBasePrompt}
+                disabled={isSavingPrompt}
+                className="px-4 py-2 bg-clay hover:bg-clay-dark text-white rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+              >
+                {isSavingPrompt ? "Saving…" : "Save prompt"}
+              </button>
+              <span className="text-[11px] text-mute">
+                Saving an empty prompt reverts to the built-in default.
+                {!basePromptIsDefault && basePromptUpdatedByName ? ` Last edited by ${basePromptUpdatedByName}.` : ""}
+              </span>
+              {promptStatus && (
+                <span
+                  className={`ml-auto text-[11px] font-bold ${
+                    promptStatus.kind === "success" ? "text-sage" : "text-danger"
+                  }`}
+                >
+                  {promptStatus.msg}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <h3 className="text-[11px] font-bold uppercase tracking-wider text-stone mb-3">
+          Collections
+        </h3>
 
         {isLoading ? (
           <div className="flex flex-col items-center justify-center py-24 text-center">

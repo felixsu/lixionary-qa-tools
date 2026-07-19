@@ -43,6 +43,10 @@ class RequestDefinitionSchema(BaseModel):
     responseParserScript: Optional[str] = ""
     extractedVariables: List[ExtractedVariableSchema] = []
     lastResponse: Optional[Dict[str, Any]] = None
+    description: Optional[str] = ""  # Markdown documentation for the request
+    inputs: List[Dict[str, Any]] = []
+    outputs: List[str] = []
+    outputDescriptions: Dict[str, str] = {}
 
 class CollectionCreate(BaseModel):
     name: str
