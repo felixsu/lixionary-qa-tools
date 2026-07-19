@@ -1328,8 +1328,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const port = window.location.port;
       
       if (hostname === "localhost" || hostname === "127.0.0.1") {
-        if (port === "8481") {
-          // Frontend runs on host port 8481, backend runs on host port 8480 in docker-compose.
+        if (port === "8481" || port === "8491") {
+          // Frontend runs on host port 8481 (prod) or 8491 (dev flavor);
+          // backend runs on host port 8480 in docker-compose.
           wsHost = `${protocol}//localhost:8480`;
         } else if (port === "3000") {
           // Frontend runs on port 3000 (local Node dev server), backend runs on port 8000.

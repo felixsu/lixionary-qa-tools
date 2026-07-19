@@ -17,6 +17,13 @@ from playwright.async_api import async_playwright, Page, Request, Response
 # Add current directory to path so naming/generator services can be imported
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+from local_paths import get_base_dir
+
+# Flavored runtime knobs, injected by the Tauri launcher. Defaults keep a bare
+# `python local_sidecar.py` behaving exactly like the production sidecar.
+SIDECAR_PORT = int(os.environ.get("SIDECAR_PORT", "8484"))
+CDP_PORT = int(os.environ.get("AE_CDP_PORT", "9222"))
+
 from services.browser import BrowserSessionManager, rank_locators, sanitize_cookies
 from services.naming import polish_method_names, dedupe_names, heuristic_method_name, propose_locator_fix
 from services.generator import generate_pom_class, generate_http_client, build_pom_method_code
@@ -43,9 +50,9 @@ async def health():
     # SQLite store is functional.
     return {"status": "ok"}
 
-# Shared Local Workspace directory: ~/Documents/AutomationExplorer/workspaces
-USER_HOME = os.path.expanduser("~")
-BASE_DIR = os.path.join(USER_HOME, "Documents", "AutomationExplorer")
+# Shared Local Workspace directory: <base dir>/workspaces
+# (~/Documents/AutomationExplorer by default; AE_DATA_DIR overrides per flavor)
+BASE_DIR = get_base_dir()
 WORKSPACE_DIR = os.path.join(BASE_DIR, "workspaces")
 VENV_DIR = os.path.join(BASE_DIR, "venv")
 
@@ -278,7 +285,7 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
         playwright_mgr = await async_playwright().start()
         browser = await playwright_mgr.chromium.launch(
             headless=False,
-            args=["--start-maximized", "--remote-debugging-port=9222"]
+            args=["--start-maximized", f"--remote-debugging-port={CDP_PORT}"]
         )
         
         # Define context with standard viewport and auto-granted permissions to avoid prompt overlays
@@ -1128,8 +1135,8 @@ async def run_local_script_direct(payload: RunScriptPayload):
         try:
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
-            # Point to local headful browser debugging port
-            env["BROWSER_CDP_URL"] = "http://localhost:9222"
+            # Point to this flavor's headful browser debugging port
+            env["BROWSER_CDP_URL"] = f"http://localhost:{CDP_PORT}"
             
             process = await asyncio.create_subprocess_exec(
                 python_bin, "-u", file_path,
@@ -1638,4 +1645,4 @@ async def get_helper_data(payload: HelperDataRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8484)
+    uvicorn.run(app, host="127.0.0.1", port=SIDECAR_PORT)

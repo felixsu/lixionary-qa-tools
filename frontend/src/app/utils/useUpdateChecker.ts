@@ -19,7 +19,9 @@ export function useUpdateChecker() {
   const inFlightRef = useRef(false);
 
   const checkNow = async () => {
-    if (!isTauri() || inFlightRef.current) return;
+    // Dev flavor never registers the Rust updater plugin — skip entirely so
+    // it doesn't log an hourly "Update check failed".
+    if (!isTauri() || process.env.NEXT_PUBLIC_APP_FLAVOR === "dev" || inFlightRef.current) return;
     inFlightRef.current = true;
     setChecking(true);
     setCheckError("");

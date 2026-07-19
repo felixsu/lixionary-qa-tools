@@ -6,8 +6,9 @@ from typing import Any, Dict, List, Optional
 import apsw
 import sqlite_vec
 
-USER_HOME = os.path.expanduser("~")
-BASE_DIR = os.path.join(USER_HOME, "Documents", "AutomationExplorer")
+from local_paths import get_base_dir
+
+BASE_DIR = get_base_dir()
 DB_PATH = os.path.join(BASE_DIR, "local.db")
 
 ENTITY_TYPES = {"collection", "environment", "auth_function", "browser_profile", "flow"}

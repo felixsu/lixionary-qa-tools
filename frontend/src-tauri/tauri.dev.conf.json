@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Lixionary QA Tools Dev",
+  "identifier": "com.lixionary.automation-explorer.dev",
+  "build": {
+    "devUrl": "http://localhost:8491",
+    "beforeDevCommand": "npm run dev:devflavor",
+    "beforeBuildCommand": "npm run build:desktop:dev"
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false
+  }
+}

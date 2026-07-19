@@ -2,8 +2,14 @@ import os
 import sys
 import subprocess
 
-USER_HOME = os.path.expanduser("~")
-BASE_DIR = os.path.join(USER_HOME, "Documents", "AutomationExplorer")
+from local_paths import get_base_dir
+
+# Per-flavor base dir (AE_DATA_DIR from the Tauri launcher, prod default
+# otherwise), so the dev flavor gets its own venv/workspaces/local.db.
+# NOTE: the subprocess.run/os.execv below inherit os.environ, so the
+# launcher-injected SIDECAR_PORT / AE_DATA_DIR / AE_CDP_PORT automatically
+# flow through to local_sidecar.py — no explicit forwarding needed.
+BASE_DIR = get_base_dir()
 VENV_DIR = os.path.join(BASE_DIR, "venv")
 
 def bootstrap():

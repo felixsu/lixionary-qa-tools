@@ -3,11 +3,12 @@ use std::process::{Command, Child};
 use std::sync::Mutex;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
-// The IAM OAuth client redirects to http://localhost:8481/callback, so the
-// frontend must be reachable on that origin in every mode: dev via the Next
-// dev server, release via tauri-plugin-localhost serving the bundled export.
-const FRONTEND_PORT: u16 = 8481;
-const SIDECAR_PORT: u16 = 8484;
+// The OAuth client redirects to http://localhost:<frontend port>/callback, so
+// the frontend must be reachable on that origin in every mode: dev via the
+// Next dev server, release via tauri-plugin-localhost serving the bundled
+// export. Ports are flavor-dependent (prod: 8481/8484/9222, dev flavor:
+// 8491/8494/9232) — see run(), where the flavor is derived from the bundle
+// identifier set by tauri.dev.conf.json.
 
 struct SidecarState(Mutex<Option<Child>>);
 
@@ -47,7 +48,11 @@ fn kill_stale_port_holder(port: u16) -> bool {
 
   #[cfg(any(target_os = "macos", target_os = "linux"))]
   {
-    if let Ok(output) = Command::new("lsof").args(["-ti", &format!("tcp:{}", port)]).output() {
+    // -sTCP:LISTEN scopes the match to the listening process — a bare lsof on
+    // the port also matches processes merely holding a client connection to it
+    // (e.g. Chrome with the helper extension's WebSocket open), which must
+    // never be killed.
+    if let Ok(output) = Command::new("lsof").args(["-ti", &format!("tcp:{}", port), "-sTCP:LISTEN"]).output() {
       for pid in String::from_utf8_lossy(&output.stdout).lines() {
         let pid = pid.trim();
         if pid.is_empty() {
@@ -90,6 +95,18 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  // Generate the context up front so the flavor (set via the identifier in
+  // tauri.dev.conf.json, merged by `tauri {dev,build} --config`) is known
+  // before plugins are registered. The dev flavor shifts every port by +10
+  // and uses its own data dir so it can run alongside the installed prod app.
+  let context = tauri::generate_context!();
+  let dev_flavor = context.config().identifier.ends_with(".dev");
+  let frontend_port: u16 = if dev_flavor { 8491 } else { 8481 };
+  let sidecar_port: u16 = if dev_flavor { 8494 } else { 8484 };
+  let cdp_port: u16 = if dev_flavor { 9232 } else { 9222 };
+  let window_title = if dev_flavor { "Lixionary QA Tools Dev" } else { "Lixionary QA Tools" };
+  let data_dir_name = if dev_flavor { "AutomationExplorerDev" } else { "AutomationExplorer" };
+
   #[allow(unused_mut)]
   let mut builder = tauri::Builder::default();
 
@@ -103,14 +120,19 @@ pub fn run() {
 
   #[cfg(not(debug_assertions))]
   {
-    builder = builder.plugin(tauri_plugin_localhost::Builder::new(FRONTEND_PORT).build());
+    builder = builder.plugin(tauri_plugin_localhost::Builder::new(frontend_port).build());
+  }
+
+  // The dev flavor never registers the updater — it must not fetch the prod
+  // latest.json and replace itself with the production build.
+  if !dev_flavor {
+    builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
   }
 
   builder
-    .plugin(tauri_plugin_updater::Builder::new().build())
     .plugin(tauri_plugin_process::init())
     .plugin(tauri_plugin_dialog::init())
-    .setup(|app| {
+    .setup(move |app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
@@ -120,18 +142,18 @@ pub fn run() {
       }
 
       let window_url = if cfg!(debug_assertions) {
-        // Resolves to build.devUrl (the Next dev server on 8481)
+        // Resolves to build.devUrl (the Next dev server on the flavor's port)
         WebviewUrl::App("index.html".into())
       } else {
         WebviewUrl::External(
-          format!("http://localhost:{}", FRONTEND_PORT)
+          format!("http://localhost:{}", frontend_port)
             .parse()
             .expect("valid localhost URL"),
         )
       };
 
       WebviewWindowBuilder::new(app, "main", window_url)
-        .title("Lixionary QA Tools")
+        .title(window_title)
         .inner_size(800.0, 600.0)
         .resizable(true)
         // The native drag-drop handler swallows HTML5 drag events, breaking
@@ -145,23 +167,31 @@ pub fn run() {
 
       match resolve_sidecar_script(app) {
         Some(sidecar_abs) => {
-          if kill_stale_port_holder(SIDECAR_PORT) {
+          if kill_stale_port_holder(sidecar_port) {
             std::thread::sleep(std::time::Duration::from_millis(300));
           }
 
           println!("Launching local Python sidecar at: {:?}", sidecar_abs);
 
-          // Spawn using python or fallback to python3
-          let spawn_res = Command::new("python")
-            .arg("-u")
-            .arg(&sidecar_abs)
-            .spawn()
-            .or_else(|_| {
-              Command::new("python3")
-                .arg("-u")
-                .arg(&sidecar_abs)
-                .spawn()
-            });
+          // Per-flavor data dir; if document_dir() fails, AE_DATA_DIR is
+          // omitted and Python falls back to the prod default path.
+          let data_dir = app.path().document_dir().map(|d| d.join(data_dir_name));
+
+          // Spawn using python or fallback to python3, passing the flavor's
+          // runtime knobs (bootstrap_sidecar.py inherits and forwards them).
+          let spawn = |bin: &str| {
+            let mut cmd = Command::new(bin);
+            cmd
+              .arg("-u")
+              .arg(&sidecar_abs)
+              .env("SIDECAR_PORT", sidecar_port.to_string())
+              .env("AE_CDP_PORT", cdp_port.to_string());
+            if let Ok(dir) = &data_dir {
+              cmd.env("AE_DATA_DIR", dir);
+            }
+            cmd.spawn()
+          };
+          let spawn_res = spawn("python").or_else(|_| spawn("python3"));
 
           match spawn_res {
             Ok(child) => {
@@ -210,7 +240,7 @@ pub fn run() {
       }
     })
     .invoke_handler(tauri::generate_handler![select_directory, open_external, sidecar_process_alive])
-    .build(tauri::generate_context!())
+    .build(context)
     .expect("error while building tauri application")
     .run(|app_handle, event| {
       // macOS: clicking the Dock icon while the window is hidden (but the
