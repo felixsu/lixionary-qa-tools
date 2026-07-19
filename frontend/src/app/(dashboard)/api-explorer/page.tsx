@@ -13,10 +13,11 @@ import { useAppContext, findRequestInTree, findRequestOwnerCollection, findAnces
 import type { InputBinding } from "../../context/AppContext";
 import Dropdown from "../../components/Dropdown";
 import { Modal, ModalFooter } from "../../components/Modal";
+import MarkdownContent from "../../components/guide/MarkdownContent";
 import { confirmDialog } from "../../utils/confirmDialog";
 import { scanInputNames } from "../../utils/requestTokens";
 
-type ConfigTab = "headers" | "params" | "auth" | "inputs" | "output" | "body";
+type ConfigTab = "headers" | "params" | "auth" | "inputs" | "output" | "description" | "body";
 
 interface ParsedCurl {
   method: string;
@@ -569,6 +570,8 @@ export default function ApiExplorerPage() {
     setReqOutputs,
     reqOutputDescriptions,
     setReqOutputDescriptions,
+    reqDescription,
+    setReqDescription,
     selectedEnvCloudId,
     resolveAuthFunctionCloudId,
 
@@ -625,6 +628,11 @@ export default function ApiExplorerPage() {
   const [resolvedCurl, setResolvedCurl] = useState("");
   const [curlError, setCurlError] = useState<string | null>(null);
   const [newOutputName, setNewOutputName] = useState("");
+  const [descMode, setDescMode] = useState<"write" | "preview">("write");
+  const [showImproveModal, setShowImproveModal] = useState(false);
+  const [improvedDraft, setImprovedDraft] = useState("");
+  const [improveMode, setImproveMode] = useState<"preview" | "edit">("preview");
+  const [isImprovingDescription, setIsImprovingDescription] = useState(false);
   const [resolvedPreview, setResolvedPreview] = useState<{
     url: string;
     headers: Record<string, string>;
@@ -841,6 +849,35 @@ export default function ApiExplorerPage() {
       alert(`AI code generation failed: ${e.message}`);
     } finally {
       setIsGeneratingAiParser(false);
+    }
+  };
+
+  const runImproveDescription = async () => {
+    setIsImprovingDescription(true);
+    try {
+      const result = await apiCall("/api/ai/improve-description", {
+        method: "POST",
+        body: JSON.stringify({
+          draft: reqDescription,
+          name: activeRequest?.name || "",
+          method: reqMethod,
+          url: reqUrl,
+          bodyType: reqBodyType,
+          body: reqBody,
+          inputs: reqInputs,
+          outputs: reqOutputs,
+          outputDescriptions: reqOutputDescriptions,
+        }),
+      });
+      if (result.improvedDescription) {
+        setImprovedDraft(result.improvedDescription);
+        setImproveMode("preview");
+        setShowImproveModal(true);
+      }
+    } catch (e: any) {
+      alert(`AI description improvement failed: ${e.message}`);
+    } finally {
+      setIsImprovingDescription(false);
     }
   };
 
@@ -1184,6 +1221,7 @@ export default function ApiExplorerPage() {
     { id: "auth", label: "Auth" },
     { id: "inputs", label: detectedInputs.length ? `Input (${detectedInputs.length})` : "Input" },
     { id: "output", label: reqOutputs.length ? `Output (${reqOutputs.length})` : "Output" },
+    { id: "description", label: "Description" },
     { id: "body", label: "Body" },
   ];
 
@@ -1687,6 +1725,56 @@ export default function ApiExplorerPage() {
                   </div>
                 )}
 
+                {/* Description */}
+                {configTab === "description" && (
+                  <div className="flex flex-col h-full">
+                    <div className="px-4 py-3 flex items-center gap-2 flex-shrink-0">
+                      <div className="flex items-center rounded-md border border-line overflow-hidden">
+                        {(["write", "preview"] as const).map((mode) => (
+                          <button
+                            key={mode}
+                            onClick={() => setDescMode(mode)}
+                            className="h-[30px] px-3 text-xs font-medium transition-colors"
+                            style={{
+                              background: descMode === mode ? "var(--color-panel)" : "var(--color-cream)",
+                              color: descMode === mode ? "var(--color-ink)" : "var(--color-stone)",
+                            }}
+                          >
+                            {mode === "write" ? "Write" : "Preview"}
+                          </button>
+                        ))}
+                      </div>
+                      <span className="text-[11px] text-mute">Markdown supported</span>
+                      <button
+                        onClick={runImproveDescription}
+                        disabled={isImprovingDescription}
+                        className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-cream border border-line rounded-md text-xs font-medium text-clay hover:bg-panel transition-colors disabled:opacity-50 flex-shrink-0"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                        {isImprovingDescription ? "Improving…" : "Improve with AI"}
+                      </button>
+                    </div>
+                    <div className="flex-1 mx-4 mb-4 rounded-lg overflow-hidden border border-line bg-cream">
+                      {descMode === "write" ? (
+                        <textarea
+                          value={reqDescription}
+                          onChange={(e) => setReqDescription(e.target.value)}
+                          placeholder="Describe this request in Markdown… (purpose, inputs, outputs, caveats)"
+                          className="w-full h-full p-3.5 bg-cream text-sm text-ink font-mono outline-none resize-none"
+                        />
+                      ) : (
+                        <div className="h-full overflow-y-auto p-4">
+                          {reqDescription.trim() ? (
+                            <MarkdownContent content={reqDescription} />
+                          ) : (
+                            <p className="text-xs text-mute">Nothing to preview yet — write a draft first.</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Body */}
                 {configTab === "body" && (
                   <div className="flex flex-col h-full">
@@ -2146,6 +2234,63 @@ export default function ApiExplorerPage() {
                   />
                 )}
                 Generate script
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {showImproveModal && (
+        <Modal title="Review AI-improved description" onClose={() => setShowImproveModal(false)} width={720}>
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center gap-2">
+              <div className="flex items-center rounded-md border border-line overflow-hidden">
+                {(["preview", "edit"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => setImproveMode(mode)}
+                    className="h-[30px] px-3 text-xs font-medium transition-colors"
+                    style={{
+                      background: improveMode === mode ? "var(--color-panel)" : "var(--color-cream)",
+                      color: improveMode === mode ? "var(--color-ink)" : "var(--color-stone)",
+                    }}
+                  >
+                    {mode === "preview" ? "Preview" : "Edit"}
+                  </button>
+                ))}
+              </div>
+              <span className="text-[11px] text-mute">
+                Review the AI version — tweak it directly before accepting.
+              </span>
+            </div>
+            {improveMode === "preview" ? (
+              <div className="max-h-[420px] overflow-y-auto border border-line rounded-lg p-4 bg-cream">
+                <MarkdownContent content={improvedDraft} />
+              </div>
+            ) : (
+              <textarea
+                rows={16}
+                value={improvedDraft}
+                onChange={(e) => setImprovedDraft(e.target.value)}
+                className="bg-cream border border-line rounded-lg p-3.5 text-sm text-ink font-mono outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)] resize-none"
+              />
+            )}
+            <div className="flex justify-end gap-2 pt-1 border-t border-line">
+              <button
+                onClick={() => setShowImproveModal(false)}
+                className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
+              >
+                Keep my draft
+              </button>
+              <button
+                onClick={() => {
+                  setReqDescription(improvedDraft);
+                  setShowImproveModal(false);
+                  showToast("Description updated — review and Save");
+                }}
+                className="h-10 px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors"
+              >
+                Use this version
               </button>
             </div>
           </div>
