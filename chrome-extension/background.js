@@ -89,16 +89,26 @@ const startKeepalive = () => {
   }, 20000);
 };
 
+// Sidecar ports: prod app first, dev flavor as fallback. If both sidecars are
+// running, prod wins — load a second unpacked copy of the extension for
+// simultaneous prod+dev helper testing.
+const SIDECAR_PORTS = [8484, 8494];
+let sidecarPortIdx = 0;
+let sidecarEverOpened = false;
+
 const connectSidecarWS = () => {
   if (sidecarWs && (sidecarWs.readyState === WebSocket.CONNECTING || sidecarWs.readyState === WebSocket.OPEN)) {
     return;
   }
 
-  console.log("[Automation Explorer Helper] Connecting to local sidecar WS...");
-  sidecarWs = new WebSocket("ws://localhost:8484/api/browser-helper/ws");
+  const sidecarPort = SIDECAR_PORTS[sidecarPortIdx];
+  console.log(`[Automation Explorer Helper] Connecting to local sidecar WS on port ${sidecarPort}...`);
+  sidecarEverOpened = false;
+  sidecarWs = new WebSocket(`ws://localhost:${sidecarPort}/api/browser-helper/ws`);
 
   sidecarWs.onopen = () => {
-    console.log("[Automation Explorer Helper] Connected to local sidecar WebSocket successfully!");
+    console.log(`[Automation Explorer Helper] Connected to local sidecar WebSocket on port ${sidecarPort}!`);
+    sidecarEverOpened = true;
     startKeepalive();
   };
 
@@ -183,6 +193,12 @@ const connectSidecarWS = () => {
     console.log("[Automation Explorer Helper] Sidecar WebSocket disconnected. Retrying in 5 seconds...", event.reason);
     stopKeepalive();
     sidecarWs = null;
+    // Connection never opened on this port — rotate to the next candidate
+    // (prod <-> dev flavor). A drop after a successful open keeps the same
+    // port so reconnects go back to the sidecar we were talking to.
+    if (!sidecarEverOpened) {
+      sidecarPortIdx = (sidecarPortIdx + 1) % SIDECAR_PORTS.length;
+    }
     setTimeout(connectSidecarWS, 5000);
   };
 

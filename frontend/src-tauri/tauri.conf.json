@@ -37,6 +37,7 @@
     "resources": {
       "../../backend/bootstrap_sidecar.py": "backend/bootstrap_sidecar.py",
       "../../backend/local_sidecar.py": "backend/local_sidecar.py",
+      "../../backend/local_paths.py": "backend/local_paths.py",
       "../../backend/config.py": "backend/config.py",
       "../../backend/sidecar_requirements.txt": "backend/sidecar_requirements.txt",
       "../../backend/services/*.py": "backend/services/",
