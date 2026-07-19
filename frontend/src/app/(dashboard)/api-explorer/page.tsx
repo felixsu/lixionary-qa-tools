@@ -567,6 +567,8 @@ export default function ApiExplorerPage() {
     setReqInputs,
     reqOutputs,
     setReqOutputs,
+    reqOutputDescriptions,
+    setReqOutputDescriptions,
     selectedEnvCloudId,
     resolveAuthFunctionCloudId,
 
@@ -661,6 +663,28 @@ export default function ApiExplorerPage() {
       next[idx] = { ...next[idx], ...patch };
       return next;
     });
+
+  const renameOutputAt = (index: number, newName: string) => {
+    const oldName = reqOutputs[index];
+    setReqOutputs((prev) => prev.map((o, i) => (i === index ? newName : o)));
+    if (oldName === newName) return;
+    setReqOutputDescriptions((prev) => {
+      const { [oldName]: desc, ...rest } = prev;
+      return newName ? { ...rest, [newName]: desc ?? "" } : rest;
+    });
+  };
+
+  const removeOutputAt = (index: number) => {
+    const name = reqOutputs[index];
+    setReqOutputs((prev) => prev.filter((_, i) => i !== index));
+    setReqOutputDescriptions((prev) => {
+      const { [name]: _removed, ...rest } = prev;
+      return rest;
+    });
+  };
+
+  const setOutputDescription = (name: string, description: string) =>
+    setReqOutputDescriptions((prev) => ({ ...prev, [name]: description }));
 
   const pathname = usePathname();
   const router = useRouter();
@@ -1588,35 +1612,47 @@ export default function ApiExplorerPage() {
                 {configTab === "output" && (
                   <div className="flex flex-col h-full">
                     <div className="px-4 pt-3 pb-2 flex flex-col gap-2 flex-shrink-0">
-                      <div className="flex items-center gap-2 flex-wrap">
+                      <div className="flex flex-col gap-2">
                         <span className="text-xs font-medium text-stone">Declared outputs</span>
-                        {reqOutputs.map((name) => (
-                          <span
-                            key={name}
-                            className="flex items-center gap-1 px-2 py-0.5 bg-panel border border-line rounded-full font-mono text-[11px] text-clay"
-                          >
-                            {name}
-                            <button
-                              onClick={() => setReqOutputs(reqOutputs.filter((o) => o !== name))}
-                              className="text-stone hover:text-danger transition-colors"
-                            >
-                              <X className="h-3 w-3" />
-                            </button>
-                          </span>
-                        ))}
-                        <input
-                          value={newOutputName}
-                          placeholder="add output…"
-                          onChange={(e) => setNewOutputName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key !== "Enter") return;
-                            e.preventDefault();
-                            const name = newOutputName.trim();
-                            if (name && !reqOutputs.includes(name)) setReqOutputs([...reqOutputs, name]);
-                            setNewOutputName("");
-                          }}
-                          className={`${inputCls} w-[140px]`}
-                        />
+                        <div className="flex flex-col gap-1.5">
+                          {reqOutputs.map((name, index) => (
+                            <div key={index} className="flex flex-col gap-1 p-2 bg-panel border border-line rounded-md">
+                              <div className="flex items-center gap-2">
+                                <input
+                                  value={name}
+                                  placeholder="output name"
+                                  onChange={(e) => renameOutputAt(index, e.target.value)}
+                                  className={`${inputCls} flex-1 font-mono`}
+                                />
+                                <button
+                                  onClick={() => removeOutputAt(index)}
+                                  className="h-7 w-7 rounded-md border border-line flex items-center justify-center text-stone hover:bg-danger-soft hover:text-danger transition-colors flex-shrink-0"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                              <input
+                                value={reqOutputDescriptions[name] || ""}
+                                placeholder="description (optional)"
+                                onChange={(e) => setOutputDescription(name, e.target.value)}
+                                className={`${inputCls} text-[11px]`}
+                              />
+                            </div>
+                          ))}
+                          <input
+                            value={newOutputName}
+                            placeholder="add output…"
+                            onChange={(e) => setNewOutputName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key !== "Enter") return;
+                              e.preventDefault();
+                              const name = newOutputName.trim();
+                              if (name && !reqOutputs.includes(name)) setReqOutputs([...reqOutputs, name]);
+                              setNewOutputName("");
+                            }}
+                            className={`${inputCls} w-full`}
+                          />
+                        </div>
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-[11px] text-mute">

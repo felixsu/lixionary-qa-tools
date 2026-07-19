@@ -60,6 +60,10 @@ class SetActiveUserRequest(BaseModel):
     userId: str
 
 
+class PrefPayload(BaseModel):
+    value: str
+
+
 @router.get("/device-id")
 async def get_device_id():
     return {"deviceId": LocalStore.device_id()}
@@ -71,6 +75,28 @@ async def set_active_user(body: SetActiveUserRequest):
     cache if a different cloud user than last time is now signed in."""
     switched = LocalStore.set_active_user(body.userId)
     return {"switched": switched}
+
+
+@router.get("/pref/{key}")
+async def get_pref(key: str):
+    """Device-local key/value prefs — never synced to the cloud, but durable
+    across app updates (unlike browser localStorage), for per-request editor
+    state that's local to this user/device (e.g. an unsaved dynamic auth-hook
+    binding or declared-outputs draft)."""
+    value = LocalStore.get_pref(key)
+    return {"key": key, "value": value}
+
+
+@router.put("/pref/{key}")
+async def set_pref(key: str, body: PrefPayload):
+    LocalStore.set_pref(key, body.value)
+    return {"key": key, "value": body.value}
+
+
+@router.delete("/pref/{key}")
+async def delete_pref(key: str):
+    LocalStore.delete_pref(key)
+    return {"message": "Deleted"}
 
 
 @router.get("/{entity_type}")

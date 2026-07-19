@@ -69,6 +69,8 @@ export interface RequestItem {
   responseParserScript?: string;
   inputs?: InputBinding[];
   outputs?: string[];
+  // Output name -> description, purely descriptive metadata (never sent to the executor).
+  outputDescriptions?: Record<string, string>;
   lastResponse?: any;
 }
 
@@ -324,6 +326,8 @@ interface AppContextType {
   setReqInputs: React.Dispatch<React.SetStateAction<InputBinding[]>>;
   reqOutputs: string[];
   setReqOutputs: React.Dispatch<React.SetStateAction<string[]>>;
+  reqOutputDescriptions: Record<string, string>;
+  setReqOutputDescriptions: React.Dispatch<React.SetStateAction<Record<string, string>>>;
 
   // API Explorer Response State
   apiResponse: any;
@@ -583,6 +587,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [reqParserScript, setReqParserScript] = useState("");
   const [reqInputs, setReqInputs] = useState<InputBinding[]>([]);
   const [reqOutputs, setReqOutputs] = useState<string[]>([]);
+  const [reqOutputDescriptions, setReqOutputDescriptions] = useState<Record<string, string>>({});
 
   // API Explorer Response State
   const [apiResponse, setApiResponse] = useState<any>(null);
@@ -760,11 +765,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // change (when reqAuthType/reqAuthConfig haven't synced to the new request yet).
   const authPersistIdRef = useRef<string>("");
 
+  // Same suppression, for the declared-outputs auto-persist effect below.
+  const outputsPersistIdRef = useRef<string>("");
+
   // Ref to skip re-hydrating the editor when `collections` merely gets a new
   // array identity from a background refetch (e.g. after Save or an execute
   // auto-persist) while the same request stays selected — otherwise every
   // reqXxx field and apiResponse get reset, visibly flashing the UI.
   const prevSelectedRequestIdRef = useRef<string | null>(null);
+
+  // Device-local key/value prefs — for per-request editor state that must
+  // stay off the shared/synced collection document (e.g. a HOOK auth binding,
+  // which is user-local) but must still survive an app update/reinstall,
+  // unlike browser localStorage.
+  const getPref = async (key: string): Promise<string | null> => {
+    try {
+      const res = await apiCall(`/api/local-store/pref/${encodeURIComponent(key)}`);
+      return res.value ?? null;
+    } catch {
+      return null;
+    }
+  };
+  const setPref = async (key: string, value: string): Promise<void> => {
+    try {
+      await apiCall(`/api/local-store/pref/${encodeURIComponent(key)}`, {
+        method: "PUT",
+        body: JSON.stringify({ value }),
+      });
+    } catch { /* non-fatal */ }
+  };
+  const deletePref = async (key: string): Promise<void> => {
+    try {
+      await apiCall(`/api/local-store/pref/${encodeURIComponent(key)}`, { method: "DELETE" });
+    } catch { /* non-fatal */ }
+  };
 
   // Synchronize request inputs when selection changes
   useEffect(() => {
@@ -787,23 +821,38 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setReqBodyType(req.bodyType);
         setReqBody(req.body || "");
 
-        // Auth: prefer unsaved override from localStorage, else the saved request value.
-        let authType = req.authType;
-        let authConfig = req.authConfig || { token: "", key: "", value: "", authFunctionId: "" };
-        try {
-          const override = localStorage.getItem(`lixionary_auth_${selectedRequestId}`);
-          if (override) {
+        // Auth: start from the saved request value, then overlay an unsaved
+        // HOOK-auth override (device-local pref, never embedded in the shared
+        // collection document).
+        setReqAuthType(req.authType);
+        setReqAuthConfig(req.authConfig || { token: "", key: "", value: "", authFunctionId: "" });
+        const reqId = selectedRequestId;
+        getPref(`auth_override:${reqId}`).then((override) => {
+          if (!override || prevSelectedRequestIdRef.current !== reqId) return;
+          try {
             const parsed = JSON.parse(override);
-            authType = parsed.authType ?? authType;
-            authConfig = parsed.authConfig ?? authConfig;
-          }
-        } catch { /* ignore malformed override */ }
-        setReqAuthType(authType);
-        setReqAuthConfig(authConfig);
+            if (parsed.authType) setReqAuthType(parsed.authType);
+            if (parsed.authConfig) setReqAuthConfig(parsed.authConfig);
+          } catch { /* ignore malformed override */ }
+        });
 
         setReqParserScript(req.responseParserScript || "");
         setReqInputs(req.inputs || []);
+
+        // Declared outputs: start from the saved request value, then overlay
+        // an unsaved draft (device-local pref) so in-progress edits survive
+        // navigating away and back before Save.
         setReqOutputs(req.outputs || []);
+        setReqOutputDescriptions(req.outputDescriptions || {});
+        getPref(`outputs_override:${reqId}`).then((override) => {
+          if (!override || prevSelectedRequestIdRef.current !== reqId) return;
+          try {
+            const parsed = JSON.parse(override);
+            if (Array.isArray(parsed.outputs)) setReqOutputs(parsed.outputs);
+            if (parsed.outputDescriptions) setReqOutputDescriptions(parsed.outputDescriptions);
+          } catch { /* ignore malformed override */ }
+        });
+
         setApiResponse(null);
       }
     }
@@ -819,13 +868,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       authPersistIdRef.current = selectedRequestId;
       return;
     }
-    try {
-      localStorage.setItem(
-        `lixionary_auth_${selectedRequestId}`,
-        JSON.stringify({ authType: reqAuthType, authConfig: reqAuthConfig })
-      );
-    } catch { /* storage unavailable — non-fatal */ }
+    setPref(`auth_override:${selectedRequestId}`, JSON.stringify({ authType: reqAuthType, authConfig: reqAuthConfig }));
   }, [reqAuthType, reqAuthConfig, selectedRequestId]);
+
+  // Auto-persist declared-outputs edits per request so they survive
+  // switches/reloads without a manual Save.
+  useEffect(() => {
+    if (!selectedRequestId) return;
+    if (outputsPersistIdRef.current !== selectedRequestId) {
+      // Selection just changed; outputs state not yet synced to this request — skip
+      // this run. The follow-up render (once outputs state updates) writes correctly.
+      outputsPersistIdRef.current = selectedRequestId;
+      return;
+    }
+    setPref(`outputs_override:${selectedRequestId}`, JSON.stringify({ outputs: reqOutputs, outputDescriptions: reqOutputDescriptions }));
+  }, [reqOutputs, reqOutputDescriptions, selectedRequestId]);
 
   // REST API helpers
   const apiCall = async (path: string, options: RequestInit = {}) => {
@@ -1920,7 +1977,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           });
           return reqInputs.filter(b => detected.includes(b.name));
         })(),
-        outputs: reqOutputs.filter(Boolean)
+        outputs: reqOutputs.filter(Boolean),
+        outputDescriptions: Object.fromEntries(
+          Object.entries(reqOutputDescriptions).filter(([name]) => reqOutputs.includes(name))
+        )
       };
 
       const updatedCol = updateRequestInTree(col, selectedRequestId, updatedRequest);
@@ -1928,10 +1988,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       await persistCollectionTree(col.id, { requests: updatedCol.requests, children: updatedCol.children || [] });
 
       // Saved state is now authoritative — drop the unsaved auth override.
-      // Exception: HOOK auth is kept user-local in localStorage (not in DB), so don't clear it.
+      // Exception: HOOK auth is kept user-local (not in the shared collection), so don't clear it.
       if (reqAuthType !== "HOOK") {
-        try { localStorage.removeItem(`lixionary_auth_${selectedRequestId}`); } catch { /* non-fatal */ }
+        deletePref(`auth_override:${selectedRequestId}`);
       }
+      deletePref(`outputs_override:${selectedRequestId}`);
     } catch (e: any) {
       throw new Error(`Save failed: ${e.message}`);
     }
@@ -2190,8 +2251,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       await persistCollectionTree(col.id, { requests: updatedCol.requests, children: updatedCol.children || [] });
 
-      if (nodeType === "request" && selectedRequestId === nodeId) {
-        setSelectedRequestId("");
+      if (nodeType === "request") {
+        deletePref(`auth_override:${nodeId}`);
+        deletePref(`outputs_override:${nodeId}`);
+        if (selectedRequestId === nodeId) {
+          setSelectedRequestId("");
+        }
       }
     } catch (e: any) {
       throw new Error(`Failed to delete item: ${e.message}`);
@@ -2507,6 +2572,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setReqInputs,
         reqOutputs,
         setReqOutputs,
+        reqOutputDescriptions,
+        setReqOutputDescriptions,
 
         apiResponse,
         setApiResponse,

@@ -84,6 +84,12 @@ class LocalStore:
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS local_prefs (
+                key        TEXT PRIMARY KEY,
+                value      TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
 
@@ -301,3 +307,29 @@ class LocalStore:
                  cls._now(), entity_type, local_id),
             )
         return cls.get(entity_type, local_id)
+
+    # Device-local key/value prefs — for values that must survive on this
+    # device (unlike browser localStorage, which isn't guaranteed to survive
+    # an app update/reinstall) but must never sync to the cloud or other
+    # collaborators (unlike the `entities` table). Intentionally has no
+    # version/sync bookkeeping.
+    @classmethod
+    def get_pref(cls, key: str) -> Optional[str]:
+        row = _dict_row(cls._conn.execute(
+            "SELECT value FROM local_prefs WHERE key = ?", (key,),
+        ), ["value"])
+        return row["value"] if row else None
+
+    @classmethod
+    def set_pref(cls, key: str, value: str) -> None:
+        cls._conn.execute(
+            """
+            INSERT INTO local_prefs (key, value, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (key, value, cls._now()),
+        )
+
+    @classmethod
+    def delete_pref(cls, key: str) -> None:
+        cls._conn.execute("DELETE FROM local_prefs WHERE key = ?", (key,))

@@ -227,19 +227,19 @@ const executeRequestConfig = async (
 
   // Auth parity with the API Explorer: HOOK auth is kept user-local — the
   // shared collection stores authFunctionId as null and the real binding
-  // lives in localStorage (see handleSaveRequest / the hydration effect in
-  // AppContext). Apply the same per-device override here.
+  // lives in a device-local pref (see handleSaveRequest / the hydration
+  // effect in AppContext). Apply the same per-device override here.
   let authType = request.authType;
   let authConfig = request.authConfig || {};
   try {
-    const override = localStorage.getItem(`lixionary_auth_${request.id}`);
-    if (override) {
-      const parsed = JSON.parse(override);
+    const res = await deps.apiCall(`/api/local-store/pref/${encodeURIComponent(`auth_override:${request.id}`)}`);
+    if (res?.value) {
+      const parsed = JSON.parse(res.value);
       authType = parsed.authType ?? authType;
       authConfig = parsed.authConfig ?? authConfig;
     }
   } catch {
-    // storage unavailable / malformed override — fall back to the saved values
+    // pref unavailable / malformed override — fall back to the saved values
   }
 
   // Start from the request's own stored bindings; flow mappings override.
