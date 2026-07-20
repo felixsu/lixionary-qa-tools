@@ -93,6 +93,63 @@ fn show_main_window(app: &tauri::AppHandle) {
   }
 }
 
+// ~/Documents is a macOS TCC-protected folder, and since the app is only
+// ad-hoc signed (not notarized), macOS can't reliably persist the folder-
+// access grant across launches — the user gets re-prompted every time. The
+// app's data now lives under app_data_dir() (e.g. ~/Library/Application
+// Support/<bundle-id>) instead, which isn't TCC-gated. This migrates any
+// pre-existing Documents-based data dir there, once.
+fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
+  std::fs::create_dir_all(dst)?;
+  for entry in std::fs::read_dir(src)? {
+    let entry = entry?;
+    let dst_path = dst.join(entry.file_name());
+    if entry.file_type()?.is_dir() {
+      copy_dir_recursive(&entry.path(), &dst_path)?;
+    } else {
+      std::fs::copy(entry.path(), &dst_path)?;
+    }
+  }
+  Ok(())
+}
+
+fn migrate_dir(old: &PathBuf, new: &PathBuf) -> std::io::Result<()> {
+  // Same-volume rename is the common case (Documents and Application Support
+  // are both on the boot volume). Any failure, including a cross-device
+  // rename, falls back to copy-then-remove.
+  if std::fs::rename(old, new).is_ok() {
+    return Ok(());
+  }
+  copy_dir_recursive(old, new)?;
+  std::fs::remove_dir_all(old)
+}
+
+fn migrate_legacy_data_dir(old_dir: &PathBuf, new_dir: &PathBuf, data_dir_name: &str) {
+  let old_exists = old_dir.is_dir();
+  let new_exists = new_dir.exists();
+
+  if old_exists && !new_exists {
+    if let Some(parent) = new_dir.parent() {
+      let _ = std::fs::create_dir_all(parent);
+    }
+    match migrate_dir(old_dir, new_dir) {
+      Ok(()) => println!("Migrated data dir {:?} -> {:?}", old_dir, new_dir),
+      Err(e) => eprintln!(
+        "Data dir migration failed ({:?} -> {:?}): {}. Continuing with a fresh data dir.",
+        old_dir, new_dir, e
+      ),
+    }
+  } else if old_exists && new_exists {
+    // Both exist: never silently overwrite. new_dir is already in use, so
+    // just fence off the old dir so it's not reconsidered next launch.
+    let trail = old_dir.with_file_name(format!("{}.migrated", data_dir_name));
+    if !trail.exists() {
+      let _ = std::fs::rename(old_dir, &trail);
+    }
+  }
+  // else: old doesn't exist (fresh install, or already migrated) -> no-op.
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   // Generate the context up front so the flavor (set via the identifier in
@@ -156,6 +213,7 @@ pub fn run() {
         .title(window_title)
         .inner_size(800.0, 600.0)
         .resizable(true)
+        .maximized(true)
         // The native drag-drop handler swallows HTML5 drag events, breaking
         // in-page drag & drop (API Studio palette). We never use Tauri's
         // onDragDropEvent, so hand drags back to the webview.
@@ -173,9 +231,17 @@ pub fn run() {
 
           println!("Launching local Python sidecar at: {:?}", sidecar_abs);
 
-          // Per-flavor data dir; if document_dir() fails, AE_DATA_DIR is
-          // omitted and Python falls back to the prod default path.
-          let data_dir = app.path().document_dir().map(|d| d.join(data_dir_name));
+          // Per-flavor data dir, under the OS app-data dir (not TCC-gated on
+          // macOS, unlike the legacy ~/Documents/<data_dir_name> location).
+          // If app_data_dir() fails, AE_DATA_DIR is omitted and Python falls
+          // back to the prod default path.
+          let data_dir = app.path().app_data_dir();
+          if let (Ok(new_dir), Ok(old_dir)) = (
+            &data_dir,
+            &app.path().document_dir().map(|d| d.join(data_dir_name)),
+          ) {
+            migrate_legacy_data_dir(old_dir, new_dir, data_dir_name);
+          }
 
           // Spawn using python or fallback to python3, passing the flavor's
           // runtime knobs (bootstrap_sidecar.py inherits and forwards them).
