@@ -9,7 +9,7 @@ import httpx
 from bson import ObjectId
 
 from db.mongo import MongoDB
-from services.auth_sandbox import run_unsafe_auth_script, run_unsafe_response_parser
+from services.auth_sandbox import run_unsafe_auth_script, run_unsafe_response_parser, run_unsafe_request_interceptor
 from services.sync_versioning import apply_versioned_update
 
 _DATE_FORMAT_TOKENS = [
@@ -286,6 +286,24 @@ async def resolve_request(request_data: Dict[str, Any], environment_id: str = No
         key_name = interpolate_variables(auth_config["key"], variables, inputs)
         key_val = interpolate_variables(auth_config["value"], variables, inputs)
         headers[key_name] = key_val
+
+    # 4. Run Request Interceptor script (after auth, so it can see/modify the
+    # final Authorization header — e.g. to compute an HMAC over headers+body)
+    interceptor_script = request_data.get("requestInterceptorScript")
+    if interceptor_script:
+        request_obj = {
+            "url": url,
+            "method": request_data.get("method", "GET").upper(),
+            "headers": headers,
+            "params": params,
+            "body": body_content,
+            "bodyType": body_type,
+        }
+        try:
+            mutated = await run_unsafe_request_interceptor(interceptor_script, request_obj, variables)
+        except Exception as e:
+            raise ValueError(f"Request Interceptor Execution Failed: {str(e)}")
+        url, headers, params, body_content = mutated["url"], mutated["headers"], mutated["params"], mutated["body"]
 
     return {"url": url, "headers": headers, "params": params, "body": body_content}
 

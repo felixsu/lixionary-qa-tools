@@ -67,6 +67,7 @@ export interface RequestItem {
     authFunctionId?: string;
   };
   responseParserScript?: string;
+  requestInterceptorScript?: string;
   inputs?: InputBinding[];
   outputs?: string[];
   // Output name -> description, purely descriptive metadata (never sent to the executor).
@@ -324,6 +325,8 @@ interface AppContextType {
   setReqAuthConfig: (config: any) => void;
   reqParserScript: string;
   setReqParserScript: (script: string) => void;
+  reqInterceptorScript: string;
+  setReqInterceptorScript: (script: string) => void;
   reqInputs: InputBinding[];
   setReqInputs: React.Dispatch<React.SetStateAction<InputBinding[]>>;
   reqOutputs: string[];
@@ -590,6 +593,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [reqAuthType, setReqAuthType] = useState("NONE");
   const [reqAuthConfig, setReqAuthConfig] = useState<any>({ token: "", key: "", value: "", authFunctionId: "" });
   const [reqParserScript, setReqParserScript] = useState("");
+  const [reqInterceptorScript, setReqInterceptorScript] = useState("");
   const [reqInputs, setReqInputs] = useState<InputBinding[]>([]);
   const [reqOutputs, setReqOutputs] = useState<string[]>([]);
   const [reqOutputDescriptions, setReqOutputDescriptions] = useState<Record<string, string>>({});
@@ -846,6 +850,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         });
 
         setReqParserScript(req.responseParserScript || "");
+        setReqInterceptorScript(req.requestInterceptorScript || "");
         setReqInputs(req.inputs || []);
 
         // Declared outputs: start from the saved request value, then overlay
@@ -1922,6 +1927,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId)
         },
         responseParserScript: reqParserScript,
+        requestInterceptorScript: reqInterceptorScript,
         inputs: reqInputs,
         outputs: reqOutputs,
         // Cloud resolves this as a Mongo _id — fall back to none if the selected
@@ -1997,6 +2003,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           authFunctionId: reqAuthType === "HOOK" ? null : (reqAuthConfig.authFunctionId || null)
         },
         responseParserScript: reqParserScript,
+        requestInterceptorScript: reqInterceptorScript,
         // Drop bindings whose token no longer appears in any request field
         inputs: (() => {
           const detected = scanInputNames({
@@ -2632,6 +2639,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setReqAuthConfig,
         reqParserScript,
         setReqParserScript,
+        reqInterceptorScript,
+        setReqInterceptorScript,
         reqInputs,
         setReqInputs,
         reqOutputs,

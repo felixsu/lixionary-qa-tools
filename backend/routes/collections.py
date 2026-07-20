@@ -41,6 +41,7 @@ class RequestDefinitionSchema(BaseModel):
     authType: str = "NONE"
     authConfig: Optional[AuthConfigSchema] = None
     responseParserScript: Optional[str] = ""
+    requestInterceptorScript: Optional[str] = ""
     extractedVariables: List[ExtractedVariableSchema] = []
     lastResponse: Optional[Dict[str, Any]] = None
     description: Optional[str] = ""  # Markdown documentation for the request

@@ -25,7 +25,7 @@ import {
   prepareImportedCollection,
 } from "../../utils/collectionTransfer";
 
-type ConfigTab = "headers" | "params" | "auth" | "inputs" | "output" | "description" | "body";
+type ConfigTab = "headers" | "params" | "auth" | "inputs" | "output" | "interceptor" | "description" | "body";
 
 interface ParsedCurl {
   method: string;
@@ -587,6 +587,8 @@ export default function ApiExplorerPage() {
     setReqAuthConfig,
     reqParserScript,
     setReqParserScript,
+    reqInterceptorScript,
+    setReqInterceptorScript,
     reqInputs,
     setReqInputs,
     reqOutputs,
@@ -1049,6 +1051,7 @@ export default function ApiExplorerPage() {
             value: reqAuthConfig.value,
             authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId)
           },
+          requestInterceptorScript: reqInterceptorScript,
           inputs: reqInputs,
           environmentId: selectedEnvCloudId
         })
@@ -1235,6 +1238,7 @@ export default function ApiExplorerPage() {
             value: reqAuthConfig.value,
             authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId)
           },
+          requestInterceptorScript: reqInterceptorScript,
           inputs: reqInputs,
           environmentId: selectedEnvCloudId
         })
@@ -1269,6 +1273,7 @@ export default function ApiExplorerPage() {
     { id: "auth", label: "Auth" },
     { id: "inputs", label: detectedInputs.length ? `Input (${detectedInputs.length})` : "Input" },
     { id: "output", label: reqOutputs.length ? `Output (${reqOutputs.length})` : "Output" },
+    { id: "interceptor", label: "Interceptor" },
     { id: "description", label: "Description" },
     { id: "body", label: "Body" },
   ];
@@ -1778,6 +1783,41 @@ export default function ApiExplorerPage() {
                         theme="vs-dark"
                         value={reqParserScript}
                         onChange={(val) => setReqParserScript(val || "")}
+                        options={{
+                          minimap: { enabled: false },
+                          fontSize: 12,
+                          lineNumbers: "on",
+                          scrollbar: { vertical: "auto", horizontal: "hidden" },
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {configTab === "interceptor" && (
+                  <div className="flex flex-col h-full">
+                    <div className="px-4 pt-3 pb-2 flex-shrink-0">
+                      <span className="text-[11px] text-mute">
+                        Runs after environment-variable and dynamic-token (<code className="font-mono">{"{{$date...}}"}</code>) interpolation and
+                        after auth resolution, right before the request is sent. Mutate <code className="font-mono">request.headers</code>,{" "}
+                        <code className="font-mono">request.params</code>, <code className="font-mono">request.body</code> (raw string) or{" "}
+                        <code className="font-mono">request.url</code> — these are applied to the outgoing request.{" "}
+                        <code className="font-mono">request.method</code>/<code className="font-mono">request.bodyType</code> are read-only context.{" "}
+                        <code className="font-mono">env</code> exposes the active environment&apos;s variables (read-only). Use{" "}
+                        <code className="font-mono">crypto.hmac(algorithm, secret, message, encoding?)</code>,{" "}
+                        <code className="font-mono">crypto.hash(algorithm, message, encoding?)</code>, and{" "}
+                        <code className="font-mono">crypto.base64Encode/base64Decode(value)</code> for signing (algorithm: sha256/sha1/sha512/md5,
+                        encoding: hex default or base64). Use <code className="font-mono">request.params</code> for query values — there&apos;s no{" "}
+                        <code className="font-mono">URL</code>/<code className="font-mono">URLSearchParams</code> global available.
+                      </span>
+                    </div>
+                    <div className="flex-1 mx-4 mb-4 rounded-lg overflow-hidden border border-line">
+                      <Editor
+                        height="100%"
+                        language="javascript"
+                        theme="vs-dark"
+                        value={reqInterceptorScript}
+                        onChange={(val) => setReqInterceptorScript(val || "")}
                         options={{
                           minimap: { enabled: false },
                           fontSize: 12,

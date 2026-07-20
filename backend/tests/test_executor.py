@@ -1,4 +1,6 @@
 import re
+import hmac
+import hashlib
 import pytest
 from services.executor import interpolate_variables, resolve_input_bindings, extract_jwt_expiry, resolve_request
 from datetime import datetime, timedelta, timezone
@@ -96,6 +98,38 @@ async def test_resolve_request():
     assert "@" in result["params"]["q"]
     assert re.fullmatch(r'\{"tracking_id": "FLX-[1-9]\d{3}", "ref": "T-1"\}', result["body"])
     assert re.fullmatch(r"Bearer tok-[1-9]\d{3}", result["headers"]["Authorization"])
+
+async def test_resolve_request_with_interceptor_hmac_header():
+    result = await resolve_request({
+        "url": "https://api.example.com/orders",
+        "method": "POST",
+        "headers": [],
+        "queryParams": [],
+        "bodyType": "JSON",
+        "body": '{"amount":100}',
+        "authType": "NONE",
+        "authConfig": {},
+        "requestInterceptorScript": (
+            "request.headers['X-Signature'] = crypto.hmac('sha256', 'my-secret', request.body, 'hex');"
+        ),
+    }, None)
+
+    expected = hmac.new(b"my-secret", b'{"amount":100}', hashlib.sha256).hexdigest()
+    assert result["headers"]["X-Signature"] == expected
+
+async def test_resolve_request_interceptor_error_raises():
+    with pytest.raises(ValueError, match="Request Interceptor Execution Failed"):
+        await resolve_request({
+            "url": "https://api.example.com/orders",
+            "method": "GET",
+            "headers": [],
+            "queryParams": [],
+            "bodyType": "NONE",
+            "body": "",
+            "authType": "NONE",
+            "authConfig": {},
+            "requestInterceptorScript": "request.headers['X'] = crypto.hmac('not-an-algo', 'k', 'm');",
+        }, None)
 
 def test_extract_jwt_expiry_fallback():
     # Invalid token should fallback to 1 hour from now

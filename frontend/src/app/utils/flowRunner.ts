@@ -279,6 +279,7 @@ const executeRequestConfig = async (
       authFunctionId: deps.resolveAuthFunctionCloudId(authConfig?.authFunctionId),
     },
     responseParserScript: request.responseParserScript || "",
+    requestInterceptorScript: request.requestInterceptorScript || "",
     inputs: Array.from(bindings.values()),
     outputs: request.outputs || [],
     environmentId: deps.environmentId,
