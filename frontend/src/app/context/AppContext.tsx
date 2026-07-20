@@ -9,6 +9,7 @@ import { scanInputNames } from "../utils/requestTokens";
 import type { Flow } from "../utils/flowTypes";
 import { generateDuplicateName } from "../utils/uniqueName";
 import { useBackendStatus } from "./BackendStatusContext";
+import { isTauri } from "../utils/tauri";
 
 const VPS_API_URL = process.env.NEXT_PUBLIC_VPS_API_URL ||
   (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://qa-tools-api.lixionary.com');
@@ -1111,6 +1112,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem("lixionary_token");
     localStorage.removeItem("lixionary_refresh_token");
     localStorage.removeItem("lixionary_user");
+    localStorage.removeItem("oauth_state");
+    if (isTauri()) {
+      // Flush any stale code sitting in the sidecar's single-slot OAuth relay
+      // mailbox so a leftover from this session can't poison the next sign-in
+      // attempt's very first poll (see login/page.tsx's onGoogleLogin).
+      fetch(`${LOCAL_API_URL}/api/auth-bridge/code`).catch(() => {});
+    }
     handleDisconnectBrowser();
     router.push("/");
   };
