@@ -70,6 +70,16 @@ export default function LoginPage() {
         );
       }
 
+      // Flush any stale code left in the sidecar's single-slot mailbox by an
+      // earlier abandoned/overlapping attempt (e.g. picked the wrong account,
+      // then retried) — otherwise the very first poll below can pop that
+      // leftover instead of the one this attempt is about to produce.
+      try {
+        await fetch(`${LOCAL_API_URL}/api/auth-bridge/code`);
+      } catch {
+        // already confirmed reachable above — a transient failure here is harmless
+      }
+
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("open_external", { url: authUrl });
 
@@ -84,7 +94,12 @@ export default function LoginPage() {
           const res = await fetch(`${LOCAL_API_URL}/api/auth-bridge/code`);
           if (res.ok) {
             const data = await res.json();
-            if (!data.pending && data.code) {
+            // A code whose state doesn't match ours can only be stale leftover
+            // from another attempt (state is generated locally, then echoed
+            // back verbatim by Google) — discard it and keep waiting for ours,
+            // rather than hard-failing the user out of a flow that's still in
+            // progress.
+            if (!data.pending && data.code && data.state === localStorage.getItem("oauth_state")) {
               picked = data;
               break;
             }
@@ -97,9 +112,6 @@ export default function LoginPage() {
       if (pollCancelledRef.current) return;
       if (!picked) {
         throw new Error("Timed out waiting for the browser sign-in to complete. Please try again.");
-      }
-      if (picked.state !== localStorage.getItem("oauth_state")) {
-        throw new Error("Sign-in state mismatch — please try signing in again.");
       }
 
       await handleLogin(picked.code);
