@@ -1,6 +1,8 @@
+import hmac
+import hashlib
 import pytest
 import asyncio
-from services.auth_sandbox import run_unsafe_auth_script, run_unsafe_response_parser
+from services.auth_sandbox import run_unsafe_auth_script, run_unsafe_response_parser, run_unsafe_request_interceptor
 
 @pytest.mark.asyncio
 async def test_run_unsafe_auth_script_success():
@@ -117,3 +119,91 @@ async def test_run_unsafe_response_parser_script_error_raises():
 
     with pytest.raises(RuntimeError):
         await run_unsafe_response_parser(body, headers, script)
+
+@pytest.mark.asyncio
+async def test_run_unsafe_request_interceptor_mutates_headers_and_body():
+    request_obj = {
+        "url": "https://api.example.com/orders",
+        "method": "POST",
+        "headers": {"Content-Type": "application/json"},
+        "params": {},
+        "body": '{"amount":100}',
+        "bodyType": "JSON",
+    }
+    script = """
+    const parsed = JSON.parse(request.body);
+    parsed.extra = "added";
+    request.body = JSON.stringify(parsed);
+    request.headers["X-Custom"] = "yes";
+    """
+    result = await run_unsafe_request_interceptor(script, request_obj, {})
+    assert result["headers"]["X-Custom"] == "yes"
+    assert result["headers"]["Content-Type"] == "application/json"
+    assert result["body"] == '{"amount":100,"extra":"added"}'
+    assert result["url"] == "https://api.example.com/orders"
+
+@pytest.mark.asyncio
+async def test_run_unsafe_request_interceptor_hmac_matches_python():
+    request_obj = {
+        "url": "https://api.example.com/orders",
+        "method": "POST",
+        "headers": {},
+        "params": {},
+        "body": "payload-body",
+        "bodyType": "RAW",
+    }
+    script = "request.headers['X-Signature'] = crypto.hmac('sha256', env.SECRET, request.body, 'hex');"
+    result = await run_unsafe_request_interceptor(script, request_obj, {"SECRET": "shh"})
+
+    expected = hmac.new(b"shh", b"payload-body", hashlib.sha256).hexdigest()
+    assert result["headers"]["X-Signature"] == expected
+
+@pytest.mark.asyncio
+async def test_run_unsafe_request_interceptor_base64_roundtrip():
+    request_obj = {
+        "url": "https://api.example.com/orders",
+        "method": "GET",
+        "headers": {},
+        "params": {"q": "abc"},
+        "body": "",
+        "bodyType": "NONE",
+    }
+    script = """
+    const encoded = crypto.base64Encode(request.params.q);
+    request.params.encoded = encoded;
+    request.params.roundtrip = crypto.base64Decode(encoded);
+    """
+    result = await run_unsafe_request_interceptor(script, request_obj, {})
+    assert result["params"]["roundtrip"] == "abc"
+
+@pytest.mark.asyncio
+async def test_run_unsafe_request_interceptor_invalid_algorithm_raises():
+    request_obj = {
+        "url": "https://api.example.com",
+        "method": "GET",
+        "headers": {},
+        "params": {},
+        "body": "",
+        "bodyType": "NONE",
+    }
+    script = "request.headers['X'] = crypto.hmac('not-an-algo', 'secret', 'msg');"
+    with pytest.raises(RuntimeError):
+        await run_unsafe_request_interceptor(script, request_obj, {})
+
+@pytest.mark.asyncio
+async def test_run_unsafe_request_interceptor_method_and_bodytype_readonly():
+    request_obj = {
+        "url": "https://api.example.com",
+        "method": "GET",
+        "headers": {},
+        "params": {},
+        "body": "",
+        "bodyType": "NONE",
+    }
+    script = """
+    request.method = "DELETE";
+    request.bodyType = "JSON";
+    """
+    result = await run_unsafe_request_interceptor(script, request_obj, {})
+    assert "method" not in result
+    assert "bodyType" not in result
