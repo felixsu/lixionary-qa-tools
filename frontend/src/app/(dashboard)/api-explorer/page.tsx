@@ -6,7 +6,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Send, Plus, Trash2, Share2, ChevronDown, ChevronRight,
   Sparkles, Code2, Copy, Check, X, CheckCircle2, AlignLeft, Minimize2,
-  PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil, AlertCircle, Wand2
+  PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil, AlertCircle, Wand2,
+  Download, Upload
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, findRequestInTree, findRequestOwnerCollection, findAncestorPathToRequest } from "../../context/AppContext";
@@ -16,6 +17,13 @@ import { Modal, ModalFooter } from "../../components/Modal";
 import MarkdownContent from "../../components/guide/MarkdownContent";
 import { confirmDialog } from "../../utils/confirmDialog";
 import { scanInputNames } from "../../utils/requestTokens";
+import {
+  serializeCollectionForExport,
+  collectionExportFilename,
+  downloadJson,
+  parseCollectionImport,
+  prepareImportedCollection,
+} from "../../utils/collectionTransfer";
 
 type ConfigTab = "headers" | "params" | "auth" | "inputs" | "output" | "description" | "body";
 
@@ -164,6 +172,7 @@ interface CollectionNodeProps {
   handleRenameNode: (nodeId: string, nodeType: "request" | "collection", newName: string) => Promise<void>;
   handleDuplicateRequest: (req: any) => Promise<void>;
   handleCopyId: (id: string) => void;
+  handleExportCollection: (node: any) => void;
   copiedId: string | null;
   methodStyle: (method: string) => React.CSSProperties;
   expandedFolders: Record<string, boolean>;
@@ -189,6 +198,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
   handleRenameNode,
   handleDuplicateRequest,
   handleCopyId,
+  handleExportCollection,
   copiedId,
   methodStyle,
   expandedFolders,
@@ -323,6 +333,18 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
                 {copiedId === node.id ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
               </button>
             )}
+            {depth === 1 && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleExportCollection(node);
+                }}
+                title="Export collection as JSON"
+                className="text-stone hover:text-clay transition"
+              >
+                <Download className="h-3.5 w-3.5" />
+              </button>
+            )}
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -381,6 +403,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
               handleRenameNode={handleRenameNode}
               handleDuplicateRequest={handleDuplicateRequest}
               handleCopyId={handleCopyId}
+              handleExportCollection={handleExportCollection}
               copiedId={copiedId}
               methodStyle={methodStyle}
               expandedFolders={expandedFolders}
@@ -597,10 +620,12 @@ export default function ApiExplorerPage() {
     handleDuplicateRequest,
     handleCreateCollection,
     handleImportCollection,
+    importCollectionTree,
     handleAddCollaborator,
   } = useAppContext();
 
   const [importId, setImportId] = useState("");
+  const importFileRef = useRef<HTMLInputElement>(null);
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareEmail, setShareEmail] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -827,6 +852,29 @@ export default function ApiExplorerPage() {
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
     showToast("Collection ID copied — ready to share");
+  };
+
+  const handleExportCollection = (node: any) => {
+    downloadJson(serializeCollectionForExport(node), collectionExportFilename(node.name));
+    showToast("Collection exported");
+  };
+
+  const onImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const { collection } = parseCollectionImport(await file.text());
+      const prepared = prepareImportedCollection(collection, authFunctions);
+      const created = await importCollectionTree(prepared);
+      setSelectedCollectionId(created.id);
+      showToast(`Imported "${created.name}"`);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      // Reset so picking the same file again re-fires onChange.
+      input.value = "";
+    }
   };
 
   const runGenerateParser = async (promptText: string) => {
@@ -1283,6 +1331,21 @@ export default function ApiExplorerPage() {
           >
             Import
           </button>
+          <input
+            type="file"
+            accept=".json,application/json"
+            ref={importFileRef}
+            onChange={onImportFile}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => importFileRef.current?.click()}
+            title="Import collection from JSON file"
+            className="h-[30px] w-[30px] flex-shrink-0 bg-cream border border-line rounded-md flex items-center justify-center text-graphite hover:bg-hover transition-colors"
+          >
+            <Upload className="h-3.5 w-3.5" />
+          </button>
         </form>
 
         {/* Collections list */}
@@ -1304,6 +1367,7 @@ export default function ApiExplorerPage() {
               handleRenameNode={handleRenameNode}
               handleDuplicateRequest={handleDuplicateRequest}
               handleCopyId={handleCopyId}
+              handleExportCollection={handleExportCollection}
               copiedId={copiedId}
               methodStyle={methodStyle}
               expandedFolders={expandedFolders}

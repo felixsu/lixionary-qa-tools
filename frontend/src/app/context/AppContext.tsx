@@ -491,6 +491,7 @@ interface AppContextType {
   handleDuplicateRequest: (req: RequestItem) => Promise<void>;
   handleCreateCollection: (name: string) => Promise<void>;
   handleImportCollection: (id: string) => Promise<void>;
+  importCollectionTree: (payload: import("../utils/collectionTransfer").CollectionTransferPayload) => Promise<Collection>;
   handleAddCollaborator: (email: string) => Promise<void>;
   handleSaveEnv: (name: string, variables: { key: string; value: string; isSecret: boolean }[], id: string | null) => Promise<void>;
   handleDeleteEnv: (id: string) => Promise<void>;
@@ -2381,6 +2382,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   };
 
+  // Creates a new root collection from a full tree payload (file import).
+  // The payload must already carry fresh child/request ids and have unresolvable
+  // authFunctionId refs nulled — the sync engine defers the cloud push of any
+  // collection whose auth references can't be resolved.
+  const importCollectionTree = async (
+    payload: import("../utils/collectionTransfer").CollectionTransferPayload
+  ): Promise<Collection> => {
+    const result = await apiCall("/api/local-store/collection", {
+      method: "POST",
+      body: JSON.stringify({
+        payload: {
+          name: payload.name,
+          description: payload.description || "",
+          requests: payload.requests || [],
+          children: payload.children || [],
+        },
+      }),
+    });
+    await fetchCollections();
+    triggerSync(["collection"]);
+    return {
+      id: result.localId,
+      cloudId: result.cloudId,
+      name: result.name,
+      description: result.description,
+      requests: result.requests || [],
+      children: result.children || [],
+    };
+  };
+
   const handleCreateCollection = async (name: string) => {
     try {
       const result = await createCollection(name);
@@ -2738,6 +2769,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         handleDuplicateRequest,
         handleCreateCollection,
         handleImportCollection,
+        importCollectionTree,
         handleAddCollaborator,
         handleSaveEnv,
         handleDeleteEnv,
