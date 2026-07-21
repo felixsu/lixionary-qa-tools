@@ -32,6 +32,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# No secrets in this one — it's the tracked, single-source-of-truth config
+# for the isolated dev-flavor Tauri app (see .env.devflavor's own header).
+!.env.devflavor
 
 # vercel
 .vercel
