@@ -2,6 +2,7 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from bson import ObjectId
+from bson.errors import InvalidId
 
 from db.mongo import MongoDB
 from routes.auth import get_current_user
@@ -14,6 +15,15 @@ from services.sync_versioning import (
 )
 
 router = APIRouter(prefix="/api/collections", tags=["collections"])
+
+def parse_object_id(id: str) -> ObjectId:
+    # Client-supplied ids (e.g. a pasted local-store UUID, or a stale/garbled
+    # value) can be the wrong shape entirely — surface a clean 400 instead of
+    # letting bson's InvalidId crash the request with a bare 500.
+    try:
+        return ObjectId(id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail=f"'{id}' is not a valid collection id")
 
 class KeyValueSchema(BaseModel):
     key: str
@@ -159,7 +169,7 @@ async def create_collection(
 @router.get("/{id}")
 async def get_collection_by_id(id: str, current_user: dict = Depends(get_current_user)):
     col = MongoDB.get_collection("collections")
-    doc = await col.find_one({"_id": ObjectId(id)})
+    doc = await col.find_one({"_id": parse_object_id(id)})
     if not doc:
         raise HTTPException(status_code=404, detail="Collection not found")
         
@@ -173,7 +183,7 @@ async def update_collection(
     device_id: str = Depends(get_device_id),
 ):
     col = MongoDB.get_collection("collections")
-    doc = await col.find_one({"_id": ObjectId(id)})
+    doc = await col.find_one({"_id": parse_object_id(id)})
     if not doc:
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -203,7 +213,7 @@ async def update_collection(
         update_fields["children"] = processed_children
 
     updated_doc = await apply_versioned_update(
-        col, ObjectId(id), update_fields,
+        col, parse_object_id(id), update_fields,
         device_id=device_id,
         expected_version=payload.expected_version,
         force=payload.force,
@@ -218,7 +228,8 @@ async def update_collection(
 @router.post("/{id}/collaborators")
 async def add_collaborator(id: str, payload: AddCollaboratorPayload, current_user: dict = Depends(get_current_user)):
     col = MongoDB.get_collection("collections")
-    doc = await col.find_one({"_id": ObjectId(id)})
+    oid = parse_object_id(id)
+    doc = await col.find_one({"_id": oid})
     if not doc:
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -249,11 +260,11 @@ async def add_collaborator(id: str, payload: AddCollaboratorPayload, current_use
         return {"message": "User is already a collaborator", "collection": serialize_doc(doc)}
 
     await col.update_one(
-        {"_id": ObjectId(id)},
+        {"_id": oid},
         {"$addToSet": {"collaboratorIds": collab_uid}}
     )
-    
-    updated_doc = await col.find_one({"_id": ObjectId(id)})
+
+    updated_doc = await col.find_one({"_id": oid})
     return {"message": "Collaborator added successfully", "collection": serialize_doc(updated_doc)}
 
 @router.delete("/{id}")
@@ -263,7 +274,8 @@ async def delete_collection(
     device_id: str = Depends(get_device_id),
 ):
     col = MongoDB.get_collection("collections")
-    doc = await col.find_one({"_id": ObjectId(id)})
+    oid = parse_object_id(id)
+    doc = await col.find_one({"_id": oid})
     if not doc:
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -271,5 +283,5 @@ async def delete_collection(
     if doc["ownerId"] != uid:
         raise HTTPException(status_code=403, detail="Only the owner can delete this collection")
 
-    updated = await soft_delete(col, ObjectId(id), device_id=device_id)
+    updated = await soft_delete(col, oid, device_id=device_id)
     return {"message": "Collection deleted successfully", **sync_state_projection(updated)}

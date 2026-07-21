@@ -2452,7 +2452,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const imported = localRecords.find((r: any) => r.cloudId === id);
       if (imported) setSelectedCollectionId(imported.localId);
     } catch (e: any) {
-      throw new Error(`Import failed: ${e.message}`);
+      throw new Error(`Connect failed: ${e.message}`);
     }
   };
 
