@@ -7,7 +7,7 @@ import {
   Send, Plus, Trash2, Share2, ChevronDown, ChevronRight,
   Sparkles, Code2, Copy, Check, X, CheckCircle2, AlignLeft, Minimize2,
   PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil, AlertCircle, Wand2,
-  Download, Upload
+  Upload
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, findRequestInTree, findRequestOwnerCollection, findAncestorPathToRequest } from "../../context/AppContext";
@@ -346,7 +346,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
                 title="Export collection as JSON"
                 className="text-stone hover:text-clay transition"
               >
-                <Download className="h-3.5 w-3.5" />
+                <Share2 className="h-3.5 w-3.5" />
               </button>
             )}
             <button
@@ -834,7 +834,7 @@ export default function ApiExplorerPage() {
     try {
       await handleImportCollection(importId);
       setImportId("");
-      showToast("Collection imported");
+      showToast("Collection connected");
     } catch (err: any) {
       alert(err.message);
     }
@@ -1325,11 +1325,11 @@ export default function ApiExplorerPage() {
           </div>
         </div>
 
-        {/* Import bar */}
-        <form onSubmit={onImportSubmit} className="px-3 py-2.5 border-b border-line flex gap-1.5 flex-shrink-0" style={{ display: sidebarCollapsed ? "none" : undefined }}>
+        {/* Connect-by-ID bar */}
+        <form onSubmit={onImportSubmit} className="px-3 pt-2.5 pb-1.5 flex gap-1.5 flex-shrink-0" style={{ display: sidebarCollapsed ? "none" : undefined }}>
           <input
             type="text"
-            placeholder="Import by collection ID…"
+            placeholder="Connect collection by ID…"
             value={importId}
             onChange={(e) => setImportId(e.target.value)}
             className="flex-1 h-[30px] bg-cream border border-line rounded-md px-2.5 text-xs text-graphite outline-none focus:border-clay"
@@ -1338,8 +1338,12 @@ export default function ApiExplorerPage() {
             type="submit"
             className="h-[30px] px-2.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-hover transition-colors"
           >
-            Import
+            Connect
           </button>
+        </form>
+
+        {/* JSON-file import */}
+        <div className="px-3 pb-2.5 border-b border-line flex-shrink-0" style={{ display: sidebarCollapsed ? "none" : undefined }}>
           <input
             type="file"
             accept=".json,application/json"
@@ -1350,12 +1354,11 @@ export default function ApiExplorerPage() {
           <button
             type="button"
             onClick={() => importFileRef.current?.click()}
-            title="Import collection from JSON file"
-            className="h-[30px] w-[30px] flex-shrink-0 bg-cream border border-line rounded-md flex items-center justify-center text-graphite hover:bg-hover transition-colors"
+            className="w-full flex items-center justify-center gap-1 py-1.5 px-1.5 border border-dashed border-line rounded-md text-[10px] text-mute hover:border-clay hover:text-clay transition-colors"
           >
-            <Upload className="h-3.5 w-3.5" />
+            <Upload className="h-3 w-3" /> Import from JSON file
           </button>
-        </form>
+        </div>
 
         {/* Collections list */}
         <div className="flex-1 overflow-y-auto p-2" style={{ display: sidebarCollapsed ? "none" : undefined }}>
