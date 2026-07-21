@@ -325,12 +325,16 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleCopyId(node.id);
+                  if (!node.cloudId) {
+                    alert("This collection hasn't finished syncing yet — try again in a moment.");
+                    return;
+                  }
+                  handleCopyId(node.cloudId);
                 }}
                 title="Copy collection ID"
                 className="text-stone hover:text-clay transition"
               >
-                {copiedId === node.id ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                {copiedId === node.cloudId ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
               </button>
             )}
             {depth === 1 && (
