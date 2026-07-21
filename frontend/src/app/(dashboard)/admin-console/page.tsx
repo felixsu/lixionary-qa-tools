@@ -44,6 +44,8 @@ export default function AdminConsolePage() {
   const { user, apiCall } = useAppContext();
   const router = useRouter();
 
+  const [activeTab, setActiveTab] = useState<"collections" | "prompts">("collections");
+
   const [collections, setCollections] = useState<Collection[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
@@ -197,14 +199,14 @@ export default function AdminConsolePage() {
 
   return (
     <div className="h-full flex flex-col overflow-hidden bg-cream">
-      {/* Header Tabs */}
+      {/* Header */}
       <div className="h-14 flex items-center justify-between px-6 border-b border-line flex-shrink-0 bg-cream">
         <h2 className="text-[13px] font-semibold text-graphite uppercase tracking-wider">
           Admin Console
         </h2>
 
         <button
-          onClick={loadData}
+          onClick={() => (activeTab === "collections" ? loadData() : loadBasePrompt())}
           disabled={isLoading}
           className="h-8 w-8 rounded-lg border border-line flex items-center justify-center hover:bg-panel text-stone hover:text-ink transition-colors disabled:opacity-50"
           title="Refresh data"
@@ -213,167 +215,198 @@ export default function AdminConsolePage() {
         </button>
       </div>
 
+      {/* Tab Selector */}
+      <div className="flex border-b border-line bg-panel/30 flex-shrink-0 px-6">
+        <button
+          type="button"
+          onClick={() => setActiveTab("collections")}
+          className={`py-2.5 px-4 text-xs font-semibold border-b-2 transition-all cursor-pointer ${
+            activeTab === "collections"
+              ? "border-clay text-clay"
+              : "border-transparent text-stone hover:text-graphite"
+          }`}
+        >
+          Collection management
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("prompts")}
+          className={`py-2.5 px-4 text-xs font-semibold border-b-2 transition-all cursor-pointer ${
+            activeTab === "prompts"
+              ? "border-clay text-clay"
+              : "border-transparent text-stone hover:text-graphite"
+          }`}
+        >
+          Prompt configuration
+        </button>
+      </div>
+
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto p-6">
-        {errorMsg && (
-          <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-danger/30 bg-danger-soft p-4 text-xs text-danger font-semibold max-w-2xl">
-            <AlertCircle className="h-4 w-4 flex-shrink-0" />
-            <p>{errorMsg}</p>
-          </div>
-        )}
-
-        {/* AI Settings */}
-        <div className="mb-6 max-w-4xl border border-line rounded-xl bg-cream overflow-hidden shadow-sm">
-          <div className="px-5 py-4 border-b border-line flex items-center gap-2.5">
-            <Sparkles className="h-4 w-4 text-clay flex-shrink-0" />
-            <div>
-              <h4 className="text-sm font-bold text-ink">AI description base prompt</h4>
-              <p className="text-[11px] text-stone mt-0.5">
-                Base system prompt used when AI improves a request description. Final prompt = this
-                base prompt + the request&apos;s method, URL, body, inputs and outputs.
-              </p>
-            </div>
-            {basePromptIsDefault ? (
-              <span className="ml-auto text-[10px] uppercase font-bold tracking-wider text-stone bg-panel border border-line rounded px-2 py-1 flex-shrink-0">
-                Default
-              </span>
-            ) : (
-              <span className="ml-auto text-[10px] uppercase font-bold tracking-wider text-clay bg-clay/10 border border-clay/30 rounded px-2 py-1 flex-shrink-0">
-                Custom
-              </span>
-            )}
-          </div>
-          <div className="px-5 py-4 space-y-3">
-            <textarea
-              rows={8}
-              value={basePrompt}
-              onChange={(e) => setBasePrompt(e.target.value)}
-              placeholder="Base system prompt for AI description improvement…"
-              className="w-full bg-panel border border-line rounded-lg px-3 py-2.5 text-xs text-ink font-mono leading-relaxed placeholder-mute focus:outline-none focus:border-clay resize-y"
-            />
-            <div className="flex items-center gap-3">
-              <button
-                onClick={handleSaveBasePrompt}
-                disabled={isSavingPrompt}
-                className="px-4 py-2 bg-clay hover:bg-clay-dark text-white rounded-lg text-xs font-bold transition-all disabled:opacity-50"
-              >
-                {isSavingPrompt ? "Saving…" : "Save prompt"}
-              </button>
-              <span className="text-[11px] text-mute">
-                Saving an empty prompt reverts to the built-in default.
-                {!basePromptIsDefault && basePromptUpdatedByName ? ` Last edited by ${basePromptUpdatedByName}.` : ""}
-              </span>
-              {promptStatus && (
-                <span
-                  className={`ml-auto text-[11px] font-bold ${
-                    promptStatus.kind === "success" ? "text-sage" : "text-danger"
-                  }`}
-                >
-                  {promptStatus.msg}
+        {activeTab === "prompts" && (
+          <div className="mb-6 max-w-4xl border border-line rounded-xl bg-cream overflow-hidden shadow-sm">
+            <div className="px-5 py-4 border-b border-line flex items-center gap-2.5">
+              <Sparkles className="h-4 w-4 text-clay flex-shrink-0" />
+              <div>
+                <h4 className="text-sm font-bold text-ink">AI description base prompt</h4>
+                <p className="text-[11px] text-stone mt-0.5">
+                  Base system prompt used when AI improves a request description. Final prompt = this
+                  base prompt + the request&apos;s method, URL, body, inputs and outputs.
+                </p>
+              </div>
+              {basePromptIsDefault ? (
+                <span className="ml-auto text-[10px] uppercase font-bold tracking-wider text-stone bg-panel border border-line rounded px-2 py-1 flex-shrink-0">
+                  Default
+                </span>
+              ) : (
+                <span className="ml-auto text-[10px] uppercase font-bold tracking-wider text-clay bg-clay/10 border border-clay/30 rounded px-2 py-1 flex-shrink-0">
+                  Custom
                 </span>
               )}
             </div>
+            <div className="px-5 py-4 space-y-3">
+              <textarea
+                rows={8}
+                value={basePrompt}
+                onChange={(e) => setBasePrompt(e.target.value)}
+                placeholder="Base system prompt for AI description improvement…"
+                className="w-full bg-panel border border-line rounded-lg px-3 py-2.5 text-xs text-ink font-mono leading-relaxed placeholder-mute focus:outline-none focus:border-clay resize-y"
+              />
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleSaveBasePrompt}
+                  disabled={isSavingPrompt}
+                  className="px-4 py-2 bg-clay hover:bg-clay-dark text-white rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+                >
+                  {isSavingPrompt ? "Saving…" : "Save prompt"}
+                </button>
+                <span className="text-[11px] text-mute">
+                  Saving an empty prompt reverts to the built-in default.
+                  {!basePromptIsDefault && basePromptUpdatedByName ? ` Last edited by ${basePromptUpdatedByName}.` : ""}
+                </span>
+                {promptStatus && (
+                  <span
+                    className={`ml-auto text-[11px] font-bold ${
+                      promptStatus.kind === "success" ? "text-sage" : "text-danger"
+                    }`}
+                  >
+                    {promptStatus.msg}
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
-        </div>
+        )}
 
-        <h3 className="text-[11px] font-bold uppercase tracking-wider text-stone mb-3">
-          Collections
-        </h3>
+        {activeTab === "collections" && (
+          <>
+            {errorMsg && (
+              <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-danger/30 bg-danger-soft p-4 text-xs text-danger font-semibold max-w-2xl">
+                <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                <p>{errorMsg}</p>
+              </div>
+            )}
 
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center py-24 text-center">
-            <div
-              className="h-7 w-7 rounded-full border-2 border-line border-t-clay mb-3"
-              style={{ animation: "spin 0.8s linear infinite" }}
-            />
-            <p className="text-xs text-stone">Loading directory details...</p>
-          </div>
-        ) : collections.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-24 text-center">
-            <Users className="h-10 w-10 text-stone/50 mb-3" />
-            <div className="text-sm font-semibold text-graphite">No collections created</div>
-            <p className="text-xs text-mute max-w-sm mt-1">
-              When users create collection workspaces, they will appear here.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-3 max-w-4xl">
-              {collections.map((col) => {
-                const isExpanded = !!expandedCollections[col.id];
-                return (
-                  <div key={col.id} className="border border-line rounded-xl bg-cream overflow-hidden shadow-sm">
-                    {/* Primary Row */}
-                    <div className="px-5 py-4 flex items-center justify-between hover:bg-hover/40 transition-colors">
-                      <div className="flex items-center gap-3 cursor-pointer flex-1" onClick={() => toggleCollection(col.id)}>
-                        <div className="text-stone">
-                          {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            <h3 className="text-[11px] font-bold uppercase tracking-wider text-stone mb-3">
+              Collections
+            </h3>
+
+            {isLoading ? (
+              <div className="flex flex-col items-center justify-center py-24 text-center">
+                <div
+                  className="h-7 w-7 rounded-full border-2 border-line border-t-clay mb-3"
+                  style={{ animation: "spin 0.8s linear infinite" }}
+                />
+                <p className="text-xs text-stone">Loading directory details...</p>
+              </div>
+            ) : collections.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-24 text-center">
+                <Users className="h-10 w-10 text-stone/50 mb-3" />
+                <div className="text-sm font-semibold text-graphite">No collections created</div>
+                <p className="text-xs text-mute max-w-sm mt-1">
+                  When users create collection workspaces, they will appear here.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3 max-w-4xl">
+                  {collections.map((col) => {
+                    const isExpanded = !!expandedCollections[col.id];
+                    return (
+                      <div key={col.id} className="border border-line rounded-xl bg-cream overflow-hidden shadow-sm">
+                        {/* Primary Row */}
+                        <div className="px-5 py-4 flex items-center justify-between hover:bg-hover/40 transition-colors">
+                          <div className="flex items-center gap-3 cursor-pointer flex-1" onClick={() => toggleCollection(col.id)}>
+                            <div className="text-stone">
+                              {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-bold text-ink">{col.name}</h4>
+                              <p className="text-[11px] text-stone mt-0.5 truncate max-w-md">
+                                {col.description || "No description provided."}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-6">
+                            {/* Owner */}
+                            <div className="text-right">
+                              <span className="text-[10px] uppercase font-bold text-mute tracking-wider block">Owner</span>
+                              <span className="text-xs font-medium text-graphite">{col.owner.email}</span>
+                            </div>
+
+                            {/* Collaborators badge */}
+                            <button
+                              onClick={() => setCollabModalCollection(col)}
+                              className="h-[34px] px-3 bg-panel hover:bg-hover border border-line rounded-lg flex items-center gap-1.5 transition-colors"
+                              title="Manage collaborators"
+                            >
+                              <Users className="h-3.5 w-3.5 text-stone" />
+                              <span className="text-xs font-semibold text-graphite">
+                                {col.collaborators.length}
+                              </span>
+                            </button>
+                          </div>
                         </div>
-                        <div>
-                          <h4 className="text-sm font-bold text-ink">{col.name}</h4>
-                          <p className="text-[11px] text-stone mt-0.5 truncate max-w-md">
-                            {col.description || "No description provided."}
-                          </p>
-                        </div>
-                      </div>
 
-                      <div className="flex items-center gap-6">
-                        {/* Owner */}
-                        <div className="text-right">
-                          <span className="text-[10px] uppercase font-bold text-mute tracking-wider block">Owner</span>
-                          <span className="text-xs font-medium text-graphite">{col.owner.email}</span>
-                        </div>
-
-                        {/* Collaborators badge */}
-                        <button
-                          onClick={() => setCollabModalCollection(col)}
-                          className="h-[34px] px-3 bg-panel hover:bg-hover border border-line rounded-lg flex items-center gap-1.5 transition-colors"
-                          title="Manage collaborators"
-                        >
-                          <Users className="h-3.5 w-3.5 text-stone" />
-                          <span className="text-xs font-semibold text-graphite">
-                            {col.collaborators.length}
-                          </span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Expandable Requests Panel */}
-                    {isExpanded && (
-                      <div className="bg-panel border-t border-line px-5 py-4 space-y-2">
-                        <h5 className="text-[10px] font-bold uppercase tracking-wider text-stone mb-2">
-                          API Requests ({col.requests.length})
-                        </h5>
-                        {col.requests.length === 0 ? (
-                          <div className="text-xs text-mute italic py-2">No API requests in this collection.</div>
-                        ) : (
-                          <div className="space-y-1.5">
-                            {col.requests.map((req) => (
-                              <div key={req.id} className="flex items-center gap-2.5 text-xs py-1.5 px-3 rounded-lg bg-cream border border-line-soft">
-                                <span
-                                  className={`font-bold font-mono px-1.5 py-0.5 rounded text-[10px] ${
-                                    req.method === "GET"
-                                      ? "bg-sage/10 text-sage"
-                                      : req.method === "POST"
-                                      ? "bg-clay/10 text-clay"
-                                      : "bg-stone/10 text-stone"
-                                  }`}
-                                >
-                                  {req.method}
-                                </span>
-                                <span className="font-semibold text-graphite">{req.name}</span>
-                                <span className="text-[11px] text-mute font-mono truncate max-w-lg flex-1">
-                                  {req.url}
-                                </span>
+                        {/* Expandable Requests Panel */}
+                        {isExpanded && (
+                          <div className="bg-panel border-t border-line px-5 py-4 space-y-2">
+                            <h5 className="text-[10px] font-bold uppercase tracking-wider text-stone mb-2">
+                              API Requests ({col.requests.length})
+                            </h5>
+                            {col.requests.length === 0 ? (
+                              <div className="text-xs text-mute italic py-2">No API requests in this collection.</div>
+                            ) : (
+                              <div className="space-y-1.5">
+                                {col.requests.map((req) => (
+                                  <div key={req.id} className="flex items-center gap-2.5 text-xs py-1.5 px-3 rounded-lg bg-cream border border-line-soft">
+                                    <span
+                                      className={`font-bold font-mono px-1.5 py-0.5 rounded text-[10px] ${
+                                        req.method === "GET"
+                                          ? "bg-sage/10 text-sage"
+                                          : req.method === "POST"
+                                          ? "bg-clay/10 text-clay"
+                                          : "bg-stone/10 text-stone"
+                                      }`}
+                                    >
+                                      {req.method}
+                                    </span>
+                                    <span className="font-semibold text-graphite">{req.name}</span>
+                                    <span className="text-[11px] text-mute font-mono truncate max-w-lg flex-1">
+                                      {req.url}
+                                    </span>
+                                  </div>
+                                ))}
                               </div>
-                            ))}
+                            )}
                           </div>
                         )}
                       </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                    );
+                  })}
+                </div>
+            )}
+          </>
         )}
       </div>
 
