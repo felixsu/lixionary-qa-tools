@@ -9,7 +9,9 @@ import { scanInputNames } from "../utils/requestTokens";
 import type { Flow } from "../utils/flowTypes";
 import { generateDuplicateName } from "../utils/uniqueName";
 import { useBackendStatus } from "./BackendStatusContext";
+import { useToast } from "./ToastContext";
 import { isTauri } from "../utils/tauri";
+import { recordNetworkEntry, redactBody } from "../utils/diagnostics";
 
 const VPS_API_URL = process.env.NEXT_PUBLIC_VPS_API_URL ||
   (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://qa-tools-api.lixionary.com');
@@ -521,6 +523,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { localDb } = useBackendStatus();
+  const { showToast } = useToast();
 
   // Authentication State
   const [token, setTokenState] = useState<string | null>(null);
@@ -923,15 +926,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // REST API helpers
   const apiCall = async (path: string, options: RequestInit = {}) => {
+    let startedAt: number | null = null;
+    const isLocal = path.startsWith("/api/browser") || path.startsWith("/api/workspace") || path.startsWith("/api/browser-helper") || path.startsWith("/api/local-store");
+    const baseUrl = isLocal ? LOCAL_API_URL : VPS_API_URL;
+    const fullUrl = `${baseUrl}${path}`;
+
     const makeRequest = async (tok: string | null) => {
+      if (startedAt === null) startedAt = Date.now();
       const headers = {
         "Content-Type": "application/json",
         ...(tok ? { "Authorization": `Bearer ${tok}` } : {}),
         ...(options.headers || {})
       };
-      const isLocal = path.startsWith("/api/browser") || path.startsWith("/api/workspace") || path.startsWith("/api/browser-helper") || path.startsWith("/api/local-store");
-      const baseUrl = isLocal ? LOCAL_API_URL : VPS_API_URL;
-      const fullUrl = `${baseUrl}${path}`;
       return await fetch(fullUrl, { ...options, headers });
     };
 
@@ -986,6 +992,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         handleLogout();
       }
     }
+
+    response.clone().text().then((text) => {
+      recordNetworkEntry({
+        method: options.method || "GET",
+        url: fullUrl,
+        status: response.status,
+        durationMs: startedAt !== null ? Date.now() - startedAt : 0,
+        requestBody: typeof options.body === "string" ? redactBody(options.body) : undefined,
+        responseBody: redactBody(text),
+        timestamp: Date.now(),
+      });
+    }).catch(() => {});
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({ detail: "Unknown error occurred" }));
@@ -1578,7 +1596,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setAnchorElement(null);
           break;
         case "error":
-          alert(`Browser session error: ${msg.message}`);
+          showToast(`Browser session error: ${msg.message}`, { type: "error" });
           setIsBrowserConnected(false);
           fetchUserSessions();
           break;
@@ -1715,19 +1733,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const handleBrowserNavigate = () => {
     if (!browserUrl) {
-      alert("Please enter a URL.");
+      showToast("Please enter a URL.", { type: "error" });
       return;
     }
     // Allow about:blank
     if (browserUrl !== "about:blank") {
       if (!browserUrl.startsWith("http://") && !browserUrl.startsWith("https://")) {
-        alert("URL must start with http:// or https://");
+        showToast("URL must start with http:// or https://", { type: "error" });
         return;
       }
       try {
         new URL(browserUrl);
       } catch {
-        alert("Please enter a valid URL format.");
+        showToast("Please enter a valid URL format.", { type: "error" });
         return;
       }
     }

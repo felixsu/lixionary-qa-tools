@@ -5,13 +5,14 @@ import { createPortal } from "react-dom";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Send, Plus, Trash2, Share2, ChevronDown, ChevronRight,
-  Sparkles, Code2, Copy, Check, X, CheckCircle2, AlignLeft, Minimize2,
+  Sparkles, Code2, Copy, Check, X, AlignLeft, Minimize2,
   PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil, AlertCircle, Wand2,
   Upload
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, findRequestInTree, findRequestOwnerCollection, findAncestorPathToRequest } from "../../context/AppContext";
 import type { InputBinding } from "../../context/AppContext";
+import { useToast } from "../../context/ToastContext";
 import Dropdown from "../../components/Dropdown";
 import { Modal, ModalFooter } from "../../components/Modal";
 import MarkdownContent from "../../components/guide/MarkdownContent";
@@ -208,6 +209,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
   editingName,
   setEditingName,
 }) => {
+  const { showToast } = useToast();
   const [isDragOver, setIsDragOver] = useState(false);
   const isFolderExpanded = expandedFolders[node.id] ?? (depth === 1);
 
@@ -241,7 +243,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
     try {
       await handleMoveNode(nodeId, nodeType, node.id);
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     }
   };
 
@@ -293,7 +295,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
                   try {
                     await handleRenameNode(node.id, "collection", editingName.trim());
                   } catch (err: any) {
-                    alert(err.message);
+                    showToast(err.message, { type: "error" });
                   }
                 }
                 setEditingNodeId(null);
@@ -306,7 +308,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
                 try {
                   await handleRenameNode(node.id, "collection", editingName.trim());
                 } catch (err: any) {
-                  alert(err.message);
+                  showToast(err.message, { type: "error" });
                 }
               }
               setEditingNodeId(null);
@@ -326,7 +328,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
                 onClick={(e) => {
                   e.stopPropagation();
                   if (!node.cloudId) {
-                    alert("This collection hasn't finished syncing yet — try again in a moment.");
+                    showToast("This collection hasn't finished syncing yet — try again in a moment.", { type: "error" });
                     return;
                   }
                   handleCopyId(node.cloudId);
@@ -374,7 +376,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
                 try {
                   await handleDeleteNode(node.id, "collection");
                 } catch (err: any) {
-                  alert(err.message);
+                  showToast(err.message, { type: "error" });
                 }
               }}
               title="Delete collection"
@@ -456,7 +458,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
                           try {
                             await handleRenameNode(req.id, "request", editingName.trim());
                           } catch (err: any) {
-                            alert(err.message);
+                            showToast(err.message, { type: "error" });
                           }
                         }
                         setEditingNodeId(null);
@@ -469,7 +471,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
                         try {
                           await handleRenameNode(req.id, "request", editingName.trim());
                         } catch (err: any) {
-                          alert(err.message);
+                          showToast(err.message, { type: "error" });
                         }
                       }
                       setEditingNodeId(null);
@@ -499,7 +501,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
                           try {
                             await handleDuplicateRequest(req);
                           } catch (err: any) {
-                            alert(err.message);
+                            showToast(err.message, { type: "error" });
                           }
                         }}
                         title="Duplicate request"
@@ -515,7 +517,7 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
                           try {
                             await handleDeleteNode(req.id, "request");
                           } catch (err: any) {
-                            alert(err.message);
+                            showToast(err.message, { type: "error" });
                           }
                         }}
                         title="Delete request"
@@ -648,7 +650,7 @@ export default function ApiExplorerPage() {
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
 
-  const [toast, setToast] = useState<string | null>(null);
+  const { showToast } = useToast();
   const [bodyCopied, setBodyCopied] = useState(false);
   const [responseCopied, setResponseCopied] = useState(false);
   const [curlCopied, setCurlCopied] = useState(false);
@@ -764,17 +766,12 @@ export default function ApiExplorerPage() {
     }));
   };
 
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 2600);
-  };
-
   const onSave = async () => {
     try {
       await handleSaveRequest();
-      showToast("Request saved");
+      showToast("Request saved", { type: "success" });
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     }
   };
 
@@ -796,9 +793,9 @@ export default function ApiExplorerPage() {
       await handleCreateCollection(newColName);
       setNewColName("");
       setShowNewCollectionModal(false);
-      showToast("Collection created");
+      showToast("Collection created", { type: "success" });
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     }
   };
 
@@ -810,7 +807,7 @@ export default function ApiExplorerPage() {
       setShowNewReqModal(false);
       setTargetAddColId(null);
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     }
   };
 
@@ -822,9 +819,9 @@ export default function ApiExplorerPage() {
       setNewSubColName("");
       setShowNewSubColModal(false);
       setTargetAddColId(null);
-      showToast("Sub-collection created");
+      showToast("Sub-collection created", { type: "success" });
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     }
   };
 
@@ -834,9 +831,9 @@ export default function ApiExplorerPage() {
     try {
       await handleImportCollection(importId);
       setImportId("");
-      showToast("Collection connected");
+      showToast("Collection connected", { type: "success" });
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     }
   };
 
@@ -847,9 +844,9 @@ export default function ApiExplorerPage() {
       await handleAddCollaborator(shareEmail);
       setShareEmail("");
       setShowShareModal(false);
-      showToast(`Shared with ${shareEmail}`);
+      showToast(`Shared with ${shareEmail}`, { type: "success" });
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     }
   };
 
@@ -857,12 +854,12 @@ export default function ApiExplorerPage() {
     navigator.clipboard.writeText(id);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
-    showToast("Collection ID copied — ready to share");
+    showToast("Collection ID copied — ready to share", { type: "success" });
   };
 
   const handleExportCollection = (node: any) => {
     downloadJson(serializeCollectionForExport(node), collectionExportFilename(node.name));
-    showToast("Collection exported");
+    showToast("Collection exported", { type: "success" });
   };
 
   const onImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -874,9 +871,9 @@ export default function ApiExplorerPage() {
       const prepared = prepareImportedCollection(collection, authFunctions);
       const created = await importCollectionTree(prepared);
       setSelectedCollectionId(created.id);
-      showToast(`Imported "${created.name}"`);
+      showToast(`Imported "${created.name}"`, { type: "success" });
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     } finally {
       // Reset so picking the same file again re-fires onChange.
       input.value = "";
@@ -897,10 +894,10 @@ export default function ApiExplorerPage() {
       });
       if (result.generatedScript) {
         setReqParserScript(result.generatedScript);
-        showToast("Parser script generated");
+        showToast("Parser script generated", { type: "success" });
       }
     } catch (e: any) {
-      alert(`AI code generation failed: ${e.message}`);
+      showToast(`AI code generation failed: ${e.message}`, { type: "error" });
     } finally {
       setIsGeneratingAiParser(false);
     }
@@ -929,7 +926,7 @@ export default function ApiExplorerPage() {
         setShowImproveModal(true);
       }
     } catch (e: any) {
-      alert(`AI description improvement failed: ${e.message}`);
+      showToast(`AI description improvement failed: ${e.message}`, { type: "error" });
     } finally {
       setIsImprovingDescription(false);
     }
@@ -964,7 +961,7 @@ export default function ApiExplorerPage() {
       setReqAuthType(parsed.authType);
       setReqAuthConfig({ ...reqAuthConfig, ...parsed.authConfig });
     }
-    showToast("Imported from curl");
+    showToast("Imported from curl", { type: "success" });
   };
 
   const formatBody = (minify: boolean) => {
@@ -972,7 +969,7 @@ export default function ApiExplorerPage() {
       const parsed = JSON.parse(reqBody);
       setReqBody(JSON.stringify(parsed, null, minify ? undefined : 2));
     } catch {
-      showToast("Invalid JSON");
+      showToast("Invalid JSON", { type: "error" });
     }
   };
 
@@ -2136,17 +2133,6 @@ export default function ApiExplorerPage() {
         )}
       </div>
 
-      {/* Toast */}
-      {toast && (
-        <div
-          className="fixed bottom-5 right-5 z-50 flex items-center gap-2.5 bg-ink-900 text-cream px-4 py-3 rounded-lg border-l-4 border-sage text-[13px] shadow-[0_4px_16px_rgba(20,20,19,0.24)] max-w-[360px]"
-          style={{ animation: "fadeUp 0.2s ease-out" }}
-        >
-          <CheckCircle2 className="h-4 w-4 text-sage flex-shrink-0" />
-          <span>{toast}</span>
-        </div>
-      )}
-
       {/* Modals */}
       {showNewCollectionModal && (
         <Modal title="Create collection" onClose={() => setShowNewCollectionModal(false)}>
@@ -2250,7 +2236,7 @@ export default function ApiExplorerPage() {
                   {code}
                 </pre>
                 <button
-                  onClick={() => { copyToClipboard(code, setPythonCopied); showToast("Python code copied"); }}
+                  onClick={() => { copyToClipboard(code, setPythonCopied); showToast("Python code copied", { type: "success" }); }}
                   title="Copy code"
                   className="absolute top-3 right-3 h-7 px-2.5 flex items-center gap-1.5 bg-ink-800/80 border border-white/10 rounded-md text-xs font-medium text-cream/70 hover:text-cream hover:bg-ink-700 transition-colors"
                 >
@@ -2397,7 +2383,7 @@ export default function ApiExplorerPage() {
                 onClick={() => {
                   setReqDescription(improvedDraft);
                   setShowImproveModal(false);
-                  showToast("Description updated — review and Save");
+                  showToast("Description updated — review and Save", { type: "success" });
                 }}
                 className="h-10 px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors"
               >

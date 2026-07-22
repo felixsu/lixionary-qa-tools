@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Shield, RefreshCw, X, Play, Users, ChevronRight, ChevronDown, Trash2, Plus, AlertCircle, Sparkles } from "lucide-react";
 import { useAppContext } from "../../context/AppContext";
+import { useToast } from "../../context/ToastContext";
 
 interface UserProfile {
   id: string;
@@ -42,6 +43,7 @@ interface Collection {
 
 export default function AdminConsolePage() {
   const { user, apiCall } = useAppContext();
+  const { showToast } = useToast();
   const router = useRouter();
 
   const [activeTab, setActiveTab] = useState<"collections" | "prompts">("collections");
@@ -172,7 +174,7 @@ export default function AdminConsolePage() {
       const matching = freshCollections.find((c: Collection) => c.id === collabModalCollection.id);
       if (matching) setCollabModalCollection(matching);
     } catch (e: any) {
-      alert(e.message || "Failed to remove collaborator.");
+      showToast(e.message || "Failed to remove collaborator.", { type: "error" });
     }
   };
 

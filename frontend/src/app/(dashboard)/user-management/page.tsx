@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Shield, RefreshCw, Trash2, ShieldCheck, UserCheck, AlertCircle } from "lucide-react";
 import { useAppContext } from "../../context/AppContext";
+import { useToast } from "../../context/ToastContext";
 import { confirmDialog } from "../../utils/confirmDialog";
 
 interface UserProfile {
@@ -18,6 +19,7 @@ interface UserProfile {
 
 export default function UserManagementPage() {
   const { user, apiCall } = useAppContext();
+  const { showToast } = useToast();
   const router = useRouter();
 
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -48,7 +50,7 @@ export default function UserManagementPage() {
   const handleUpdateRole = async (targetUser: UserProfile) => {
     const newRole = targetUser.role === "admin" ? "member" : "admin";
     if (targetUser.id === user?.id) {
-      alert("You cannot change your own role to prevent locking yourself out of administration functions.");
+      showToast("You cannot change your own role to prevent locking yourself out of administration functions.", { type: "error" });
       return;
     }
     if (!(await confirmDialog(`Are you sure you want to change ${targetUser.name || targetUser.email}'s role to ${newRole}?`))) return;
@@ -63,7 +65,7 @@ export default function UserManagementPage() {
         prev.map((u) => (u.id === targetUser.id ? { ...u, role: newRole } : u))
       );
     } catch (e: any) {
-      alert(e.message || "Failed to update user role.");
+      showToast(e.message || "Failed to update user role.", { type: "error" });
     } finally {
       setActionLoadingId(null);
     }
@@ -73,7 +75,7 @@ export default function UserManagementPage() {
   const handleToggleStatus = async (targetUser: UserProfile) => {
     const newDisabled = !targetUser.disabled;
     if (targetUser.id === user?.id) {
-      alert("You cannot disable your own account.");
+      showToast("You cannot disable your own account.", { type: "error" });
       return;
     }
     const actionWord = newDisabled ? "disable" : "enable";
@@ -89,7 +91,7 @@ export default function UserManagementPage() {
         prev.map((u) => (u.id === targetUser.id ? { ...u, disabled: newDisabled } : u))
       );
     } catch (e: any) {
-      alert(e.message || "Failed to toggle user status.");
+      showToast(e.message || "Failed to toggle user status.", { type: "error" });
     } finally {
       setActionLoadingId(null);
     }
@@ -98,7 +100,7 @@ export default function UserManagementPage() {
   // Delete user
   const handleDeleteUser = async (targetUser: UserProfile) => {
     if (targetUser.id === user?.id) {
-      alert("You cannot delete your own account.");
+      showToast("You cannot delete your own account.", { type: "error" });
       return;
     }
     if (!(await confirmDialog(`CAUTION: Are you sure you want to permanently delete the user account for ${targetUser.name || targetUser.email}? This action is irreversible and will close all their active browser sessions.`))) return;
@@ -108,7 +110,7 @@ export default function UserManagementPage() {
       await apiCall(`/api/admin/users/${targetUser.id}`, { method: "DELETE" });
       setUsers((prev) => prev.filter((u) => u.id !== targetUser.id));
     } catch (e: any) {
-      alert(e.message || "Failed to delete user.");
+      showToast(e.message || "Failed to delete user.", { type: "error" });
     } finally {
       setActionLoadingId(null);
     }

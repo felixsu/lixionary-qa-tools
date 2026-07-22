@@ -5,11 +5,12 @@ import {
   Globe, Terminal, Eye, Crosshair, Download, Trash2, Plus, FileCode, Play,
   Save, File, Folder, XCircle, Rows, Lock, X, Layers, Code2, Clipboard, Activity,
   ChevronDown, ChevronUp, RotateCcw, Copy, Check, Mail, Anchor, Loader2, ScanSearch,
-  CheckCircle2, AlertCircle, Sparkles, StopCircle,
+  Sparkles, StopCircle,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
 import type { NetworkLog, NetworkDetails } from "../../context/AppContext";
+import { useToast } from "../../context/ToastContext";
 import Dropdown from "../../components/Dropdown";
 import { confirmDialog } from "../../utils/confirmDialog";
 import { useScreencastFrame } from "../../utils/screencastFrameStore";
@@ -233,7 +234,7 @@ export default function WebExplorerPage() {
         setActiveSessions(e.detail.active_sessions || []);
         setLimitExceededModalOpen(true);
       } else {
-        alert(e.message || "Failed to start browser session");
+        showToast(e.message || "Failed to start browser session", { type: "error" });
       }
     }
   };
@@ -298,19 +299,14 @@ export default function WebExplorerPage() {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
 
-  // Toast (workspace save feedback)
-  const [toast, setToast] = useState<{ msg: string; variant: "success" | "error" } | null>(null);
-  const showToast = (msg: string, variant: "success" | "error" = "success") => {
-    setToast({ msg, variant });
-    setTimeout(() => setToast(null), 2600);
-  };
+  const { showToast } = useToast();
 
   // Surface element-inspection failures (e.g. a click inside an iframe that
   // threw while resolving the frame chain) instead of leaving the click
   // looking like it silently did nothing.
   useEffect(() => {
     if (inspectError) {
-      showToast(`Inspect failed: ${inspectError}`, "error");
+      showToast(`Inspect failed: ${inspectError}`, { type: "error" });
       setInspectError(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -549,7 +545,7 @@ export default function WebExplorerPage() {
         });
         fetchWorkspaceFiles();
       } catch (e: any) {
-        showToast(`Failed to save ${filename}: ${e.message}`, "error");
+        showToast(`Failed to save ${filename}: ${e.message}`, { type: "error" });
       }
     };
     // Chain saves so POSTs never land out of order (e.g. a debounced save
@@ -610,9 +606,9 @@ export default function WebExplorerPage() {
         body: JSON.stringify({ sessionId, filename: selectedWorkspaceFile }),
       });
       setWorkspaceFileContent(data.content || "");
-      showToast("File reset to default boilerplate");
+      showToast("File reset to default boilerplate", { type: "success" });
     } catch (e: any) {
-      showToast(`Failed to reset file: ${e.message}`, "error");
+      showToast(`Failed to reset file: ${e.message}`, { type: "error" });
     } finally {
       setIsWorkspaceLoading(false);
     }
@@ -633,12 +629,12 @@ export default function WebExplorerPage() {
       await fetchWorkspaceFiles();
       setSelectedWorkspaceFile(name);
     } catch (e: any) {
-      alert(`Failed to create file: ${e.message}`);
+      showToast(`Failed to create file: ${e.message}`, { type: "error" });
     }
   };
 
   const handleDeleteFile = async (filename: string) => {
-    if (filename === "main.py") { alert("main.py cannot be deleted."); return; }
+    if (filename === "main.py") { showToast("main.py cannot be deleted.", { type: "error" }); return; }
     if (!(await confirmDialog(`Are you sure you want to delete ${filename}?`))) return;
     if (!sessionId) return;
     // A pending flush after the DELETE would re-create the file (POST creates)
@@ -648,7 +644,7 @@ export default function WebExplorerPage() {
       if (selectedWorkspaceFile === filename) setSelectedWorkspaceFile("main.py");
       await fetchWorkspaceFiles();
     } catch (e: any) {
-      alert(`Failed to delete file: ${e.message}`);
+      showToast(`Failed to delete file: ${e.message}`, { type: "error" });
     }
   };
 
@@ -677,7 +673,7 @@ export default function WebExplorerPage() {
 
   const handleSaveToWorkspace = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!sessionId) { alert("No active session. Start a browser session first."); return; }
+    if (!sessionId) { showToast("No active session. Start a browser session first.", { type: "error" }); return; }
     const code = activeGenCodeTab === "pom" ? generatedPomCode : generatedClientCode;
     if (!code) return;
     let name = saveToWorkspaceFilename.trim();
@@ -693,7 +689,7 @@ export default function WebExplorerPage() {
       setShowSaveToWorkspaceModal(false);
       setSaveToWorkspaceFilename("");
     } catch (err: any) {
-      alert(`Failed to save to workspace: ${err.message}`);
+      showToast(`Failed to save to workspace: ${err.message}`, { type: "error" });
     }
   };
 
@@ -751,7 +747,7 @@ export default function WebExplorerPage() {
     try {
       await apiCall("/api/workspace/stop", { method: "POST" });
     } catch (e: any) {
-      alert(`Failed to stop script: ${e.message}`);
+      showToast(`Failed to stop script: ${e.message}`, { type: "error" });
     }
   };
 
@@ -894,9 +890,10 @@ export default function WebExplorerPage() {
       });
       const renamed = (res.added || []).filter((a: any) => a.requested !== a.recorded);
       if (renamed.length > 0) {
-        alert(
-          `Recorded ${res.count} methods. ${renamed.length} renamed to avoid duplicates:\n` +
-          renamed.map((a: any) => `${a.requested} → ${a.recorded}`).join("\n")
+        showToast(
+          `Recorded ${res.count} methods. ${renamed.length} renamed to avoid duplicates: ` +
+          renamed.map((a: any) => `${a.requested} → ${a.recorded}`).join(", "),
+          { type: "info" }
         );
       }
       resetPageScan();
@@ -905,7 +902,7 @@ export default function WebExplorerPage() {
         await fetchFileContent("inspection_code/my_page.py");
       }
     } catch (e: any) {
-      alert(e.message || "Failed to record scanned elements.");
+      showToast(e.message || "Failed to record scanned elements.", { type: "error" });
     } finally {
       setIsRecordingScan(false);
     }
@@ -940,7 +937,7 @@ export default function WebExplorerPage() {
         await fetchFileContent("inspection_code/my_page.py");
       }
     } catch (e: any) {
-      alert(e.message || "Failed to record element to POM class.");
+      showToast(e.message || "Failed to record element to POM class.", { type: "error" });
     }
   };
 
@@ -948,7 +945,7 @@ export default function WebExplorerPage() {
     e.preventDefault();
     if (!newClassName) return;
     if (pomClasses.includes(newClassName)) {
-      alert("Class name already exists.");
+      showToast("Class name already exists.", { type: "error" });
       return;
     }
     setPomClasses([...pomClasses, newClassName]);
@@ -1185,10 +1182,10 @@ export default function WebExplorerPage() {
     try {
       await navigator.clipboard.writeText(text);
       setPythonCopied(true);
-      showToast("Python code copied");
+      showToast("Python code copied", { type: "success" });
       setTimeout(() => setPythonCopied(false), 1500);
     } catch {
-      showToast("Failed to copy", "error");
+      showToast("Failed to copy", { type: "error" });
     }
   };
 
@@ -1244,7 +1241,7 @@ export default function WebExplorerPage() {
       }
       setShowSaveToCollectionModal(false);
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     } finally {
       setIsSavingToCollection(false);
     }
@@ -2547,23 +2544,6 @@ export default function WebExplorerPage() {
           </ModalShell>
         );
       })()}
-
-      {/* Toast */}
-      {toast && (
-        <div
-          className={`fixed bottom-5 right-5 z-50 flex items-center gap-2.5 bg-ink-900 text-cream px-4 py-3 rounded-lg border-l-4 ${
-            toast.variant === "error" ? "border-red-500" : "border-sage"
-          } text-[13px] shadow-[0_4px_16px_rgba(20,20,19,0.24)] max-w-[360px]`}
-          style={{ animation: "fadeUp 0.2s ease-out" }}
-        >
-          {toast.variant === "error" ? (
-            <AlertCircle className="h-4 w-4 text-red-500 flex-shrink-0" />
-          ) : (
-            <CheckCircle2 className="h-4 w-4 text-sage flex-shrink-0" />
-          )}
-          <span>{toast.msg}</span>
-        </div>
-      )}
 
       {/* New class modal */}
       {showNewClassModal && (

@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { Plus, Trash2, Pencil, X, Clock, CheckCircle2, Circle, RefreshCw, Play } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, AuthFunction } from "../../context/AppContext";
+import { useToast } from "../../context/ToastContext";
 import { confirmDialog } from "../../utils/confirmDialog";
 
 const DEFAULT_SCRIPT = `// Call IAM/OAuth endpoint to get token
@@ -50,6 +51,7 @@ return data.data.access_token;`,
 
 export default function AuthFunctionsPage() {
   const { authFunctions, handleSaveAuthFunc, handleDeleteAuthFunc, apiCall, selectedEnvCloudId } = useAppContext();
+  const { showToast } = useToast();
 
   const [showModal, setShowModal] = useState(false);
   const [name, setName] = useState("");
@@ -119,7 +121,7 @@ export default function AuthFunctionsPage() {
       await handleSaveAuthFunc(name, desc, script, expiresIn ? parseInt(expiresIn, 10) : null, editingId);
       setShowModal(false);
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     }
   };
 
