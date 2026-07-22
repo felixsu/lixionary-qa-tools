@@ -11,7 +11,7 @@ export default function IndexPage() {
   useEffect(() => {
     if (!isLoadingAuth) {
       if (token) {
-        router.replace("/api-explorer");
+        router.replace("/home");
       } else {
         router.replace("/login");
       }

@@ -54,6 +54,7 @@ class RequestDefinitionSchema(BaseModel):
     requestInterceptorScript: Optional[str] = ""
     extractedVariables: List[ExtractedVariableSchema] = []
     lastResponse: Optional[Dict[str, Any]] = None
+    lastRunAt: Optional[str] = None
     description: Optional[str] = ""  # Markdown documentation for the request
     inputs: List[Dict[str, Any]] = []
     outputs: List[str] = []
