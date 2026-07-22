@@ -27,7 +27,7 @@ export default function LoginPage() {
   // Redirect if already logged in
   useEffect(() => {
     if (!isLoadingAuth && token) {
-      router.replace("/api-explorer");
+      router.replace("/home");
     }
   }, [token, isLoadingAuth, router]);
 

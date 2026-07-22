@@ -4,7 +4,7 @@ import React, { useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint, FolderOpen, Cloud, CloudOff, RefreshCw, AlertTriangle, Workflow, ExternalLink } from "lucide-react";
+import { Home, Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint, FolderOpen, Cloud, CloudOff, RefreshCw, AlertTriangle, Workflow, ExternalLink } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import Dropdown from "../components/Dropdown";
 import UpdateBanner from "../components/UpdateBanner";
@@ -14,6 +14,7 @@ import { useNowTick } from "../utils/useNowTick";
 import { useAppVersion } from "../utils/useAppVersion";
 import { useUpdateChecker } from "../utils/useUpdateChecker";
 import { isTauri } from "../utils/tauri";
+import { formatRelativeTime } from "../utils/formatRelativeTime";
 
 type NavEntry =
   | { type: "section"; label: string }
@@ -21,6 +22,8 @@ type NavEntry =
   | { type: "group"; href: string; icon: typeof Send; label: string; children: { href: string; label: string }[] };
 
 const NAV: NavEntry[] = [
+  { type: "section", label: "Home" },
+  { type: "item", href: "/home", icon: Home, label: "Home" },
   { type: "section", label: "QA Tools" },
   { type: "item", href: "/api-explorer", icon: Send, label: "API explorer" },
   { type: "item", href: "/api-studio", icon: Workflow, label: "API Studio" },
@@ -107,17 +110,6 @@ export default function DashboardLayout({
 
   const isActive = (path: string) => pathname === path;
 
-  const formatRelativeTime = (iso: string | null, now: number): string => {
-    if (!iso || !now) return "never";
-    const seconds = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 1000));
-    if (seconds < 10) return "just now";
-    if (seconds < 60) return `${seconds}s ago`;
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.floor(minutes / 60);
-    return `${hours}h ago`;
-  };
-
   const getHeaderTitle = () => {
     if (pathname === "/user-guides/detail") {
       const guideId = searchParams.get("id");
@@ -125,6 +117,8 @@ export default function DashboardLayout({
       return guide ? guide.title : "User guide";
     }
     switch (pathname) {
+      case "/home":
+        return "Home";
       case "/user-guides":
         return "User guides";
       case "/user-guide-admin":

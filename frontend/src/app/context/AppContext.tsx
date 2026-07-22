@@ -78,6 +78,8 @@ export interface RequestItem {
   // Markdown documentation for the request (never sent to the executor).
   description?: string;
   lastResponse?: any;
+  // ISO timestamp of the last successful send — powers the Home page's Recent activity widget.
+  lastRunAt?: string;
 }
 
 export interface Collection {
@@ -1106,7 +1108,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setUser(data.user);
       localStorage.setItem("lixionary_token", data.token);
       localStorage.setItem("lixionary_user", JSON.stringify(data.user));
-      router.push("/api-explorer");
+      router.push("/home");
     } catch (e: any) {
       throw new Error(`Login failed: ${e.message}`);
     }
@@ -2010,7 +2012,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const col = collections.find(c => findRequestInTree(c, selectedRequestId) !== null);
           const req = col ? findRequestInTree(col, selectedRequestId) : null;
           if (col && req) {
-            const updatedCol = updateRequestInTree(col, selectedRequestId, { ...req, lastResponse: result });
+            const updatedCol = updateRequestInTree(col, selectedRequestId, { ...req, lastResponse: result, lastRunAt: new Date().toISOString() });
             await persistCollectionTree(col.id, { requests: updatedCol.requests, children: updatedCol.children || [] });
           }
         } catch {

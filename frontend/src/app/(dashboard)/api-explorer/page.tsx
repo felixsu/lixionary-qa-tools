@@ -20,6 +20,7 @@ import { Modal, ModalFooter } from "../../components/Modal";
 import MarkdownContent from "../../components/guide/MarkdownContent";
 import { confirmDialog } from "../../utils/confirmDialog";
 import { scanInputNames } from "../../utils/requestTokens";
+import { methodStyle } from "../../utils/methodStyle";
 import {
   serializeCollectionForExport,
   collectionExportFilename,
@@ -136,18 +137,6 @@ const parseCurl = (text: string): ParsedCurl | null => {
   }
 
   return { method, url, headers, body, bodyType, authType, authConfig };
-};
-
-const methodStyle = (m: string): React.CSSProperties => {
-  const map: Record<string, { bg: string; c: string }> = {
-    GET: { bg: "#e3f5e9", c: "#276749" },
-    POST: { bg: "#e3ecff", c: "#1a4db5" },
-    PUT: { bg: "#fff3e0", c: "#9a5c00" },
-    DELETE: { bg: "#fde8e8", c: "#c64545" },
-    PATCH: { bg: "#f3e8ff", c: "#6d28d9" },
-  };
-  const s = map[m] || { bg: "#f0f0ee", c: "#6c6a64" };
-  return { background: s.bg, color: s.c };
 };
 
 const countRequestsInTree = (node: any): number => {
@@ -678,7 +667,7 @@ export default function ApiExplorerPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const { state: searchIndexState } = useSearchIndexStatus();
-  const [configHeight, setConfigHeight] = useState(250);
+  const [configHeight, setConfigHeight] = useState(296);
   const containerRef = useRef<HTMLDivElement>(null);
   const bodyEditorRef = useRef<any>(null);
 
@@ -1296,7 +1285,7 @@ export default function ApiExplorerPage() {
       {/* Collections sidebar */}
       <div
         className="flex-shrink-0 bg-panel border-r border-line flex flex-col overflow-hidden transition-all duration-200"
-        style={{ width: sidebarCollapsed ? 40 : 272 }}
+        style={{ width: sidebarCollapsed ? 40 : 280 }}
       >
         <div className="px-2 py-3.5 border-b border-line flex items-center justify-between flex-shrink-0 gap-1">
           {!sidebarCollapsed && (

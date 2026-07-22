@@ -127,10 +127,10 @@ export default function UserManagementPage() {
             You require administrator privileges to access this user directory.
           </p>
           <button
-            onClick={() => router.replace("/api-explorer")}
+            onClick={() => router.replace("/home")}
             className="px-4 py-2 bg-clay hover:bg-clay-dark text-white rounded-lg text-sm font-medium transition-colors"
           >
-            Back to API explorer
+            Back to Home
           </button>
         </div>
       </div>

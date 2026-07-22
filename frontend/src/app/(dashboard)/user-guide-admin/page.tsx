@@ -54,10 +54,10 @@ export default function UserGuideAdminPage() {
             You require administrator privileges to manage user guides.
           </p>
           <button
-            onClick={() => router.replace("/api-explorer")}
+            onClick={() => router.replace("/home")}
             className="px-4 py-2 bg-clay hover:bg-clay-dark text-white rounded-lg text-sm font-medium transition-colors"
           >
-            Back to API explorer
+            Back to Home
           </button>
         </div>
       </div>

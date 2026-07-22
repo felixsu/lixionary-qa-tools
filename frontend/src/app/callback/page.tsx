@@ -18,11 +18,11 @@ function CallbackContent() {
   const state = searchParams.get("state");
   const isDesktopRelay = !!state && state.endsWith(".desktop");
 
-  // If already logged in, redirect directly to api-explorer — but never for a
+  // If already logged in, redirect directly to home — but never for a
   // desktop relay, which runs in the user's own browser, not the app webview.
   useEffect(() => {
     if (token && !isDesktopRelay) {
-      router.replace("/api-explorer");
+      router.replace("/home");
     }
   }, [token, isDesktopRelay, router]);
 
