@@ -281,9 +281,9 @@ interface AppContextType {
   selectedEnvId: string;
   selectedEnvCloudId: string | null; // cloud Mongo _id of the selected env, once synced — for cloud endpoints that expect one
   setSelectedEnvId: (id: string) => void;
-  fetchEnvironments: () => Promise<void>;
+  fetchEnvironments: () => Promise<Environment[]>;
   authFunctions: AuthFunction[];
-  fetchAuthFunctions: () => Promise<void>;
+  fetchAuthFunctions: () => Promise<AuthFunction[]>;
   resolveAuthFunctionCloudId: (localId?: string | null) => string | null;
   syncConflicts: SyncConflict[];
   resolveSyncConflict: (conflict: SyncConflict, choice: "local" | "cloud") => Promise<void>;
@@ -550,7 +550,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // in-flight guard so overlapping triggers (login + focus + interval) collapse
   // into one pass instead of racing each other.
   const deviceIdRef = useRef<string | null>(null);
-  const syncInFlightRef = useRef<boolean>(false);
+  // Holds the in-flight sync promise (not just a boolean) so overlapping
+  // triggers await the same pass instead of one silently resolving with
+  // nothing while the other is still running.
+  const syncInFlightPromiseRef = useRef<Promise<void> | null>(null);
   const lastSyncAttemptRef = useRef<number>(0);
   const [syncConflicts, setSyncConflicts] = useState<SyncConflict[]>([]);
   const [isOnline, setIsOnline] = useState<boolean>(true);
@@ -1023,44 +1026,53 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // since last sync) accumulate in syncConflicts for the SyncConflictModal to
   // resolve — resolved elsewhere or no longer applicable, they're replaced with
   // whatever this pass finds for the same entity types, never silently dropped.
-  const triggerSync = async (entityTypes: import("./syncEngine").EntityType[] = ["environment", "auth_function", "browser_profile", "collection", "flow"]) => {
-    if (syncInFlightRef.current) return;
-    syncInFlightRef.current = true;
-    lastSyncAttemptRef.current = Date.now();
-    setSyncStatus("syncing");
-    try {
-      if (!deviceIdRef.current) {
-        const { deviceId } = await apiCall("/api/local-store/device-id");
-        deviceIdRef.current = deviceId;
-      }
-      const conflicts = await runAllSync(apiCall, deviceIdRef.current!, entityTypes);
-      setSyncConflicts((prev) => [...prev.filter((c) => !entityTypes.includes(c.entityType)), ...conflicts]);
-      // Refetch whichever local state changed so the UI reflects synced content
-      // (new cloudIds, pulled remote edits, FK-remapped references, etc).
-      if (entityTypes.includes("environment")) fetchEnvironments();
-      if (entityTypes.includes("auth_function")) fetchAuthFunctions();
-      if (entityTypes.includes("browser_profile")) fetchProfiles();
-      if (entityTypes.includes("collection")) fetchCollections();
-      if (entityTypes.includes("flow")) fetchFlows();
+  const triggerSync = (entityTypes: import("./syncEngine").EntityType[] = ["environment", "auth_function", "browser_profile", "collection", "flow"]): Promise<void> => {
+    // A sync is already running — await that same pass instead of resolving
+    // immediately with nothing, so callers that need the result (e.g. a
+    // pre-launch resolution retry) don't race it and see stale data.
+    if (syncInFlightPromiseRef.current) return syncInFlightPromiseRef.current;
 
-      // runAllSync deliberately never throws on connectivity issues (each entity
-      // type's pass is independently resilient), so it can't tell us whether the
-      // cloud was actually reachable this pass — probe its lightest endpoint
-      // directly rather than changing that contract.
+    const run = async () => {
+      lastSyncAttemptRef.current = Date.now();
+      setSyncStatus("syncing");
       try {
-        await apiCall("/api/environments/sync-state");
-        setIsOnline(true);
-        setLastSyncAt(new Date().toISOString());
-      } catch {
-        setIsOnline(false);
+        if (!deviceIdRef.current) {
+          const { deviceId } = await apiCall("/api/local-store/device-id");
+          deviceIdRef.current = deviceId;
+        }
+        const conflicts = await runAllSync(apiCall, deviceIdRef.current!, entityTypes);
+        setSyncConflicts((prev) => [...prev.filter((c) => !entityTypes.includes(c.entityType)), ...conflicts]);
+        // Refetch whichever local state changed so the UI reflects synced content
+        // (new cloudIds, pulled remote edits, FK-remapped references, etc).
+        if (entityTypes.includes("environment")) fetchEnvironments();
+        if (entityTypes.includes("auth_function")) fetchAuthFunctions();
+        if (entityTypes.includes("browser_profile")) fetchProfiles();
+        if (entityTypes.includes("collection")) fetchCollections();
+        if (entityTypes.includes("flow")) fetchFlows();
+
+        // runAllSync deliberately never throws on connectivity issues (each entity
+        // type's pass is independently resilient), so it can't tell us whether the
+        // cloud was actually reachable this pass — probe its lightest endpoint
+        // directly rather than changing that contract.
+        try {
+          await apiCall("/api/environments/sync-state");
+          setIsOnline(true);
+          setLastSyncAt(new Date().toISOString());
+        } catch {
+          setIsOnline(false);
+        }
+        setSyncStatus("idle");
+      } catch (e) {
+        console.warn("[sync] sync pass failed", e);
+        setSyncStatus("error");
+      } finally {
+        syncInFlightPromiseRef.current = null;
       }
-      setSyncStatus("idle");
-    } catch (e) {
-      console.warn("[sync] sync pass failed", e);
-      setSyncStatus("error");
-    } finally {
-      syncInFlightRef.current = false;
-    }
+    };
+
+    const promise = run();
+    syncInFlightPromiseRef.current = promise;
+    return promise;
   };
 
   // User resolved a conflict card in SyncConflictModal.
@@ -1156,8 +1168,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (mapped.length && !mapped.some((e) => e.id === selectedEnvId)) {
         setSelectedEnvId(mapped[0].id);
       }
+      return mapped;
     } catch (e) {
       console.error("Failed to fetch environments", e);
+      return [];
     }
   };
 
@@ -1175,8 +1189,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         expiresAt: r.expiresAt,
       }));
       setAuthFunctions(mapped);
+      return mapped;
     } catch (e) {
       console.error("Failed to fetch auth functions", e);
+      return [];
     }
   };
 
@@ -1405,45 +1421,77 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           localStorageData = profile.localStorage ? JSON.parse(profile.localStorage) : null;
         } catch {}
 
-        // The cloud endpoint resolves the auth function id (a path segment, not
-        // optional) as a Mongo _id — skip the token fetch entirely if it hasn't
-        // synced yet rather than send an id the cloud can't parse.
-        const authFunctionCloudId = resolveAuthFunctionCloudId(profile.authFunctionId);
-        if (authFunctionCloudId && profile.authInjection) {
-          try {
-            // Same reasoning for envId — an environment that hasn't synced yet
-            // only has a local id, so omit the param instead.
-            const tokenUrl = selectedEnvCloudId
-              ? `/api/auth-functions/${authFunctionCloudId}/token?envId=${selectedEnvCloudId}`
-              : `/api/auth-functions/${authFunctionCloudId}/token`;
-            const tokenData = await apiCall(tokenUrl);
-            if (tokenData && tokenData.token) {
-              const tokenVal = tokenData.token;
+        if (profile.authFunctionId && profile.authInjection) {
+          // The cloud endpoint resolves the auth function id (a path segment,
+          // not optional) as a Mongo _id — if it hasn't synced yet (e.g. the
+          // auth function or profile was just created), run one scoped sync
+          // pass and retry before giving up, rather than silently skipping
+          // the injection until the next periodic sync (up to 5 minutes).
+          let authFunctionCloudId = resolveAuthFunctionCloudId(profile.authFunctionId);
+          let envCloudId = selectedEnvCloudId;
+          if (!authFunctionCloudId) {
+            await triggerSync(["auth_function", "browser_profile", "environment"]);
+            const [freshAuthFunctions, freshEnvironments] = await Promise.all([
+              fetchAuthFunctions(),
+              fetchEnvironments(),
+            ]);
+            authFunctionCloudId =
+              freshAuthFunctions.find(
+                (af) => af.id === profile.authFunctionId || af.cloudId === profile.authFunctionId
+              )?.cloudId || null;
+            envCloudId = freshEnvironments.find((e) => e.id === selectedEnvId)?.cloudId || envCloudId;
+          }
 
-              const injType = profile.authInjection.type;
-              const injKey = profile.authInjection.key;
-              const domainOrOrigin = profile.authInjection.domainOrOrigin;
+          if (!authFunctionCloudId) {
+            showToast(
+              `Profile "${profile.name}"'s auth-function hook was skipped — the auth function hasn't finished syncing to the cloud yet. Try launching again in a moment.`,
+              { type: "error" }
+            );
+          } else {
+            try {
+              // Same reasoning for envId — an environment that hasn't synced yet
+              // only has a local id, so omit the param instead.
+              const tokenUrl = envCloudId
+                ? `/api/auth-functions/${authFunctionCloudId}/token?envId=${envCloudId}`
+                : `/api/auth-functions/${authFunctionCloudId}/token`;
+              const tokenData = await apiCall(tokenUrl);
+              if (tokenData && tokenData.token) {
+                const tokenVal = tokenData.token;
 
-              if (injType === "cookie") {
-                cookies = cookies.filter((c: any) => c.name !== injKey);
-                cookies.push({ name: injKey, value: tokenVal, domain: domainOrOrigin, path: "/" });
-              } else if (injType === "localStorage") {
-                if (!localStorageData) localStorageData = { origins: [] };
-                if (!localStorageData.origins) localStorageData.origins = [];
-                const targetOrigin = domainOrOrigin.toLowerCase().replace(/\/$/, "");
-                let originEntry = localStorageData.origins.find(
-                  (e: any) => e.origin.toLowerCase().replace(/\/$/, "") === targetOrigin
-                );
-                if (!originEntry) {
-                  originEntry = { origin: domainOrOrigin, localStorage: [] };
-                  localStorageData.origins.push(originEntry);
+                const injType = profile.authInjection.type;
+                const injKey = profile.authInjection.key;
+                const domainOrOrigin = profile.authInjection.domainOrOrigin;
+
+                if (injType === "cookie") {
+                  cookies = cookies.filter((c: any) => c.name !== injKey);
+                  cookies.push({ name: injKey, value: tokenVal, domain: domainOrOrigin, path: "/" });
+                } else if (injType === "localStorage") {
+                  if (!localStorageData) localStorageData = { origins: [] };
+                  if (!localStorageData.origins) localStorageData.origins = [];
+                  const targetOrigin = domainOrOrigin.toLowerCase().replace(/\/$/, "");
+                  let originEntry = localStorageData.origins.find(
+                    (e: any) => e.origin.toLowerCase().replace(/\/$/, "") === targetOrigin
+                  );
+                  if (!originEntry) {
+                    originEntry = { origin: domainOrOrigin, localStorage: [] };
+                    localStorageData.origins.push(originEntry);
+                  }
+                  originEntry.localStorage = originEntry.localStorage.filter((kv: any) => kv.name !== injKey);
+                  originEntry.localStorage.push({ name: injKey, value: tokenVal });
                 }
-                originEntry.localStorage = originEntry.localStorage.filter((kv: any) => kv.name !== injKey);
-                originEntry.localStorage.push({ name: injKey, value: tokenVal });
+              } else {
+                showToast(
+                  `Profile "${profile.name}"'s auth function did not return a token — check the auth function's script.`,
+                  { type: "error" }
+                );
               }
+            } catch (err: any) {
+              console.error("Failed to resolve auth function hook on frontend:", err);
+              showToast(
+                `Failed to resolve auth-function hook for profile "${profile.name}": ${err?.message || err}`,
+                { type: "error" }
+              );
             }
-          } catch (err) {
-            console.error("Failed to resolve auth function hook on frontend:", err);
           }
         }
       }
