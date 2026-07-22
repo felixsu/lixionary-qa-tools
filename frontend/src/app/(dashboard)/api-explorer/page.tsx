@@ -7,12 +7,14 @@ import {
   Send, Plus, Trash2, Share2, ChevronDown, ChevronRight,
   Sparkles, Code2, Copy, Check, X, AlignLeft, Minimize2,
   PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil, AlertCircle, Wand2,
-  Upload
+  Upload, Search
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, findRequestInTree, findRequestOwnerCollection, findAncestorPathToRequest } from "../../context/AppContext";
 import type { InputBinding } from "../../context/AppContext";
 import { useToast } from "../../context/ToastContext";
+import { useSearchIndexStatus } from "../../context/SearchIndexStatusContext";
+import SearchResultsList from "./SearchResultsList";
 import Dropdown from "../../components/Dropdown";
 import { Modal, ModalFooter } from "../../components/Modal";
 import MarkdownContent from "../../components/guide/MarkdownContent";
@@ -674,6 +676,8 @@ export default function ApiExplorerPage() {
   } | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const { state: searchIndexState } = useSearchIndexStatus();
   const [configHeight, setConfigHeight] = useState(250);
   const containerRef = useRef<HTMLDivElement>(null);
   const bodyEditorRef = useRef<any>(null);
@@ -1322,8 +1326,28 @@ export default function ApiExplorerPage() {
           </div>
         </div>
 
+        {/* Search across name / endpoint / description */}
+        <div className="px-3 pt-2.5 pb-1.5 flex-shrink-0" style={{ display: sidebarCollapsed ? "none" : undefined }}>
+          <div className="relative">
+            <Search className="h-3.5 w-3.5 text-mute absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search name, endpoint, description…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full h-[30px] bg-cream border border-line rounded-md pl-8 pr-2.5 text-xs text-graphite outline-none focus:border-clay"
+            />
+          </div>
+          {searchIndexState === "indexing" && (
+            <div className="flex items-center gap-1.5 mt-1.5 text-[10px] text-mute">
+              <span className="h-1.5 w-1.5 rounded-full bg-clay animate-pulse" />
+              Indexing requests…
+            </div>
+          )}
+        </div>
+
         {/* Connect-by-ID bar */}
-        <form onSubmit={onImportSubmit} className="px-3 pt-2.5 pb-1.5 flex gap-1.5 flex-shrink-0" style={{ display: sidebarCollapsed ? "none" : undefined }}>
+        <form onSubmit={onImportSubmit} className="px-3 pt-1 pb-1.5 flex gap-1.5 flex-shrink-0" style={{ display: sidebarCollapsed || searchQuery.trim() ? "none" : undefined }}>
           <input
             type="text"
             placeholder="Connect collection by ID…"
@@ -1340,7 +1364,7 @@ export default function ApiExplorerPage() {
         </form>
 
         {/* JSON-file import */}
-        <div className="px-3 pb-2.5 border-b border-line flex-shrink-0" style={{ display: sidebarCollapsed ? "none" : undefined }}>
+        <div className="px-3 pb-2.5 border-b border-line flex-shrink-0" style={{ display: sidebarCollapsed || searchQuery.trim() ? "none" : undefined }}>
           <input
             type="file"
             accept=".json,application/json"
@@ -1357,40 +1381,53 @@ export default function ApiExplorerPage() {
           </button>
         </div>
 
-        {/* Collections list */}
+        {/* Collections list (replaced by ranked search results while searching) */}
         <div className="flex-1 overflow-y-auto p-2" style={{ display: sidebarCollapsed ? "none" : undefined }}>
-          {collections.map((col) => (
-            <CollectionNode
-              key={col.id}
-              node={col}
-              depth={1}
-              selectedCollectionId={selectedCollectionId}
-              selectedRequestId={selectedRequestId}
-              setSelectedCollectionId={setSelectedCollectionId}
-              setSelectedRequestId={setSelectedRequestId}
-              setTargetAddColId={setTargetAddColId}
-              setShowNewReqModal={setShowNewReqModal}
-              setShowNewSubColModal={setShowNewSubColModal}
-              handleMoveNode={handleMoveNode}
-              handleDeleteNode={handleDeleteNode}
-              handleRenameNode={handleRenameNode}
-              handleDuplicateRequest={handleDuplicateRequest}
-              handleCopyId={handleCopyId}
-              handleExportCollection={handleExportCollection}
-              copiedId={copiedId}
-              methodStyle={methodStyle}
-              expandedFolders={expandedFolders}
-              toggleFolder={toggleFolder}
-              editingNodeId={editingNodeId}
-              setEditingNodeId={setEditingNodeId}
-              editingName={editingName}
-              setEditingName={setEditingName}
+          {searchQuery.trim() ? (
+            <SearchResultsList
+              query={searchQuery}
+              collections={collections}
+              onSelectRequest={(collectionLocalId, requestId) => {
+                setSelectedCollectionId(collectionLocalId);
+                setSelectedRequestId(requestId);
+              }}
             />
-          ))}
-          {collections.length === 0 && (
-            <p className="text-xs text-mute text-center px-4 py-8 leading-relaxed">
-              No collections yet. Create one with the + button above.
-            </p>
+          ) : (
+            <>
+              {collections.map((col) => (
+                <CollectionNode
+                  key={col.id}
+                  node={col}
+                  depth={1}
+                  selectedCollectionId={selectedCollectionId}
+                  selectedRequestId={selectedRequestId}
+                  setSelectedCollectionId={setSelectedCollectionId}
+                  setSelectedRequestId={setSelectedRequestId}
+                  setTargetAddColId={setTargetAddColId}
+                  setShowNewReqModal={setShowNewReqModal}
+                  setShowNewSubColModal={setShowNewSubColModal}
+                  handleMoveNode={handleMoveNode}
+                  handleDeleteNode={handleDeleteNode}
+                  handleRenameNode={handleRenameNode}
+                  handleDuplicateRequest={handleDuplicateRequest}
+                  handleCopyId={handleCopyId}
+                  handleExportCollection={handleExportCollection}
+                  copiedId={copiedId}
+                  methodStyle={methodStyle}
+                  expandedFolders={expandedFolders}
+                  toggleFolder={toggleFolder}
+                  editingNodeId={editingNodeId}
+                  setEditingNodeId={setEditingNodeId}
+                  editingName={editingName}
+                  setEditingName={setEditingName}
+                />
+              ))}
+              {collections.length === 0 && (
+                <p className="text-xs text-mute text-center px-4 py-8 leading-relaxed">
+                  No collections yet. Create one with the + button above.
+                </p>
+              )}
+            </>
           )}
         </div>
       </div>

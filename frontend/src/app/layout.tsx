@@ -4,6 +4,7 @@ import "./globals.css";
 import { Suspense } from "react";
 import { AppProvider } from "./context/AppContext";
 import { BackendStatusProvider } from "./context/BackendStatusContext";
+import { SearchIndexStatusProvider } from "./context/SearchIndexStatusContext";
 import { ToastProvider } from "./context/ToastContext";
 import TauriOnlyGate from "./components/TauriOnlyGate";
 import GlobalDropGuard from "./components/GlobalDropGuard";
@@ -48,13 +49,15 @@ export default function RootLayout({
         <GlobalDropGuard />
         <TauriOnlyGate>
           <BackendStatusProvider>
-            <ToastProvider>
-              <AppProvider>
-                <Suspense fallback={null}>
-                  {children}
-                </Suspense>
-              </AppProvider>
-            </ToastProvider>
+            <SearchIndexStatusProvider>
+              <ToastProvider>
+                <AppProvider>
+                  <Suspense fallback={null}>
+                    {children}
+                  </Suspense>
+                </AppProvider>
+              </ToastProvider>
+            </SearchIndexStatusProvider>
           </BackendStatusProvider>
         </TauriOnlyGate>
       </body>
