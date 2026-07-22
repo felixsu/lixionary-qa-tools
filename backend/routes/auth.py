@@ -30,6 +30,11 @@ class OAuthRefreshRequest(BaseModel):
 class OAuthRevokeRequest(BaseModel):
     refresh_token: str
 
+class DevLoginRequest(BaseModel):
+    email: str
+    role: Optional[str] = None
+    name: Optional[str] = None
+
 def create_jwt_token(user_id: str, email: str) -> str:
     payload = {
         "sub": user_id,
@@ -44,7 +49,7 @@ _cached_key_expiry = None
 async def decode_iam_token(token: str) -> dict:
     """
     Decodes and verifies a JWT — either a token this backend issued itself
-    (HS256, from /google, /google/exchange or /guest — the common case,
+    (HS256, from /google, /google/exchange or /dev-login — the common case,
     including in production) or, for backward compatibility with sessions
     issued before the move to direct Google SSO, an RS256 token from
     Lixionary IAM's JWKS endpoint.
@@ -68,26 +73,26 @@ async def decode_iam_token(token: str) -> dict:
                         # Fallback: if JWT has no kid or kid is not in JWKS, use the first key in the set
                         header = jwt.get_unverified_header(token)
                         kid = header.get("kid")
-                        
+
                         target_key = None
                         if kid:
                             for key in jwks["keys"]:
                                 if key.get("kid") == kid:
                                     target_key = key
                                     break
-                        
+
                         if not target_key:
                             target_key = jwks["keys"][0]
-                            
+
                         jwk = PyJWK(target_key)
                         _cached_public_key = jwk.key
                         _cached_key_expiry = now + timedelta(hours=1)
                 else:
                     print(f"Failed to fetch JWKS from IAM (Status {res.status_code})")
-        
+
         if _cached_public_key is None:
             raise Exception("No public key resolved from JWKS")
-            
+
         payload = jwt.decode(
             token,
             _cached_public_key,
@@ -107,16 +112,16 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     token = credentials.credentials
     try:
         payload = await decode_iam_token(token)
-        
+
         email = payload.get("email")
         if not email:
             raise HTTPException(status_code=401, detail="Token is missing email claim")
 
         users_col = MongoDB.get_collection("users")
-        
+
         # Check if user exists by email, and sync user role/name from token claims
         user = await users_col.find_one({"email": email})
-        
+
         if not user:
             # Check if this is the first user in the database
             is_db_empty = await users_col.count_documents({}) == 0
@@ -137,7 +142,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             updates = {}
             if payload.get("name") and user.get("name") != payload.get("name"):
                 updates["name"] = payload.get("name")
-                
+
             if updates:
                 updates["updatedAt"] = datetime.now(timezone.utc)
                 await users_col.update_one({"_id": user["_id"]}, {"$set": updates})
@@ -145,7 +150,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
         if user.get("disabled", False):
             raise HTTPException(status_code=403, detail="User account is disabled")
-            
+
         user["id"] = str(user["_id"])
         return user
     except HTTPException:
@@ -289,26 +294,48 @@ async def google_oauth_exchange(payload: OAuthExchangeRequest):
         except httpx.RequestError as exc:
             raise HTTPException(status_code=503, detail=f"Google OAuth connection error: {exc}")
 
-@router.post("/guest", response_model=TokenResponse)
-async def guest_login():
+@router.post("/dev-login", response_model=TokenResponse)
+async def dev_login(payload: DevLoginRequest):
     """
-    Generates a Guest developer token for immediate local testing (Developer Mode).
+    Dev-only backdoor: mints a session for ANY email/role without going
+    through Google or Lixionary IAM at all. Exists purely to simplify QA
+    testing of role-gated flows (e.g. confirming an admin-only route rejects
+    a "member", or reproducing a bug reported by a specific test user)
+    without needing that person's real Google login.
+
+    Hard-gated behind DEV_MODE: returns 404 rather than 403 when DEV_MODE is
+    not explicitly true, so the route doesn't even reveal it exists in a
+    deployment that forgot to unset DEV_MODE. Never expose this in
+    production — DEV_MODE defaults to true (see config.py / docker-compose),
+    so a real deployment MUST set DEV_MODE=false explicitly.
+
+    Replaces the old fixed-identity /guest endpoint (removed) — this covers
+    the same "skip real login for local testing" need but lets QA pick any
+    email/role instead of always landing on the same shared guest account.
     """
-    google_id = "google-guest-999"
-    email = "guest@lixionary.com"
-    name = "Guest Developer"
-    
+    if not settings.DEV_MODE:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    email = payload.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="A valid email is required")
+
+    if payload.role and payload.role not in ("admin", "member"):
+        raise HTTPException(status_code=400, detail="role must be 'admin' or 'member'")
+
+    name = payload.name or email.split("@")[0].capitalize()
+
     users_col = MongoDB.get_collection("users")
-    is_db_empty = await users_col.count_documents({}) == 0
-    user = await users_col.find_one({"googleId": google_id})
+    user = await users_col.find_one({"email": email})
 
     if not user:
+        is_db_empty = await users_col.count_documents({}) == 0
         new_user = {
-            "googleId": google_id,
+            "googleId": f"dev-backdoor-{email}",
             "email": email,
             "name": name,
             "avatarUrl": "",
-            "role": "admin" if is_db_empty else "member",
+            "role": payload.role or ("admin" if is_db_empty else "member"),
             "disabled": False,
             "createdAt": datetime.now(timezone.utc),
             "updatedAt": datetime.now(timezone.utc)
@@ -318,20 +345,27 @@ async def guest_login():
         user = new_user
     else:
         user_id = str(user["_id"])
+        # Explicit role override lets QA flip an existing test user between
+        # admin/member on the fly, without touching Mongo by hand.
+        if payload.role and user.get("role") != payload.role:
+            await users_col.update_one(
+                {"_id": user["_id"]},
+                {"$set": {"role": payload.role, "updatedAt": datetime.now(timezone.utc)}},
+            )
+            user["role"] = payload.role
 
-    # Double-check that we do not let a disabled user login
     if user.get("disabled", False):
         raise HTTPException(status_code=403, detail="User account is disabled")
 
     jwt_token = create_jwt_token(user_id, email)
-    
+
     return {
         "token": jwt_token,
         "user": {
             "id": user_id,
             "email": email,
-            "name": name,
-            "avatarUrl": "",
+            "name": user.get("name", name),
+            "avatarUrl": user.get("avatarUrl", ""),
             "role": user.get("role", "member"),
             "disabled": user.get("disabled", False)
         }
@@ -365,20 +399,20 @@ async def oauth_token_exchange(payload: OAuthExchangeRequest):
                 except Exception:
                     detail = f"Failed to exchange authorization code (Status: {res.status_code}): {res.text[:200]}"
                 raise HTTPException(status_code=res.status_code, detail=detail)
-                
+
             tokens = res.json()
-            
+
             # Decode the access token to get user info and provision/upsert locally
             access_token = tokens["access_token"]
             claims = await decode_iam_token(access_token)
-            
+
             email = claims.get("email")
             if not email:
                 raise HTTPException(status_code=400, detail="IAM access token is missing email claim")
-                
+
             users_col = MongoDB.get_collection("users")
             user = await users_col.find_one({"email": email})
-            
+
             if not user:
                 # Check if this is the first user in the database
                 is_db_empty = await users_col.count_documents({}) == 0
@@ -451,7 +485,7 @@ async def oauth_token_refresh(payload: OAuthRefreshRequest):
                 except Exception:
                     detail = f"Failed to refresh token (Status: {res.status_code}): {res.text[:200]}"
                 raise HTTPException(status_code=res.status_code, detail=detail)
-                
+
             return res.json()
         except httpx.RequestError as exc:
             raise HTTPException(status_code=503, detail=f"IAM service connection error: {exc}")
@@ -478,7 +512,7 @@ async def oauth_token_revoke(payload: OAuthRevokeRequest):
                 except Exception:
                     detail = f"Failed to revoke token (Status: {res.status_code}): {res.text[:200]}"
                 raise HTTPException(status_code=res.status_code, detail=detail)
-                
+
             return {"success": True}
         except httpx.RequestError as exc:
             raise HTTPException(status_code=503, detail=f"IAM service connection error: {exc}")

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Cpu, ArrowRight, AlertCircle, Shield } from "lucide-react";
+import { Cpu, AlertCircle, Shield } from "lucide-react";
 import { useAppContext } from "../../context/AppContext";
 import { useRouter } from "next/navigation";
 import { isTauri } from "../../utils/tauri";
@@ -11,10 +11,9 @@ import BackendStatusIndicator from "../../components/BackendStatusIndicator";
 const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || "http://localhost:8484";
 
 export default function LoginPage() {
-  const { token, handleLogin, handleGuestLogin, isLoadingAuth } = useAppContext();
+  const { token, handleLogin, isLoadingAuth } = useAppContext();
   const appVersion = useAppVersion();
   const [errorMsg, setErrorMsg] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isWaitingExternal, setIsWaitingExternal] = useState(false);
   const pollCancelledRef = useRef(false);
   const router = useRouter();
@@ -122,18 +121,6 @@ export default function LoginPage() {
     }
   };
 
-  const onGuestLogin = async () => {
-    setErrorMsg("");
-    setIsSubmitting(true);
-    try {
-      await handleGuestLogin();
-    } catch (err: any) {
-      setErrorMsg(err.message || "Guest login failed.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
   if (isLoadingAuth) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-cream text-ink">
@@ -205,33 +192,12 @@ export default function LoginPage() {
           ) : (
             <button
               onClick={onGoogleLogin}
-              disabled={isSubmitting}
               className="flex w-full items-center justify-center gap-2.5 rounded-xl bg-clay hover:bg-clay-dark text-white px-4 py-3 text-sm font-semibold transition-colors disabled:opacity-50 active:scale-[0.99]"
             >
               <Shield className="h-4.5 w-4.5" />
               Sign in with Google
             </button>
           )}
-        </div>
-
-        <div className="relative flex py-2 items-center">
-          <div className="flex-grow border-t border-line"></div>
-          <span className="flex-shrink mx-4 text-xs font-semibold uppercase tracking-wider text-mute">OR</span>
-          <div className="flex-grow border-t border-line"></div>
-        </div>
-
-        {/* Guest / Developer mode */}
-        <button
-          onClick={onGuestLogin}
-          disabled={isSubmitting}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-cream border border-line hover:bg-panel text-graphite px-4 py-3 text-sm font-semibold transition-colors disabled:opacity-50 active:scale-[0.99]"
-        >
-          {isSubmitting ? "Connecting..." : "Start in Guest Developer Mode"}
-          <ArrowRight className="h-4 w-4" />
-        </button>
-
-        <div className="mt-6 text-center text-xs text-mute">
-          Guest mode uses a shared read-only sandbox account.
         </div>
 
         {appVersion && (

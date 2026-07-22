@@ -273,7 +273,6 @@ interface AppContextType {
   user: any;
   isLoadingAuth: boolean;
   handleLogin: (email: string) => Promise<void>;
-  handleGuestLogin: () => Promise<void>;
   handleLogout: () => void;
 
   // Databases & Shared States
@@ -1110,21 +1109,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       router.push("/api-explorer");
     } catch (e: any) {
       throw new Error(`Login failed: ${e.message}`);
-    }
-  };
-
-  const handleGuestLogin = async () => {
-    try {
-      const data = await apiCall("/api/auth/guest", {
-        method: "POST"
-      });
-      setToken(data.token);
-      setUser(data.user);
-      localStorage.setItem("lixionary_token", data.token);
-      localStorage.setItem("lixionary_user", JSON.stringify(data.user));
-      router.push("/api-explorer");
-    } catch (e: any) {
-      throw new Error(`Guest login failed: ${e.message}`);
     }
   };
 
@@ -2662,7 +2646,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         user,
         isLoadingAuth,
         handleLogin,
-        handleGuestLogin,
         handleLogout,
 
         environments,
