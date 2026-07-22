@@ -41,6 +41,7 @@ import {
 } from "../../utils/flowRunner";
 import { buildRunCsv, downloadCsv, runCsvFilename, persistLastRun, loadLastRun } from "../../utils/flowReport";
 import { studioNodeTypes, type StudioNode, type StudioNodeData } from "./components/nodes";
+import RequestPicker from "./RequestPicker";
 
 const PALETTE: { type: FlowNodeType; label: string; icon: typeof Send; hint: string }[] = [
   { type: "request", label: "Request", icon: Send, hint: "Run a saved API Explorer request" },
@@ -53,24 +54,6 @@ const inputCls =
   "h-[30px] bg-cream border border-line rounded-md px-2.5 font-mono text-xs text-graphite outline-none focus:border-clay";
 
 // ---- helpers ----------------------------------------------------------------
-
-interface RequestOption {
-  value: string;
-  label: string;
-}
-
-const collectRequestOptions = (collections: Collection[]): RequestOption[] => {
-  const options: RequestOption[] = [];
-  const walk = (col: Collection, prefix: string) => {
-    const path = prefix ? `${prefix} / ${col.name}` : col.name;
-    for (const req of col.requests || []) {
-      options.push({ value: req.id, label: `${path} / ${req.method} ${req.name}` });
-    }
-    for (const child of col.children || []) walk(child, path);
-  };
-  for (const col of collections) walk(col, "");
-  return options;
-};
 
 const requestNodeConfigOf = (node: FlowNode): RequestNodeConfig | null => {
   if (node.type === "request") return node.config as RequestNodeConfig;
@@ -230,7 +213,6 @@ function StudioEditor() {
   const { screenToFlowPosition } = useReactFlow();
 
   const selectedFlow = flows.find((f) => f.id === selectedFlowId) || null;
-  const requestOptions = useMemo(() => collectRequestOptions(collections), [collections]);
 
   const dirty = useMemo(() => {
     if (!selectedFlow) return false;
@@ -859,7 +841,6 @@ function StudioEditor() {
             allNodes={nodes}
             edges={edges}
             collections={collections}
-            requestOptions={requestOptions}
             records={selectedNodeRecords}
             onChange={(patch) => updateFlowNode(selectedNode.id, patch)}
             onClose={() => setSelectedNodeId(null)}
@@ -915,7 +896,6 @@ function NodeInspector({
   allNodes,
   edges,
   collections,
-  requestOptions,
   records,
   onChange,
   onClose,
@@ -925,7 +905,6 @@ function NodeInspector({
   allNodes: StudioNode[];
   edges: Edge[];
   collections: Collection[];
-  requestOptions: RequestOption[];
   records: RunRecord[];
   onChange: (patch: Partial<FlowNode>) => void;
   onClose: () => void;
@@ -1004,7 +983,6 @@ function NodeInspector({
             cfg={fn.config as RequestNodeConfig}
             onChange={updateConfig}
             collections={collections}
-            requestOptions={requestOptions}
             referenceOptions={referenceOptions}
             allowItem={false}
           />
@@ -1053,7 +1031,6 @@ function NodeInspector({
                 cfg={cfg.request}
                 onChange={(request) => updateConfig({ ...cfg, request: request as RequestNodeConfig })}
                 collections={collections}
-                requestOptions={requestOptions}
                 referenceOptions={referenceOptions}
                 allowItem
               />
@@ -1069,7 +1046,6 @@ function NodeInspector({
                 cfg={cfg.request}
                 onChange={(request) => updateConfig({ ...cfg, request: request as RequestNodeConfig })}
                 collections={collections}
-                requestOptions={requestOptions}
                 referenceOptions={referenceOptions}
                 allowItem={false}
               />
@@ -1367,14 +1343,12 @@ function RequestConfigEditor({
   cfg,
   onChange,
   collections,
-  requestOptions,
   referenceOptions,
   allowItem,
 }: {
   cfg: RequestNodeConfig;
   onChange: (cfg: RequestNodeConfig) => void;
   collections: Collection[];
-  requestOptions: RequestOption[];
   referenceOptions: string[];
   allowItem: boolean;
 }) {
@@ -1403,12 +1377,11 @@ function RequestConfigEditor({
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-1.5">
         <label className="text-xs font-medium text-stone">Request</label>
-        <Dropdown
+        <RequestPicker
           value={cfg.requestId}
           onChange={(v) => onChange({ ...cfg, requestId: v, mappings: [] })}
+          collections={collections}
           placeholder="Select a request…"
-          widthClass="w-full"
-          options={requestOptions}
         />
       </div>
 
