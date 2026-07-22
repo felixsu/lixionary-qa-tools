@@ -18,11 +18,12 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   Plus, Play, Square, Save, Download, Trash2, Pencil, Copy, Send, Repeat2, Timer,
-  ShieldCheck, CheckCircle2, AlertCircle, X,
+  ShieldCheck, AlertCircle, X,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, findRequestInTree } from "../../context/AppContext";
 import type { Collection } from "../../context/AppContext";
+import { useToast } from "../../context/ToastContext";
 import Dropdown from "../../components/Dropdown";
 import { Modal, ModalFooter } from "../../components/Modal";
 import { confirmDialog } from "../../utils/confirmDialog";
@@ -224,17 +225,12 @@ function StudioEditor() {
   const [showNewFlowModal, setShowNewFlowModal] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [flowNameDraft, setFlowNameDraft] = useState("");
-  const [toast, setToast] = useState<string | null>(null);
+  const { showToast } = useToast();
 
   const { screenToFlowPosition } = useReactFlow();
 
   const selectedFlow = flows.find((f) => f.id === selectedFlowId) || null;
   const requestOptions = useMemo(() => collectRequestOptions(collections), [collections]);
-
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 2600);
-  };
 
   const dirty = useMemo(() => {
     if (!selectedFlow) return false;
@@ -396,7 +392,8 @@ function StudioEditor() {
         showToast(
           restoredNodes.length
             ? `Restored ${restoredNodes.length} block${restoredNodes.length === 1 ? "" : "s"}`
-            : "Restored connection"
+            : "Restored connection",
+          { type: "success" }
         );
         return;
       }
@@ -410,7 +407,7 @@ function StudioEditor() {
           edges: serializeEdges(edges.filter((ed) => ids.has(ed.source) && ids.has(ed.target))),
         };
         pasteCountRef.current = 0;
-        showToast(`Copied ${selected.length} block${selected.length === 1 ? "" : "s"}`);
+        showToast(`Copied ${selected.length} block${selected.length === 1 ? "" : "s"}`, { type: "success" });
         return;
       }
 
@@ -559,9 +556,12 @@ function StudioEditor() {
       const flowEdges = serializeEdges(edges);
       await updateFlow(selectedFlow.id, { nodes: flowNodes, edges: flowEdges });
       setSavedSignature(flowSignature(flowNodes, flowEdges));
-      showToast(validationError ? `Saved (warning: ${validationError})` : "Flow saved");
+      showToast(
+        validationError ? `Saved (warning: ${validationError})` : "Flow saved",
+        { type: validationError ? "info" : "success" }
+      );
     } catch (e: any) {
-      alert(`Save failed: ${e.message}`);
+      showToast(`Save failed: ${e.message}`, { type: "error" });
     } finally {
       setIsSaving(false);
     }
@@ -574,7 +574,7 @@ function StudioEditor() {
   const onRun = async () => {
     if (!selectedFlow || isRunning) return;
     if (validationError) {
-      alert(`Cannot run: ${validationError}`);
+      showToast(`Cannot run: ${validationError}`, { type: "error" });
       return;
     }
     const flow: Flow = {
@@ -605,10 +605,11 @@ function StudioEditor() {
           ? `Run finished — ${summary.records.length} steps in ${summary.durationMs} ms`
           : summary.status === "cancelled"
             ? "Run cancelled"
-            : "Run failed — see node statuses"
+            : "Run failed — see node statuses",
+        { type: summary.status === "success" ? "success" : summary.status === "cancelled" ? "info" : "error" }
       );
     } catch (e: any) {
-      alert(`Run error: ${e.message}`);
+      showToast(`Run error: ${e.message}`, { type: "error" });
     } finally {
       setIsRunning(false);
       runHandleRef.current = null;
@@ -631,9 +632,9 @@ function StudioEditor() {
       setFlowNameDraft("");
       setSelectedFlowId(flow.id);
       loadFlow(flow);
-      showToast("Flow created");
+      showToast("Flow created", { type: "success" });
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     }
   };
 
@@ -643,9 +644,9 @@ function StudioEditor() {
     try {
       await updateFlow(selectedFlow.id, { name: flowNameDraft.trim() });
       setShowRenameModal(false);
-      showToast("Flow renamed");
+      showToast("Flow renamed", { type: "success" });
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     }
   };
 
@@ -656,9 +657,9 @@ function StudioEditor() {
     try {
       await deleteFlow(selectedFlow.id);
       setSelectedFlowId("");
-      showToast("Flow deleted");
+      showToast("Flow deleted", { type: "success" });
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     }
   };
 
@@ -678,9 +679,9 @@ function StudioEditor() {
 
       setSelectedFlowId(created.id);
       loadFlow({ ...created, description: selectedFlow.description, nodes: flowNodes, edges: flowEdges });
-      showToast("Flow duplicated");
+      showToast("Flow duplicated", { type: "success" });
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     }
   };
 
@@ -874,17 +875,6 @@ function StudioEditor() {
           />
         )}
       </div>
-
-      {/* Toast */}
-      {toast && (
-        <div
-          className="fixed bottom-5 right-5 z-50 flex items-center gap-2.5 bg-ink-900 text-cream px-4 py-3 rounded-lg border-l-4 border-sage text-[13px] shadow-[0_4px_16px_rgba(20,20,19,0.24)] max-w-[360px]"
-          style={{ animation: "fadeUp 0.2s ease-out" }}
-        >
-          <CheckCircle2 className="h-4 w-4 text-sage flex-shrink-0" />
-          <span>{toast}</span>
-        </div>
-      )}
 
       {/* Modals */}
       {showNewFlowModal && (

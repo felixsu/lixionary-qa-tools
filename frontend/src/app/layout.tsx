@@ -4,7 +4,9 @@ import "./globals.css";
 import { Suspense } from "react";
 import { AppProvider } from "./context/AppContext";
 import { BackendStatusProvider } from "./context/BackendStatusContext";
+import { ToastProvider } from "./context/ToastContext";
 import TauriOnlyGate from "./components/TauriOnlyGate";
+import GlobalDropGuard from "./components/GlobalDropGuard";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -43,13 +45,16 @@ export default function RootLayout({
       className={`${inter.variable} ${cormorant.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col font-sans">
+        <GlobalDropGuard />
         <TauriOnlyGate>
           <BackendStatusProvider>
-            <AppProvider>
-              <Suspense fallback={null}>
-                {children}
-              </Suspense>
-            </AppProvider>
+            <ToastProvider>
+              <AppProvider>
+                <Suspense fallback={null}>
+                  {children}
+                </Suspense>
+              </AppProvider>
+            </ToastProvider>
           </BackendStatusProvider>
         </TauriOnlyGate>
       </body>

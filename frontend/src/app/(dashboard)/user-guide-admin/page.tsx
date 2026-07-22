@@ -16,6 +16,7 @@ import {
   Eye,
 } from "lucide-react";
 import { useAppContext, UserGuideSummary } from "../../context/AppContext";
+import { useToast } from "../../context/ToastContext";
 import GuideBlockRenderer from "../../components/guide/GuideBlockRenderer";
 import { confirmDialog } from "../../utils/confirmDialog";
 
@@ -35,6 +36,7 @@ const MERMAID_TEMPLATE = `flowchart TD
 
 export default function UserGuideAdminPage() {
   const { user, apiCall, userGuides, fetchUserGuides } = useAppContext();
+  const { showToast } = useToast();
   const router = useRouter();
 
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -81,7 +83,7 @@ export default function UserGuideAdminPage() {
         })),
       });
     } catch (e: any) {
-      alert(e.message || "Failed to load guide.");
+      showToast(e.message || "Failed to load guide.", { type: "error" });
     } finally {
       setLoadingGuideId(null);
     }
@@ -93,7 +95,7 @@ export default function UserGuideAdminPage() {
       await apiCall(`/api/admin/user-guides/${guide.id}`, { method: "DELETE" });
       await fetchUserGuides();
     } catch (e: any) {
-      alert(e.message || "Failed to delete guide.");
+      showToast(e.message || "Failed to delete guide.", { type: "error" });
     }
   };
 
@@ -120,7 +122,7 @@ export default function UserGuideAdminPage() {
       await fetchUserGuides();
       setDraft(null);
     } catch (e: any) {
-      alert(e.message || "Failed to save guide.");
+      showToast(e.message || "Failed to save guide.", { type: "error" });
     } finally {
       setIsSaving(false);
     }

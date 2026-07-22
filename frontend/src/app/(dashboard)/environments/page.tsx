@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { Plus, Trash2, Pencil, Copy, X, Check } from "lucide-react";
 import { useAppContext, Environment } from "../../context/AppContext";
+import { useToast } from "../../context/ToastContext";
 import { confirmDialog } from "../../utils/confirmDialog";
 
 export default function EnvironmentsPage() {
@@ -14,6 +15,7 @@ export default function EnvironmentsPage() {
     handleDeleteEnv,
     handleDuplicateEnv,
   } = useAppContext();
+  const { showToast } = useToast();
 
   const [showEnvModal, setShowEnvModal] = useState(false);
   const [envModalName, setEnvModalName] = useState("");
@@ -46,7 +48,7 @@ export default function EnvironmentsPage() {
       await handleSaveEnv(envModalName, vars, editingEnvId);
       setShowEnvModal(false);
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     }
   };
 

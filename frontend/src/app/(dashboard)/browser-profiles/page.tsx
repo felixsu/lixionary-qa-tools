@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { Plus, Trash2, Pencil, Copy, X, Key, Globe, RefreshCw, Layers } from "lucide-react";
 import { useAppContext, BrowserProfile } from "../../context/AppContext";
+import { useToast } from "../../context/ToastContext";
 import Dropdown from "../../components/Dropdown";
 import { isTauri } from "../../utils/tauri";
 import { confirmDialog } from "../../utils/confirmDialog";
@@ -33,6 +34,7 @@ const STEP_LABELS: Record<WizardStep, string> = {
 
 export default function BrowserProfilesPage() {
   const { profiles, authFunctions, handleSaveProfile, handleDeleteProfile, handleDuplicateProfile, apiCall } = useAppContext();
+  const { showToast } = useToast();
 
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -89,7 +91,7 @@ export default function BrowserProfilesPage() {
           setSelectedCookies([]);
           setSelectedLocalStorageKeys([]);
         } else {
-          alert("Failed to fetch data from tab: " + (error || "Unknown error"));
+          showToast("Failed to fetch data from tab: " + (error || "Unknown error"), { type: "error" });
         }
       }
     };
@@ -175,7 +177,7 @@ export default function BrowserProfilesPage() {
         setSelectedCookies([]);
         setSelectedLocalStorageKeys([]);
       } catch (err: any) {
-        alert("Failed to fetch tab data: " + (err.message || "Unknown error"));
+        showToast("Failed to fetch tab data: " + (err.message || "Unknown error"), { type: "error" });
       } finally {
         setIsFetchingData(false);
       }
@@ -192,7 +194,7 @@ export default function BrowserProfilesPage() {
       const u = new URL(fetchedData.url);
       origin = u.origin;
     } catch (e) {
-      alert("Invalid tab URL: " + fetchedData.url);
+      showToast("Invalid tab URL: " + fetchedData.url, { type: "error" });
       return;
     }
 
@@ -335,14 +337,14 @@ export default function BrowserProfilesPage() {
   // the escaping correctly so the raw value round-trips byte-for-byte.
   const handleInsertRawLocalStorageValue = () => {
     if (!rawLsOrigin || !rawLsKey) {
-      alert("Origin and key are required.");
+      showToast("Origin and key are required.", { type: "error" });
       return;
     }
     let parsed: any;
     try {
       parsed = profileLocalStorage ? JSON.parse(profileLocalStorage) : { origins: [] };
     } catch {
-      alert("The stored localStorage JSON is currently invalid — clear it before inserting.");
+      showToast("The stored localStorage JSON is currently invalid — clear it before inserting.", { type: "error" });
       return;
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) parsed = { origins: [] };
@@ -442,20 +444,20 @@ export default function BrowserProfilesPage() {
     if (currentStep !== "details") return; // Enter mid-wizard must not save
     if (!profileName) return;
     if (profileCookies) {
-      try { JSON.parse(profileCookies); } catch { alert("Cookies must be a valid JSON array or empty."); return; }
+      try { JSON.parse(profileCookies); } catch { showToast("Cookies must be a valid JSON array or empty.", { type: "error" }); return; }
     }
     if (profileLocalStorage) {
-      try { JSON.parse(profileLocalStorage); } catch { alert("LocalStorage must be a valid JSON object or empty."); return; }
+      try { JSON.parse(profileLocalStorage); } catch { showToast("LocalStorage must be a valid JSON object or empty.", { type: "error" }); return; }
     }
     if (profileDefaultUrl) {
       if (!profileDefaultUrl.startsWith("http://") && !profileDefaultUrl.startsWith("https://")) {
-        alert("Default URL must start with http:// or https://");
+        showToast("Default URL must start with http:// or https://", { type: "error" });
         return;
       }
       try {
         new URL(profileDefaultUrl);
       } catch {
-        alert("Default URL must be a valid URL format.");
+        showToast("Default URL must be a valid URL format.", { type: "error" });
         return;
       }
     }
@@ -466,7 +468,7 @@ export default function BrowserProfilesPage() {
       await handleSaveProfile(profileName, profileCookies, profileLocalStorage, profileAuthFunctionId || null, authInjectionVal, profileDefaultUrl, editingId);
       setShowModal(false);
     } catch (err: any) {
-      alert(err.message);
+      showToast(err.message, { type: "error" });
     }
   };
 
