@@ -91,6 +91,31 @@ class LocalStore:
                 value      TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            -- Flattened, searchable view of every request nested inside every
+            -- "collection" entity payload — kept in sync by services/search_indexer.py
+            -- whenever a collection entity is written. `id` doubles as request_vec's
+            -- rowid (vec0 has no declared PK, so rowid is the only join key available).
+            CREATE TABLE IF NOT EXISTS request_index (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id          TEXT NOT NULL UNIQUE,
+                collection_local_id TEXT NOT NULL,
+                name                TEXT NOT NULL,
+                url                 TEXT NOT NULL,
+                description         TEXT NOT NULL DEFAULT '',
+                description_hash    TEXT,
+                embedding_status    TEXT NOT NULL DEFAULT 'pending',
+                updated_at          TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_request_index_collection ON request_index(collection_local_id);
+            CREATE INDEX IF NOT EXISTS idx_request_index_status ON request_index(embedding_status);
+            """
+        )
+        cls._conn.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS request_vec USING vec0(
+                embedding float[768] distance_metric=cosine
+            );
             """
         )
 
@@ -102,6 +127,10 @@ class LocalStore:
                 "INSERT INTO meta (key, value) VALUES ('device_id', ?)",
                 (str(uuid.uuid4()),),
             )
+
+    @classmethod
+    def connection(cls) -> apsw.Connection:
+        return cls._conn
 
     @classmethod
     def device_id(cls) -> str:

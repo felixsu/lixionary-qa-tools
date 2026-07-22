@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from db.local_store import LocalStore, ENTITY_TYPES
+from services import search_indexer
 
 router = APIRouter(prefix="/api/local-store", tags=["local-store"])
 
@@ -115,6 +116,8 @@ async def get_sync_state(entity_type: str):
 async def create_entity(entity_type: str, body: CreatePayload):
     _validate_entity_type(entity_type)
     record = LocalStore.create(entity_type, json.dumps(body.payload))
+    if entity_type == "collection":
+        search_indexer.enqueue_reindex(record["localId"], body.payload)
     return _present(record)
 
 
@@ -124,6 +127,8 @@ async def update_entity(entity_type: str, local_id: str, body: UpdatePayload):
     record = LocalStore.update(entity_type, local_id, json.dumps(body.payload))
     if not record:
         raise HTTPException(status_code=404, detail="Not found")
+    if entity_type == "collection":
+        search_indexer.enqueue_reindex(local_id, body.payload)
     return _present(record)
 
 
@@ -133,6 +138,8 @@ async def delete_entity(entity_type: str, local_id: str):
     ok = LocalStore.delete(entity_type, local_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Not found")
+    if entity_type == "collection":
+        search_indexer.enqueue_reindex(local_id, None)
     return {"message": "Deleted"}
 
 
@@ -147,6 +154,8 @@ async def pull_entities(entity_type: str, body: PullRequest):
             entity_type, json.dumps(entry.payload),
             cloud_id=entry.cloudId, version=entry.version,
         )
+        if entity_type == "collection":
+            search_indexer.enqueue_reindex(record["localId"], entry.payload)
         results.append(_present(record))
     return results
 
@@ -165,5 +174,20 @@ async def mark_synced(entity_type: str, body: MarkSyncedRequest):
             deleted=entry.deleted,
         )
         if record:
+            if entity_type == "collection":
+                if entry.deleted:
+                    search_indexer.enqueue_reindex(entry.localId, None)
+                elif entry.resolvedPayload is not None:
+                    search_indexer.enqueue_reindex(entry.localId, entry.resolvedPayload)
             results.append(_present(record))
     return results
+
+
+@router.get("/search/status")
+async def get_search_index_status():
+    return search_indexer.get_status()
+
+
+@router.get("/search/requests")
+async def search_requests(q: str = "", limit: int = 20):
+    return await search_indexer.search(q, limit)

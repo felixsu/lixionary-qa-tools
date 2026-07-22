@@ -29,6 +29,7 @@ from services.naming import polish_method_names, dedupe_names, heuristic_method_
 from services.generator import generate_pom_class, generate_http_client, build_pom_method_code
 from db.local_store import LocalStore
 from routes.local_store import router as local_store_router
+from services.search_indexer import start_background_worker
 
 app = FastAPI(title="Lixionary Local Automation Explorer Sidecar")
 app.include_router(local_store_router)
@@ -196,6 +197,9 @@ def setup_local_venv():
 async def startup_event():
     # Local SQLite store for offline-first config data — fast, do inline.
     LocalStore.connect()
+    # Backfill/refresh the request search index in the background (also picks
+    # up any collections whose descriptions changed while the app was closed).
+    asyncio.create_task(start_background_worker())
     # Setup venv in background so startup returns immediately
     asyncio.create_task(asyncio.to_thread(setup_local_venv))
 
