@@ -258,6 +258,9 @@ export interface BrowserProfile {
   authFunctionId?: string;
   authInjections?: Array<{ type: string; key: string; domainOrOrigin: string; sourceField?: string }>;
   defaultUrl?: string;
+  headless?: boolean;
+  viewportWidth?: number;
+  viewportHeight?: number;
   createdAt?: string;
 }
 
@@ -356,6 +359,7 @@ interface AppContextType {
   setBrowserUrl: (url: string) => void;
   isBrowserConnected: boolean;
   setIsBrowserConnected: (connected: boolean) => void;
+  viewportSize: { width: number; height: number };
   inspectMode: boolean;
   setInspectMode: (inspect: boolean) => void;
   vncUrl: string;
@@ -510,6 +514,9 @@ interface AppContextType {
     authFunctionId: string | null,
     authInjections: Array<{ type: string; key: string; domainOrOrigin: string; sourceField?: string }> | null,
     defaultUrl: string,
+    headless: boolean,
+    viewportWidth: number,
+    viewportHeight: number,
     id: string | null
   ) => Promise<void>;
   handleDeleteProfile: (id: string) => Promise<void>;
@@ -606,6 +613,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Web Explorer State
   const [browserUrl, setBrowserUrl] = useState("https://example.com");
   const [isBrowserConnected, setIsBrowserConnected] = useState(false);
+  const [viewportSize, setViewportSize] = useState({ width: 1280, height: 720 });
   const [inspectMode, setInspectMode] = useState(false);
   const [vncUrl, setVncUrl] = useState("");
   const [sessionId, setSessionId] = useState("");
@@ -1320,6 +1328,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // singular `authInjection` — fall back to wrapping it in a list.
         authInjections: r.authInjections || (r.authInjection ? [r.authInjection] : []),
         defaultUrl: r.defaultUrl,
+        headless: r.headless ?? false,
+        viewportWidth: r.viewportWidth ?? 1280,
+        viewportHeight: r.viewportHeight ?? 720,
       }));
       setProfiles(mapped);
       if (mapped.length && !selectedProfileId) {
@@ -1478,7 +1489,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         action: "init",
         cookies,
         localStorage: localStorageData,
-        defaultUrl
+        defaultUrl,
+        headless: profile?.headless ?? false,
+        viewportWidth: profile?.viewportWidth ?? 1280,
+        viewportHeight: profile?.viewportHeight ?? 720
       }));
     };
 
@@ -1493,6 +1507,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setBrowserTabs([{ index: 0, url: msg.data.url }]);
           setActiveTabIndex(0);
           setVncUrl("");
+          if (msg.data.viewport?.width && msg.data.viewport?.height) {
+            setViewportSize({ width: msg.data.viewport.width, height: msg.data.viewport.height });
+          }
           break;
         case "screencast_frame":
           setScreencastFrame(msg.data.image);
@@ -2584,18 +2601,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     authFunctionId: string | null,
     authInjections: Array<{ type: string; key: string; domainOrOrigin: string; sourceField?: string }> | null,
     defaultUrl: string,
+    headless: boolean,
+    viewportWidth: number,
+    viewportHeight: number,
     id: string | null
   ) => {
     try {
       if (id) {
         await apiCall(`/api/local-store/browser_profile/${id}`, {
           method: "PUT",
-          body: JSON.stringify({ payload: { name, cookies, localStorage, authFunctionId, authInjections, defaultUrl } })
+          body: JSON.stringify({ payload: { name, cookies, localStorage, authFunctionId, authInjections, defaultUrl, headless, viewportWidth, viewportHeight } })
         });
       } else {
         await apiCall("/api/local-store/browser_profile", {
           method: "POST",
-          body: JSON.stringify({ payload: { name, cookies, localStorage, authFunctionId, authInjections, defaultUrl } })
+          body: JSON.stringify({ payload: { name, cookies, localStorage, authFunctionId, authInjections, defaultUrl, headless, viewportWidth, viewportHeight } })
         });
       }
       await fetchProfiles();
@@ -2625,6 +2645,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       profile.authFunctionId ?? null,
       profile.authInjections ?? null,
       profile.defaultUrl ?? "",
+      profile.headless ?? false,
+      profile.viewportWidth ?? 1280,
+      profile.viewportHeight ?? 720,
       null
     );
   };
@@ -2712,6 +2735,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setBrowserUrl,
         isBrowserConnected,
         setIsBrowserConnected,
+        viewportSize,
         inspectMode,
         setInspectMode,
         vncUrl,

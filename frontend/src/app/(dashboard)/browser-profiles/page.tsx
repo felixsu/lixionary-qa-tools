@@ -26,6 +26,15 @@ type WizardStep = "method" | "localStorage" | "cookies" | "import" | "details";
 type AuthInjectionRow = { type: "cookie" | "localStorage"; key: string; domainOrOrigin: string; sourceField: string };
 const blankAuthInjectionRow = (): AuthInjectionRow => ({ type: "cookie", key: "", domainOrOrigin: "", sourceField: "" });
 
+const RESOLUTION_PRESETS: { value: string; label: string; width: number; height: number }[] = [
+  { value: "1280x720", label: "1280 x 720 (HD)", width: 1280, height: 720 },
+  { value: "1366x768", label: "1366 x 768", width: 1366, height: 768 },
+  { value: "1440x900", label: "1440 x 900", width: 1440, height: 900 },
+  { value: "1920x1080", label: "1920 x 1080 (Full HD)", width: 1920, height: 1080 },
+];
+const resolutionPresetFor = (width: number, height: number): string =>
+  RESOLUTION_PRESETS.find((p) => p.width === width && p.height === height)?.value || "custom";
+
 const STEP_LABELS: Record<WizardStep, string> = {
   method: "Setup method",
   localStorage: "Local storage",
@@ -49,6 +58,10 @@ export default function BrowserProfilesPage() {
   const [rawLsValue, setRawLsValue] = useState("");
   const [profileAuthFunctionId, setProfileAuthFunctionId] = useState<string>("");
   const [profileAuthInjections, setProfileAuthInjections] = useState<AuthInjectionRow[]>([]);
+  const [profileHeadless, setProfileHeadless] = useState(false);
+  const [profileResolutionPreset, setProfileResolutionPreset] = useState<string>("1280x720");
+  const [profileViewportWidth, setProfileViewportWidth] = useState(1280);
+  const [profileViewportHeight, setProfileViewportHeight] = useState(720);
 
   // Wizard states
   const [wizardStep, setWizardStep] = useState(0);
@@ -303,6 +316,10 @@ export default function BrowserProfilesPage() {
     setProfileAuthFunctionId("");
     setProfileDefaultUrl("");
     setProfileAuthInjections([]);
+    setProfileHeadless(false);
+    setProfileResolutionPreset("1280x720");
+    setProfileViewportWidth(1280);
+    setProfileViewportHeight(720);
     resetWizard();
     setShowModal(true);
   };
@@ -322,6 +339,12 @@ export default function BrowserProfilesPage() {
         sourceField: inj.sourceField || "",
       }))
     );
+    const width = profile.viewportWidth ?? 1280;
+    const height = profile.viewportHeight ?? 720;
+    setProfileHeadless(profile.headless ?? false);
+    setProfileViewportWidth(width);
+    setProfileViewportHeight(height);
+    setProfileResolutionPreset(resolutionPresetFor(width, height));
     resetWizard();
     setShowModal(true);
   };
@@ -462,6 +485,10 @@ export default function BrowserProfilesPage() {
       showToast("Each auth hook mapping needs a target key and a domain/origin.", { type: "error" });
       return;
     }
+    if (profileResolutionPreset === "custom" && (!Number.isInteger(profileViewportWidth) || !Number.isInteger(profileViewportHeight) || profileViewportWidth <= 0 || profileViewportHeight <= 0)) {
+      showToast("Custom resolution needs a positive whole-number width and height.", { type: "error" });
+      return;
+    }
     try {
       const authInjectionsVal = profileAuthFunctionId
         ? profileAuthInjections.map((r) => ({
@@ -471,7 +498,7 @@ export default function BrowserProfilesPage() {
             sourceField: r.sourceField || undefined,
           }))
         : null;
-      await handleSaveProfile(profileName, profileCookies, profileLocalStorage, profileAuthFunctionId || null, authInjectionsVal, profileDefaultUrl, editingId);
+      await handleSaveProfile(profileName, profileCookies, profileLocalStorage, profileAuthFunctionId || null, authInjectionsVal, profileDefaultUrl, profileHeadless, profileViewportWidth, profileViewportHeight, editingId);
       setShowModal(false);
     } catch (err: any) {
       showToast(err.message, { type: "error" });
@@ -993,6 +1020,67 @@ export default function BrowserProfilesPage() {
                     onChange={(e) => setProfileDefaultUrl(e.target.value)}
                     className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
                   />
+                </div>
+
+                <div className="border-t border-line pt-3 flex flex-col gap-4">
+                  <h4 className="text-[11px] font-semibold text-clay uppercase tracking-[0.08em]">Session launch settings</h4>
+
+                  <label className="flex items-start gap-2 text-[13px] text-graphite cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={profileHeadless}
+                      onChange={(e) => setProfileHeadless(e.target.checked)}
+                      className="mt-0.5 rounded text-clay focus:ring-clay h-3.5 w-3.5"
+                    />
+                    <span>
+                      <span className="font-medium">Headless</span>
+                      <span className="block text-xs text-mute">No visible browser window opens — the screen preview and click actions still work.</span>
+                    </span>
+                  </label>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[13px] font-medium text-graphite">Resolution</label>
+                    <Dropdown
+                      value={profileResolutionPreset}
+                      onChange={(v) => {
+                        setProfileResolutionPreset(v);
+                        const preset = RESOLUTION_PRESETS.find((p) => p.value === v);
+                        if (preset) {
+                          setProfileViewportWidth(preset.width);
+                          setProfileViewportHeight(preset.height);
+                        }
+                      }}
+                      className="h-10 px-3 rounded-lg text-sm text-ink"
+                      options={[
+                        ...RESOLUTION_PRESETS.map((p) => ({ value: p.value, label: p.label })),
+                        { value: "custom", label: "Custom..." },
+                      ]}
+                    />
+                    {profileResolutionPreset === "custom" && (
+                      <div className="grid grid-cols-2 gap-3 mt-1">
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[13px] font-medium text-graphite">Width (px)</label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={profileViewportWidth}
+                            onChange={(e) => setProfileViewportWidth(parseInt(e.target.value, 10) || 0)}
+                            className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[13px] font-medium text-graphite">Height (px)</label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={profileViewportHeight}
+                            onChange={(e) => setProfileViewportHeight(parseInt(e.target.value, 10) || 0)}
+                            className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="border-t border-line pt-3 flex flex-col gap-4">

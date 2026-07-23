@@ -28,6 +28,9 @@ class ProfileCreate(BaseModel):
     authFunctionId: Optional[str] = None
     authInjections: Optional[List[AuthInjection]] = None
     defaultUrl: Optional[str] = ""
+    headless: Optional[bool] = False
+    viewportWidth: Optional[int] = 1280
+    viewportHeight: Optional[int] = 720
 
 class ProfileUpdate(BaseModel):
     name: Optional[str] = None
@@ -36,6 +39,9 @@ class ProfileUpdate(BaseModel):
     authFunctionId: Optional[str] = None
     authInjections: Optional[List[AuthInjection]] = None
     defaultUrl: Optional[str] = None
+    headless: Optional[bool] = None
+    viewportWidth: Optional[int] = None
+    viewportHeight: Optional[int] = None
     expected_version: Optional[int] = None
     force: bool = False
 
@@ -108,6 +114,9 @@ async def create_profile(
         "authFunctionId": ObjectId(payload.authFunctionId) if payload.authFunctionId else None,
         "authInjections": [inj.dict() for inj in payload.authInjections] if payload.authInjections else [],
         "defaultUrl": payload.defaultUrl,
+        "headless": payload.headless if payload.headless is not None else False,
+        "viewportWidth": payload.viewportWidth or 1280,
+        "viewportHeight": payload.viewportHeight or 720,
         **new_version_fields(device_id),
     }
 
@@ -141,6 +150,12 @@ async def update_profile(
     if payload.defaultUrl is not None:
         validate_url(payload.defaultUrl)
         update_fields["defaultUrl"] = payload.defaultUrl
+    if payload.headless is not None:
+        update_fields["headless"] = payload.headless
+    if payload.viewportWidth is not None:
+        update_fields["viewportWidth"] = payload.viewportWidth
+    if payload.viewportHeight is not None:
+        update_fields["viewportHeight"] = payload.viewportHeight
 
     doc = await apply_versioned_update(
         col, ObjectId(id), update_fields,

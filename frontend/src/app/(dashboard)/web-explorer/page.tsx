@@ -39,6 +39,7 @@ export default function WebExplorerPage() {
     browserUrl,
     setBrowserUrl,
     isBrowserConnected,
+    viewportSize,
     inspectMode,
     vncUrl,
     sessionId,
@@ -159,8 +160,8 @@ export default function WebExplorerPage() {
     const containerWidth = rect.width;
     const containerHeight = rect.height;
     
-    // Viewport aspect ratio is 1280 / 720 (16/9)
-    const imageAspectRatio = 1280 / 720;
+    // Aspect ratio of the actual browser viewport (profile-configurable resolution)
+    const imageAspectRatio = viewportSize.width / viewportSize.height;
     const containerAspectRatio = containerWidth / containerHeight;
     
     let renderedWidth = containerWidth;
