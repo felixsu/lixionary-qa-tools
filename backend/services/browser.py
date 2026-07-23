@@ -36,6 +36,30 @@ def sanitize_cookies(cookies) -> list:
         sanitized.append(cookie)
     return sanitized
 
+def render_recording_script(steps: List[str]) -> str:
+    """Render the full my_recording.py replay script for the recorded steps."""
+    content = "import os\n"
+    content += "from playwright.sync_api import sync_playwright\n\n"
+    content += "def run():\n"
+    content += "    cdp_url = os.environ.get(\"BROWSER_CDP_URL\", \"http://localhost:9222\")\n"
+    content += "    print(f\"Connecting to browser at {cdp_url}...\")\n"
+    content += "    with sync_playwright() as p:\n"
+    content += "        browser = p.chromium.connect_over_cdp(cdp_url)\n"
+    content += "        context = browser.contexts[0]\n"
+    content += "        page = context.pages[0]\n"
+    content += "        print(\"Connected! Replaying recorded steps...\")\n\n"
+
+    if steps:
+        for step in steps:
+            content += f"        {step}\n"
+    else:
+        content += "        # No steps recorded yet\n"
+        content += "        pass\n"
+
+    content += "\nif __name__ == \"__main__\":\n"
+    content += "    run()\n"
+    return content
+
 class BrowserSessionManager:
     # Dictionary to keep active sessions: {session_id: {"browser": browser, "context": context, "page": page}}
     _sessions = {}
@@ -1381,32 +1405,15 @@ class BrowserSessionManager:
         # Add to step list
         session.setdefault("recorded_steps", []).append(step_code)
 
-        # Regenerate my_recording.py
-        user_home = os.path.expanduser("~")
-        workspace_dir = os.path.join(user_home, "Documents", "AutomationExplorer", "workspaces", "default")
+        # Regenerate my_recording.py in the flavor-aware workspace (AE_DATA_DIR
+        # in the packaged app) — the workspace file APIs only look there.
+        from local_paths import get_base_dir
+        workspace_dir = os.path.join(get_base_dir(), "workspaces", "default")
         os.makedirs(workspace_dir, exist_ok=True)
         my_recording_path = os.path.join(workspace_dir, "my_recording.py")
 
-        steps = session["recorded_steps"]
-        content = "import os\n"
-        content += "from playwright.sync_api import sync_playwright\n\n"
-        content += "def run():\n"
-        content += "    cdp_url = os.environ.get(\"BROWSER_CDP_URL\", \"http://localhost:9222\")\n"
-        content += "    print(f\"Connecting to browser at {cdp_url}...\")\n"
-        content += "    with sync_playwright() as p:\n"
-        content += "        browser = p.chromium.connect_over_cdp(cdp_url)\n"
-        content += "        context = browser.contexts[0]\n"
-        content += "        page = context.pages[0]\n"
-        content += "        print(\"Connected! Replaying recorded steps...\")\n\n"
-
-        for step in steps:
-            content += f"        {step}\n"
-
-        content += "\nif __name__ == \"__main__\":\n"
-        content += "    run()\n"
-
         with open(my_recording_path, "w") as f:
-            f.write(content)
+            f.write(render_recording_script(session["recorded_steps"]))
 
         # Notify client
         if session.get("callback"):
