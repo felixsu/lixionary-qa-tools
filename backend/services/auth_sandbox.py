@@ -112,10 +112,14 @@ async def run_unsafe_auth_script(user_script: str, context_env: Dict[str, str]):
             const __result = (function() {{
                 {user_script}
             }})();
-            if (__result !== null && typeof __result === 'object') {{
+            if (__result === undefined || __result === null) {{
+                return 'ERROR: Script returned ' + (__result === undefined ? 'undefined' : 'null') +
+                    ' — check that the field you are reading exists on the response.';
+            }}
+            if (typeof __result === 'object') {{
                 return '__OBJECT__:' + JSON.stringify(__result);
             }}
-            return __result === undefined ? '' : String(__result);
+            return String(__result);
         }} catch(e) {{
             return 'ERROR: ' + e.message;
         }}
