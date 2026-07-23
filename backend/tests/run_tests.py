@@ -14,7 +14,7 @@ from tests.test_ranking import test_rank_locators_anchored_xpath
 from tests.test_profiles import test_serialize_doc
 from tests.test_executor import test_interpolate_variables, test_resolve_input_bindings, test_interpolate_variables_dynamic_tokens, test_interpolate_variables_date_math, test_resolve_request, test_resolve_request_with_interceptor_hmac_header, test_extract_jwt_expiry_fallback, test_get_valid_auth_token_caching
 from tests.test_generator import test_generate_pom_class_strategies, test_build_pom_method_code_with_url, test_record_interaction
-from tests.test_workspace import test_sanitize_filename
+from tests.test_workspace import test_sanitize_filename, test_reset_workspace_file
 from tests.test_admin import test_serialize_user, test_serialize_collection
 from tests.test_flows import test_serialize_flow_doc
 
@@ -54,6 +54,9 @@ def run():
         
         test_sanitize_filename()
         print("✓ test_sanitize_filename passed")
+
+        asyncio.run(test_reset_workspace_file())
+        print("✓ test_reset_workspace_file passed")
         
         test_generate_pom_class_strategies()
         print("✓ test_generate_pom_class_strategies passed")

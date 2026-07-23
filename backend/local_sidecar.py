@@ -24,7 +24,7 @@ from local_paths import get_base_dir
 SIDECAR_PORT = int(os.environ.get("SIDECAR_PORT", "8484"))
 CDP_PORT = int(os.environ.get("AE_CDP_PORT", "9222"))
 
-from services.browser import BrowserSessionManager, rank_locators, sanitize_cookies
+from services.browser import BrowserSessionManager, rank_locators, sanitize_cookies, render_recording_script
 from services.naming import polish_method_names, dedupe_names, heuristic_method_name, propose_locator_fix
 from services.generator import generate_pom_class, generate_http_client, build_pom_method_code
 from db.local_store import LocalStore
@@ -570,28 +570,9 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                 session["recording_enabled"] = True
                 session["recorded_steps"] = []
                 # Initialize my_recording.py with boilerplate
-                user_home = os.path.expanduser("~")
-                workspace_dir = os.path.join(user_home, "Documents", "AutomationExplorer", "workspaces", "default")
-                os.makedirs(workspace_dir, exist_ok=True)
-                my_recording_path = os.path.join(workspace_dir, "my_recording.py")
-                
-                content = "import os\n"
-                content += "from playwright.sync_api import sync_playwright\n\n"
-                content += "def run():\n"
-                content += "    cdp_url = os.environ.get(\"BROWSER_CDP_URL\", \"http://localhost:9222\")\n"
-                content += "    print(f\"Connecting to browser at {cdp_url}...\")\n"
-                content += "    with sync_playwright() as p:\n"
-                content += "        browser = p.chromium.connect_over_cdp(cdp_url)\n"
-                content += "        context = browser.contexts[0]\n"
-                content += "        page = context.pages[0]\n"
-                content += "        print(\"Connected! Replaying recorded steps...\")\n\n"
-                content += "        # No steps recorded yet\n"
-                content += "        pass\n"
-                content += "\nif __name__ == \"__main__\":\n"
-                content += "    run()\n"
-
+                my_recording_path = os.path.join(get_workspace_dir(session_id), "my_recording.py")
                 with open(my_recording_path, "w") as f:
-                    f.write(content)
+                    f.write(render_recording_script([]))
 
                 # Enable recording mode on page frames
                 await BrowserSessionManager.set_recording_mode(session_id, True)
@@ -1104,11 +1085,14 @@ async def reset_workspace(payload: FileResetPayload):
     workspace_dir = get_workspace_dir(payload.sessionId)
     safe_name = sanitize_filename(payload.filename)
     file_path = os.path.join(workspace_dir, safe_name)
-    if safe_name.startswith("inspection_code/"):
-        raise HTTPException(status_code=403, detail="Files inside inspection_code/ are read-only")
 
-    content = ""
-    if safe_name == "playground.py":
+    if safe_name == "inspection_code/my_page.py":
+        content = DEFAULT_MY_PAGE_PY
+    elif safe_name == "inspection_code/my_client.py":
+        content = DEFAULT_MY_CLIENT_PY
+    elif safe_name.startswith("inspection_code/"):
+        raise HTTPException(status_code=403, detail="Files inside inspection_code/ are read-only")
+    elif safe_name == "playground.py":
         content = DEFAULT_PLAYGROUND_PY
     elif safe_name == "main.py":
         content = DEFAULT_MAIN_PY
@@ -1118,7 +1102,7 @@ async def reset_workspace(payload: FileResetPayload):
     with open(file_path, "w") as f:
         f.write(content)
 
-    return {"message": f"File {safe_name} reset to default template"}
+    return {"message": f"File {safe_name} reset to default template", "content": content}
 
 @app.post("/api/workspace/run")
 async def run_local_script_direct(payload: RunScriptPayload):

@@ -45,8 +45,13 @@ def test_build_pom_method_code_with_url():
 
 async def test_record_interaction():
     import os
+    import shutil
+    import tempfile
     from services.browser import BrowserSessionManager
     session_id = "test_record_sess"
+    tmp_base = tempfile.mkdtemp(prefix="ae_test_")
+    prev_data_dir = os.environ.get("AE_DATA_DIR")
+    os.environ["AE_DATA_DIR"] = tmp_base
     BrowserSessionManager._sessions[session_id] = {
         "recording_enabled": True,
         "recorded_steps": [],
@@ -62,18 +67,25 @@ async def test_record_interaction():
         }
     }
     
-    await BrowserSessionManager.record_interaction(session_id, action_data)
-    
-    session = BrowserSessionManager._sessions[session_id]
-    assert len(session["recorded_steps"]) == 1
-    assert "page.get_by_test_id(\"submit-btn\").click()" in session["recorded_steps"][0]
-    
-    del BrowserSessionManager._sessions[session_id]
-    
-    # Clean up generated file
-    workspace_dir = os.path.join(os.path.expanduser("~"), "Documents", "AutomationExplorer", "workspaces", "default")
-    my_recording_path = os.path.join(workspace_dir, "my_recording.py")
-    if os.path.exists(my_recording_path):
-        os.remove(my_recording_path)
+    try:
+        await BrowserSessionManager.record_interaction(session_id, action_data)
+
+        session = BrowserSessionManager._sessions[session_id]
+        assert len(session["recorded_steps"]) == 1
+        assert "page.get_by_test_id(\"submit-btn\").click()" in session["recorded_steps"][0]
+
+        # my_recording.py must land in the flavor-aware workspace (AE_DATA_DIR),
+        # not the legacy ~/Documents location
+        my_recording_path = os.path.join(tmp_base, "workspaces", "default", "my_recording.py")
+        assert os.path.exists(my_recording_path)
+        with open(my_recording_path) as f:
+            assert "page.get_by_test_id(\"submit-btn\").click()" in f.read()
+    finally:
+        del BrowserSessionManager._sessions[session_id]
+        if prev_data_dir is None:
+            os.environ.pop("AE_DATA_DIR", None)
+        else:
+            os.environ["AE_DATA_DIR"] = prev_data_dir
+        shutil.rmtree(tmp_base, ignore_errors=True)
 
 
