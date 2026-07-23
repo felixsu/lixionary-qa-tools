@@ -36,6 +36,51 @@ def sanitize_cookies(cookies) -> list:
         sanitized.append(cookie)
     return sanitized
 
+# Shared JS predicate for "clickable-looking" div/span elements (e.g. Ant Design
+# dropdown triggers rendered as <div class="ant-dropdown-trigger">). Spliced into
+# both the inspector and recorder IIFEs via the //__LIX_CLICKABLE_HEURISTIC__
+# placeholder — the IIFE templates contain JS template literals, so they cannot
+# become f-strings.
+_CLICKABLE_HEURISTIC_JS = """
+            var LIX_STANDARD_INTERACTIVE =
+                'button, a[href], input, textarea, select, [contenteditable="true"], ' +
+                '[role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], ' +
+                '[role="combobox"], [role="listbox"], label';
+
+            function lixIsPointer(el) { return getComputedStyle(el).cursor === 'pointer'; }
+            function lixHasTestId(el) { return el.hasAttribute('data-testid') || el.hasAttribute('data-test-id'); }
+            function lixIsDivSpan(el) {
+                var t = el.tagName.toLowerCase();
+                return t === 'div' || t === 'span';
+            }
+
+            // cursor:pointer is inherited, so every descendant of a clickable
+            // element also computes pointer. Two tiers keep this from exploding:
+            // testid + pointer is accepted anywhere in a pointer chain, while
+            // pointer-only elements are accepted only at the pointer root and
+            // must pass name/footprint guards.
+            function lixHeuristicClickable(el) {
+                if (!lixIsDivSpan(el)) return false;
+                if (el.closest(LIX_STANDARD_INTERACTIVE)) return false;
+                if (el.querySelector(LIX_STANDARD_INTERACTIVE)) return false;
+                if (!lixIsPointer(el)) return false;
+                if (lixHasTestId(el)) return true;
+
+                var p = el.parentElement;
+                if (p && p !== document.body && lixIsPointer(p)) return false;
+                var tidChild = el.querySelector('div[data-testid], div[data-test-id], span[data-testid], span[data-test-id]');
+                if (tidChild && lixIsPointer(tidChild)) return false;
+
+                var text = (el.textContent || '').trim();
+                if (!text && !el.getAttribute('aria-label')) return false;
+                if (text.length > 60) return false;
+                var r = el.getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) return false;
+                if (r.height > 200 || r.width > 0.9 * window.innerWidth) return false;
+                return true;
+            }
+"""
+
 def render_recording_script(steps: List[str]) -> str:
     """Render the full my_recording.py replay script for the recorded steps."""
     content = "import os\n"
@@ -676,6 +721,8 @@ class BrowserSessionManager:
             if (window.__lixionary_inspector_injected) return;
             window.__lixionary_inspector_injected = true;
 
+            //__LIX_CLICKABLE_HEURISTIC__
+
             let inspectMode = false;
             let hoverOverlay = null;
             let lixionaryAnchor = null;
@@ -738,6 +785,7 @@ class BrowserSessionManager:
                 const SCAN_CAP = 200;
                 const CLICKABLE_SELECTOR = 'button, a[href], [role="button"], [role="link"]';
                 const FILL_INPUT_TYPES = ['text', 'email', 'password', 'search', 'tel', 'url', 'number'];
+                let heuristicBudget = 5000;
 
                 function classify(el) {
                     const tag = el.tagName.toLowerCase();
@@ -761,6 +809,19 @@ class BrowserSessionManager:
                     }
                     if (tag === 'select' || role === 'combobox' || role === 'listbox') {
                         return { action: 'select_option', subtype: null };
+                    }
+                    if (lixIsDivSpan(el)) {
+                        // Heavy pages can have thousands of div/span candidates;
+                        // bound heuristic evaluations without dropping the standard
+                        // elements that come after them in document order.
+                        if (heuristicBudget > 0) {
+                            heuristicBudget--;
+                            if (lixHeuristicClickable(el)) {
+                                return { action: 'click', subtype: 'pointer' };
+                            }
+                        } else {
+                            truncated = true;
+                        }
                     }
                     return null;
                 }
@@ -796,6 +857,9 @@ class BrowserSessionManager:
                     'button, a[href], [role="button"], [role="link"], input, textarea, select, ' +
                     '[contenteditable="true"], [role="checkbox"], [role="radio"], [role="switch"], ' +
                     '[role="combobox"], [role="listbox"]';
+                // div/span are heuristic candidates (lixHeuristicClickable); a single
+                // selector keeps candidates in document order.
+                const SCAN_SELECTOR = INTERACTIVE_SELECTOR + ', div, span';
 
                 let root = document;
                 let scopeInfo = null;
@@ -811,9 +875,9 @@ class BrowserSessionManager:
                         text: scopeEl.innerText ? scopeEl.innerText.trim().substring(0, 60) : ''
                     };
                     // Include the scope element itself in case it is interactive
-                    candidates = [scopeEl, ...scopeEl.querySelectorAll(INTERACTIVE_SELECTOR)];
+                    candidates = [scopeEl, ...scopeEl.querySelectorAll(SCAN_SELECTOR)];
                 } else {
-                    candidates = document.querySelectorAll(INTERACTIVE_SELECTOR);
+                    candidates = document.querySelectorAll(SCAN_SELECTOR);
                 }
                 const collectedClickables = new Set();
                 const elements = [];
@@ -822,7 +886,14 @@ class BrowserSessionManager:
 
                 for (const el of candidates) {
                     if (el.id === 'lixionary-hover-overlay') continue;
-                    const cls = classify(el);
+                    let cls = classify(el);
+                    if (!cls && scoped && el === root && lixIsDivSpan(el) &&
+                        lixIsPointer(el) && !el.closest(LIX_STANDARD_INTERACTIVE) &&
+                        !el.querySelector(LIX_STANDARD_INTERACTIVE)) {
+                        // The user explicitly inspect-clicked this div/span as the
+                        // scan scope; accept it even mid-pointer-chain.
+                        cls = { action: 'click', subtype: 'pointer' };
+                    }
                     if (!cls) continue;
                     if (!isVisible(el)) continue;
 
@@ -831,6 +902,16 @@ class BrowserSessionManager:
                         // (e.g. a span-wrapping button inside a link)
                         const ancestor = el.parentElement && el.parentElement.closest(CLICKABLE_SELECTOR);
                         if (ancestor && collectedClickables.has(ancestor)) continue;
+                        if (cls.subtype === 'pointer') {
+                            // Heuristic divs/spans match no selector, so also skip
+                            // ones nested in an already-collected heuristic ancestor
+                            // (e.g. a testid span inside a collected testid div).
+                            let p = el.parentElement, nested = false;
+                            for (let depth = 0; p && depth < 10; depth++, p = p.parentElement) {
+                                if (collectedClickables.has(p)) { nested = true; break; }
+                            }
+                            if (nested) continue;
+                        }
                     }
 
                     total++;
@@ -1178,7 +1259,7 @@ class BrowserSessionManager:
 
             ensureInspectorListeners();
         })();
-        """
+        """.replace("//__LIX_CLICKABLE_HEURISTIC__", _CLICKABLE_HEURISTIC_JS)
 
     @classmethod
     def get_recorder_js(cls) -> str:
@@ -1186,6 +1267,8 @@ class BrowserSessionManager:
         (function() {
             if (window.__lixionary_recorder_injected) return;
             window.__lixionary_recorder_injected = true;
+
+            //__LIX_CLICKABLE_HEURISTIC__
 
             let recordingMode = false;
 
@@ -1251,12 +1334,32 @@ class BrowserSessionManager:
                 };
             }
 
+            // Fallback for clicks that hit no standard control: nearest
+            // testid-bearing pointer div/span wins, else the outermost
+            // heuristic-clickable pointer root.
+            function lixFindHeuristicClickTarget(start) {
+                let el = start, lastPointer = null;
+                for (let depth = 0; el && el.nodeType === 1 && depth < 10; depth++, el = el.parentElement) {
+                    const tag = el.tagName.toLowerCase();
+                    if (tag === 'body' || tag === 'html') break;
+                    if (!lixIsDivSpan(el)) continue;
+                    if (lixHasTestId(el) && lixIsPointer(el) && !el.closest(LIX_STANDARD_INTERACTIVE)) {
+                        return el;
+                    }
+                    if (lixHeuristicClickable(el)) lastPointer = el;
+                }
+                return lastPointer;
+            }
+
             document.addEventListener('click', function(e) {
                 if (!recordingMode) return;
                 const el = e.target;
 
-                const interactiveEl = el.closest('button, a[href], [role="button"], [role="link"], input, textarea, select, [contenteditable="true"]');
-                if (!interactiveEl) return;
+                let interactiveEl = el.closest('button, a[href], [role="button"], [role="link"], input, textarea, select, [contenteditable="true"]');
+                if (!interactiveEl) {
+                    interactiveEl = lixFindHeuristicClickTarget(el);
+                    if (!interactiveEl) return;
+                }
 
                 const tag = interactiveEl.tagName.toLowerCase();
                 const type = (interactiveEl.getAttribute('type') || '').toLowerCase();
@@ -1314,7 +1417,7 @@ class BrowserSessionManager:
                 }
             }, true);
         })();
-        """
+        """.replace("//__LIX_CLICKABLE_HEURISTIC__", _CLICKABLE_HEURISTIC_JS)
 
     @classmethod
     async def set_recording_mode(cls, session_id: str, enabled: bool):
