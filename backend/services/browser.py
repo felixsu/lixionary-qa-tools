@@ -54,17 +54,16 @@ _CLICKABLE_HEURISTIC_JS = """
                 return t === 'div' || t === 'span';
             }
 
-            // cursor:pointer is inherited, so every descendant of a clickable
-            // element also computes pointer. Two tiers keep this from exploding:
-            // testid + pointer is accepted anywhere in a pointer chain, while
-            // pointer-only elements are accepted only at the pointer root and
-            // must pass name/footprint guards.
+            // Pointer-root heuristic for div/spans WITHOUT a data-testid (testid
+            // elements qualify unconditionally via their own rule). cursor:pointer
+            // is inherited, so every descendant of a clickable element also
+            // computes pointer — accept only the pointer root, with name and
+            // footprint guards.
             function lixHeuristicClickable(el) {
                 if (!lixIsDivSpan(el)) return false;
                 if (el.closest(LIX_STANDARD_INTERACTIVE)) return false;
                 if (el.querySelector(LIX_STANDARD_INTERACTIVE)) return false;
                 if (!lixIsPointer(el)) return false;
-                if (lixHasTestId(el)) return true;
 
                 var p = el.parentElement;
                 if (p && p !== document.body && lixIsPointer(p)) return false;
@@ -810,6 +809,11 @@ class BrowserSessionManager:
                     if (tag === 'select' || role === 'combobox' || role === 'listbox') {
                         return { action: 'select_option', subtype: null };
                     }
+                    // Any testid-tagged element is addressable and worth scanning,
+                    // regardless of tag or cursor styling.
+                    if (lixHasTestId(el) && el !== document.body && el !== document.documentElement) {
+                        return { action: 'click', subtype: 'testid' };
+                    }
                     if (lixIsDivSpan(el)) {
                         // Heavy pages can have thousands of div/span candidates;
                         // bound heuristic evaluations without dropping the standard
@@ -857,9 +861,10 @@ class BrowserSessionManager:
                     'button, a[href], [role="button"], [role="link"], input, textarea, select, ' +
                     '[contenteditable="true"], [role="checkbox"], [role="radio"], [role="switch"], ' +
                     '[role="combobox"], [role="listbox"]';
-                // div/span are heuristic candidates (lixHeuristicClickable); a single
-                // selector keeps candidates in document order.
-                const SCAN_SELECTOR = INTERACTIVE_SELECTOR + ', div, span';
+                // Testid elements qualify unconditionally; div/span are heuristic
+                // candidates (lixHeuristicClickable). A single selector keeps
+                // candidates in document order.
+                const SCAN_SELECTOR = INTERACTIVE_SELECTOR + ', [data-testid], [data-test-id], div, span';
 
                 let root = document;
                 let scopeInfo = null;
@@ -897,15 +902,17 @@ class BrowserSessionManager:
                     if (!cls) continue;
                     if (!isVisible(el)) continue;
 
-                    if (cls.action === 'click') {
+                    // Testid elements skip click-dedup entirely: each carries its own
+                    // stable identity, so nested ones (ul > li, span in a button)
+                    // are all individually listed.
+                    if (cls.action === 'click' && cls.subtype !== 'testid') {
                         // Skip clickables nested in an already-collected clickable
                         // (e.g. a span-wrapping button inside a link)
                         const ancestor = el.parentElement && el.parentElement.closest(CLICKABLE_SELECTOR);
                         if (ancestor && collectedClickables.has(ancestor)) continue;
                         if (cls.subtype === 'pointer') {
                             // Heuristic divs/spans match no selector, so also skip
-                            // ones nested in an already-collected heuristic ancestor
-                            // (e.g. a testid span inside a collected testid div).
+                            // ones nested in an already-collected heuristic ancestor.
                             let p = el.parentElement, nested = false;
                             for (let depth = 0; p && depth < 10; depth++, p = p.parentElement) {
                                 if (collectedClickables.has(p)) { nested = true; break; }
@@ -1334,18 +1341,13 @@ class BrowserSessionManager:
                 };
             }
 
-            // Fallback for clicks that hit no standard control: nearest
-            // testid-bearing pointer div/span wins, else the outermost
-            // heuristic-clickable pointer root.
+            // Last-resort fallback for clicks that hit no testid element and no
+            // standard control: the outermost heuristic-clickable pointer root.
             function lixFindHeuristicClickTarget(start) {
                 let el = start, lastPointer = null;
                 for (let depth = 0; el && el.nodeType === 1 && depth < 10; depth++, el = el.parentElement) {
                     const tag = el.tagName.toLowerCase();
                     if (tag === 'body' || tag === 'html') break;
-                    if (!lixIsDivSpan(el)) continue;
-                    if (lixHasTestId(el) && lixIsPointer(el) && !el.closest(LIX_STANDARD_INTERACTIVE)) {
-                        return el;
-                    }
                     if (lixHeuristicClickable(el)) lastPointer = el;
                 }
                 return lastPointer;
@@ -1355,11 +1357,25 @@ class BrowserSessionManager:
                 if (!recordingMode) return;
                 const el = e.target;
 
-                let interactiveEl = el.closest('button, a[href], [role="button"], [role="link"], input, textarea, select, [contenteditable="true"]');
+                // Clicks landing inside form fields keep the standard-path
+                // behavior (text inputs record via 'change' as fill, not click)
+                // even when a testid-tagged wrapper surrounds the field.
+                const inFormField = el.closest('input, textarea, select, [contenteditable="true"]');
+
+                let interactiveEl = null;
+                if (!inFormField) {
+                    interactiveEl = el.closest('[data-testid], [data-test-id]');
+                    if (interactiveEl === document.body || interactiveEl === document.documentElement) {
+                        interactiveEl = null;
+                    }
+                }
+                if (!interactiveEl) {
+                    interactiveEl = el.closest('button, a[href], [role="button"], [role="link"], input, textarea, select, [contenteditable="true"]');
+                }
                 if (!interactiveEl) {
                     interactiveEl = lixFindHeuristicClickTarget(el);
-                    if (!interactiveEl) return;
                 }
+                if (!interactiveEl) return;
 
                 const tag = interactiveEl.tagName.toLowerCase();
                 const type = (interactiveEl.getAttribute('type') || '').toLowerCase();
