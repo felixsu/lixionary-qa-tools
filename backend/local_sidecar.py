@@ -286,17 +286,25 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
         cookies = init_cmd.get("cookies")
         local_storage = init_cmd.get("localStorage")
         default_url = init_cmd.get("defaultUrl") or "about:blank"
+        headless = bool(init_cmd.get("headless", False))
+        viewport_width = int(init_cmd.get("viewportWidth") or 1280)
+        viewport_height = int(init_cmd.get("viewportHeight") or 720)
 
-        # Launch local headful Chromium browser with remote debugging port enabled
+        # Launch local Chromium browser with remote debugging port enabled.
+        # --start-maximized only applies to a visible OS window, so it's
+        # skipped entirely in headless mode.
+        launch_args = [f"--remote-debugging-port={CDP_PORT}"]
+        if not headless:
+            launch_args.append("--start-maximized")
         playwright_mgr = await async_playwright().start()
         browser = await playwright_mgr.chromium.launch(
-            headless=False,
-            args=["--start-maximized", f"--remote-debugging-port={CDP_PORT}"]
+            headless=headless,
+            args=launch_args
         )
-        
-        # Define context with standard viewport and auto-granted permissions to avoid prompt overlays
+
+        # Define context with the profile's viewport and auto-granted permissions to avoid prompt overlays
         context = await browser.new_context(
-            viewport={"width": 1280, "height": 720},
+            viewport={"width": viewport_width, "height": viewport_height},
             permissions=["geolocation", "notifications", "camera", "microphone", "clipboard-read", "clipboard-write"]
         )
 
@@ -539,8 +547,17 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
 
         cdp_session.on("Page.screencastFrame", lambda e: asyncio.create_task(on_screencast_frame(e)))
 
-        # Tell client we are connected
-        await send_to_client({"type": "status", "data": {"connected": True, "url": page.url}})
+        # Tell client we are connected, including the effective viewport so
+        # the frontend doesn't rely on its own possibly-stale copy of the
+        # profile's resolution for click-coordinate scaling.
+        await send_to_client({
+            "type": "status",
+            "data": {
+                "connected": True,
+                "url": page.url,
+                "viewport": {"width": viewport_width, "height": viewport_height}
+            }
+        })
 
         # Handle incoming WebSocket commands
         while True:
