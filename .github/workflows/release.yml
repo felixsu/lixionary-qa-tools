@@ -34,23 +34,33 @@ jobs:
           set -euo pipefail
           CONF=frontend/src-tauri/tauri.conf.json
           CURRENT=$(node -p "require('./$CONF').version")
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-          NEXT="$MAJOR.$MINOR.$((PATCH + 1))"
-
-          node -e "
-            const fs = require('fs');
-            const path = '$CONF';
-            const conf = JSON.parse(fs.readFileSync(path, 'utf8'));
-            conf.version = '$NEXT';
-            fs.writeFileSync(path, JSON.stringify(conf, null, 2) + '\n');
-          "
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "$CONF"
-          git commit -m "chore: bump version to $NEXT"
+
+          if git rev-parse -q --verify "refs/tags/v$CURRENT" >/dev/null; then
+            # v$CURRENT already shipped — auto-bump the patch as usual.
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+            NEXT="$MAJOR.$MINOR.$((PATCH + 1))"
+
+            node -e "
+              const fs = require('fs');
+              const path = '$CONF';
+              const conf = JSON.parse(fs.readFileSync(path, 'utf8'));
+              conf.version = '$NEXT';
+              fs.writeFileSync(path, JSON.stringify(conf, null, 2) + '\n');
+            "
+
+            git add "$CONF"
+            git commit -m "chore: bump version to $NEXT"
+            git push origin HEAD:main
+          else
+            # Version was hand-set (e.g. a minor/major bump merged in a PR) and
+            # has never been released — ship it exactly as configured, no bump.
+            NEXT="$CURRENT"
+          fi
+
           git tag "v$NEXT"
-          git push origin HEAD:main
           git push origin "v$NEXT"
 
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"

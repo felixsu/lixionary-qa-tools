@@ -594,8 +594,7 @@ export default function ApiExplorerPage() {
     setReqOutputDescriptions,
     reqDescription,
     setReqDescription,
-    selectedEnvCloudId,
-    resolveAuthFunctionCloudId,
+    selectedEnvId,
 
     apiResponse,
     isExecutingApi,
@@ -1043,12 +1042,12 @@ export default function ApiExplorerPage() {
             token: reqAuthConfig.token,
             key: reqAuthConfig.key,
             value: reqAuthConfig.value,
-            authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId),
+            authFunctionId: reqAuthConfig.authFunctionId || null,
             tokenField: reqAuthConfig.tokenField
           },
           requestInterceptorScript: reqInterceptorScript,
           inputs: reqInputs,
-          environmentId: selectedEnvCloudId
+          environmentId: selectedEnvId || null
         })
       });
       const curl = buildCurlFromFields(reqMethod, resolved.url, resolved.headers, resolved.params, reqBodyType, resolved.body);
@@ -1231,12 +1230,12 @@ export default function ApiExplorerPage() {
             token: reqAuthConfig.token,
             key: reqAuthConfig.key,
             value: reqAuthConfig.value,
-            authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId),
+            authFunctionId: reqAuthConfig.authFunctionId || null,
             tokenField: reqAuthConfig.tokenField
           },
           requestInterceptorScript: reqInterceptorScript,
           inputs: reqInputs,
-          environmentId: selectedEnvCloudId
+          environmentId: selectedEnvId || null
         })
       });
       setResolvedPreview(resolved);

@@ -2,15 +2,14 @@ import random
 import re
 import time
 import json
+import hashlib
 import jwt
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional, Union
 import httpx
-from bson import ObjectId
 
-from db.mongo import MongoDB
+from db.local_store import LocalStore
 from services.auth_sandbox import run_unsafe_auth_script, run_unsafe_response_parser, run_unsafe_request_interceptor
-from services.sync_versioning import apply_versioned_update
 
 _DATE_FORMAT_TOKENS = [
     ("YYYY", "%Y"), ("YY", "%y"),
@@ -170,73 +169,98 @@ def extract_jwt_expiry(token: str) -> datetime:
     # Default fallback: 1 hour
     return datetime.now(timezone.utc) + timedelta(hours=1)
 
-async def get_valid_auth_token(auth_func_id: str, environment_id: Optional[str] = None) -> Union[str, Dict[str, Any]]:
+def load_env_vars(environment_ref: Optional[str]) -> Dict[str, str]:
     """
-    Resolves the valid auth token for the given auth function ID.
-    If cached token is missing, expired, or almost expired (within 30 seconds),
-    reruns the sandbox script, caches the result, and returns it. The result is
-    either a plain string or a dict, depending on what the auth function's
-    script returned.
+    Loads the variables of an environment from the local store as {key: value}.
+    `environment_ref` may be a device-local id or a cloud id. A missing ref or
+    unknown environment resolves to {} — the run proceeds without variables,
+    matching the cloud executor's old silent-fallback behavior.
     """
-    auth_col = MongoDB.get_collection("auth_functions")
-    auth_func = await auth_col.find_one({"_id": ObjectId(auth_func_id)})
-    if not auth_func:
-        raise ValueError(f"Auth function not found: {auth_func_id}")
+    if not environment_ref:
+        return {}
+    record = LocalStore.get_by_local_or_cloud_id("environment", environment_ref)
+    if not record:
+        return {}
+    try:
+        payload = json.loads(record["payload"])
+    except Exception:
+        return {}
+    return {v["key"]: v["value"] for v in payload.get("variables", []) if v.get("key")}
 
+def _auth_cache_key(local_id: str) -> str:
+    return f"auth_token_cache:{local_id}"
+
+def auth_script_hash(script: str, expires_in: Optional[int]) -> str:
+    """Cache-invalidation fingerprint: a change to the script or its configured
+    TTL (whether edited locally or synced in from another device) must force a
+    re-run — this replaces the cloud's PUT-time cachedToken reset."""
+    return hashlib.sha256(f"{script or ''}\n{expires_in}".encode()).hexdigest()
+
+def read_cached_auth_token(record: Dict[str, Any]) -> Optional[Union[str, Dict[str, Any]]]:
+    """Returns the cached token for an auth-function record if it is still
+    valid (matching script hash, well-formed, >30s from expiry), else None."""
+    raw = LocalStore.get_pref(_auth_cache_key(record["localId"]))
+    if not raw:
+        return None
+    try:
+        entry = json.loads(raw)
+        payload = json.loads(record["payload"])
+        if entry.get("scriptHash") != auth_script_hash(payload.get("script", ""), payload.get("expires_in")):
+            return None
+        expires_at = datetime.fromisoformat(entry["expiresAt"])
+    except Exception:
+        return None
+    if expires_at <= datetime.now(timezone.utc) + timedelta(seconds=30):
+        return None
+    token = entry.get("token")
+    return token if token else None
+
+async def get_valid_auth_token(auth_func_ref: str, environment_ref: Optional[str] = None) -> Union[str, Dict[str, Any]]:
+    """
+    Resolves the valid auth token for the given auth function (local or cloud id).
+    If the cached token is missing, expired, almost expired (within 30 seconds),
+    or the script/TTL changed since it was cached, reruns the sandbox script,
+    caches the result in device-local prefs (never synced), and returns it. The
+    result is either a plain string or a dict, depending on what the auth
+    function's script returned.
+    """
+    record = LocalStore.get_by_local_or_cloud_id("auth_function", auth_func_ref)
+    if not record:
+        raise ValueError(f"Auth function not found: {auth_func_ref}")
+
+    cached_token = read_cached_auth_token(record)
+    if cached_token is not None:
+        return cached_token
+
+    payload = json.loads(record["payload"])
+    script = payload.get("script", "")
+    expires_in = payload.get("expires_in")
+    print(f"Auth function cache miss/expiry/almost expired for: {payload.get('name')}. Running sandbox...")
+
+    new_token = await run_unsafe_auth_script(script, load_env_vars(environment_ref))
+
+    if isinstance(new_token, str) and new_token.startswith("ERROR:"):
+        raise ValueError(f"Auth Hook Execution Failed: {new_token}")
+
+    # Compute expiry. Object results have no field-guessing for JWT
+    # decoding, so they rely on the function's configured expires_in
+    # (or the same 1-hour default extract_jwt_expiry falls back to).
     now = datetime.now(timezone.utc)
-    cached_token = auth_func.get("cachedToken")
-    expires_at = auth_func.get("expiresAt")
-    expires_in = auth_func.get("expires_in")
+    if expires_in is not None and expires_in > 0:
+        token_expiry = now + timedelta(seconds=expires_in)
+    elif isinstance(new_token, str):
+        token_expiry = extract_jwt_expiry(new_token)
+    else:
+        token_expiry = now + timedelta(hours=1)
 
-    # Make sure expires_at is timezone-aware
-    if expires_at and expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    LocalStore.set_pref(_auth_cache_key(record["localId"]), json.dumps({
+        "token": new_token,
+        "expiresAt": token_expiry.isoformat(),
+        "scriptHash": auth_script_hash(script, expires_in),
+    }))
+    print(f"Token cached. Expiration set to: {token_expiry}")
 
-    # Re-run if missing, expired, or almost expired (within 30 seconds)
-    if not cached_token or not expires_at or expires_at <= now + timedelta(seconds=30):
-        print(f"Auth function cache miss/expiry/almost expired for: {auth_func['name']}. Running sandbox...")
-        script = auth_func.get("script", "")
-        
-        # Load environment variables
-        variables = {}
-        if environment_id:
-            env_col = MongoDB.get_collection("environments")
-            env = await env_col.find_one({"_id": ObjectId(environment_id)})
-            if env:
-                for var in env.get("variables", []):
-                    variables[var["key"]] = var["value"]
-
-        # Execute in QuickJS sandbox
-        new_token = await run_unsafe_auth_script(script, variables)
-
-        if isinstance(new_token, str) and new_token.startswith("ERROR:"):
-            raise ValueError(f"Auth Hook Execution Failed: {new_token}")
-
-        # Compute expiry. Object results have no field-guessing for JWT
-        # decoding, so they rely on the function's configured expires_in
-        # (or the same 1-hour default extract_jwt_expiry falls back to).
-        if expires_in is not None and expires_in > 0:
-            token_expiry = now + timedelta(seconds=expires_in)
-        elif isinstance(new_token, str):
-            token_expiry = extract_jwt_expiry(new_token)
-        else:
-            token_expiry = now + timedelta(hours=1)
-        
-        # Update DB cache
-        await auth_col.update_one(
-            {"_id": ObjectId(auth_func_id)},
-            {
-                "$set": {
-                    "cachedToken": new_token,
-                    "expiresAt": token_expiry,
-                    "updatedAt": datetime.now(timezone.utc)
-                }
-            }
-        )
-        cached_token = new_token
-        print(f"Token cached. Expiration set to: {token_expiry}")
-
-    return cached_token
+    return new_token
 
 async def resolve_request(request_data: Dict[str, Any], environment_id: str = None) -> Dict[str, Any]:
     """
@@ -245,13 +269,7 @@ async def resolve_request(request_data: Dict[str, Any], environment_id: str = No
     their fully-resolved values. Does not dispatch any HTTP call.
     """
     # 1. Load active environment variables
-    variables = {}
-    if environment_id:
-        env_col = MongoDB.get_collection("environments")
-        env = await env_col.find_one({"_id": ObjectId(environment_id)})
-        if env:
-            for var in env.get("variables", []):
-                variables[var["key"]] = var["value"]
+    variables = load_env_vars(environment_id)
 
     # 2. Resolve input bindings once per run, then interpolate URL, headers, query params, body
     inputs = resolve_input_bindings(request_data.get("inputs") or [], variables)
@@ -325,7 +343,7 @@ async def resolve_request(request_data: Dict[str, Any], environment_id: str = No
 
     return {"url": url, "headers": headers, "params": params, "body": body_content}
 
-async def execute_request(request_data: Dict[str, Any], environment_id: str = None, device_id: str = "unknown") -> Dict[str, Any]:
+async def execute_request(request_data: Dict[str, Any], environment_id: str = None) -> Dict[str, Any]:
     """
     Runs the full Request Execution Loop:
     1. Resolves URL, headers, query params, body, and auth via resolve_request().
@@ -403,15 +421,16 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
                 parser_script=parser_script
             )
 
-            # If env writes were made, save them back to the active environment.
-            # Goes through apply_versioned_update (same path as PUT /api/environments/{id})
-            # so the version bump lets the sync engine notice the change — a raw $set here
-            # is invisible to the local-first sync diff and gets silently lost/overwritten.
+            # If env writes were made, save them back to the active environment
+            # in the local store. LocalStore.update bumps the record's version,
+            # marking it dirty so the sync engine pushes the change to the cloud
+            # on the next pass — the local-first equivalent of the old versioned
+            # cloud write.
             if parsed_variables and environment_id:
-                env_col = MongoDB.get_collection("environments")
-                env_doc = await env_col.find_one({"_id": ObjectId(environment_id)})
-                if env_doc:
-                    updated_vars = {v["key"]: v for v in env_doc.get("variables", [])}
+                env_record = LocalStore.get_by_local_or_cloud_id("environment", environment_id)
+                if env_record:
+                    env_payload = json.loads(env_record["payload"])
+                    updated_vars = {v["key"]: v for v in env_payload.get("variables", [])}
 
                     # Update or append parsed variables
                     for key, val in parsed_variables.items():
@@ -421,13 +440,8 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
                             "isSecret": False
                         }
 
-                    await apply_versioned_update(
-                        env_col, ObjectId(environment_id),
-                        {"variables": list(updated_vars.values())},
-                        device_id=device_id,
-                        force=True,
-                        serialize=lambda d: d,
-                    )
+                    env_payload["variables"] = list(updated_vars.values())
+                    LocalStore.update("environment", env_record["localId"], json.dumps(env_payload))
         except Exception as e:
             parser_error = str(e)
             print(f"Response parser script run failed: {str(e)}")
@@ -437,15 +451,11 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
     # Persist last extracted outputs per request (groundwork for request chaining)
     if declared_outputs and request_data.get("requestId"):
         try:
-            await MongoDB.get_collection("request_outputs").update_one(
-                {"requestId": request_data["requestId"]},
-                {"$set": {
-                    "outputs": outputs_result,
-                    "missingOutputs": missing_outputs,
-                    "updatedAt": datetime.now(timezone.utc)
-                }},
-                upsert=True
-            )
+            LocalStore.set_pref(f"request_outputs:{request_data['requestId']}", json.dumps({
+                "outputs": outputs_result,
+                "missingOutputs": missing_outputs,
+                "updatedAt": datetime.now(timezone.utc).isoformat()
+            }))
         except Exception as e:
             print(f"Failed to persist request outputs: {str(e)}")
 

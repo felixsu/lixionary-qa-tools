@@ -202,6 +202,20 @@ class LocalStore:
         return cls._row_to_dict(row) if row else None
 
     @classmethod
+    def get_by_local_or_cloud_id(cls, entity_type: str, ref: str) -> Optional[Dict[str, Any]]:
+        """Resolves an entity by either its device-local id or its cloud id.
+        References stored in payloads may hold either form depending on where
+        they were written (this device's UI vs. pulled from another device) —
+        same reason syncEngine's resolver checks both. Excludes tombstones,
+        unlike get(): an executor lookup must never resolve a deleted record."""
+        row = _dict_row(cls._conn.execute(
+            f"SELECT {', '.join(_ENTITY_COLUMNS)} FROM entities "
+            "WHERE entity_type = ? AND (local_id = ? OR cloud_id = ?) AND deleted = 0",
+            (entity_type, ref, ref),
+        ), _ENTITY_COLUMNS)
+        return cls._row_to_dict(row) if row else None
+
+    @classmethod
     def sync_state(cls, entity_type: str) -> List[Dict[str, Any]]:
         rows = _dict_rows(cls._conn.execute(
             f"SELECT {', '.join(_SYNC_STATE_COLUMNS)} "
@@ -363,3 +377,13 @@ class LocalStore:
     @classmethod
     def delete_pref(cls, key: str) -> None:
         cls._conn.execute("DELETE FROM local_prefs WHERE key = ?", (key,))
+
+    @classmethod
+    def list_prefs(cls, prefix: str) -> Dict[str, str]:
+        """Returns all prefs whose key starts with `prefix`, as {key: value}."""
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        rows = _dict_rows(cls._conn.execute(
+            "SELECT key, value FROM local_prefs WHERE key LIKE ? ESCAPE '\\'",
+            (escaped + "%",),
+        ), ["key", "value"])
+        return {r["key"]: r["value"] for r in rows}

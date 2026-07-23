@@ -36,8 +36,11 @@ def serialize_doc(doc) -> dict:
     del doc["_id"]
     if "ownerId" in doc:
         doc["ownerId"] = str(doc["ownerId"])
-    if "expiresAt" in doc and doc["expiresAt"]:
-        doc["expiresAt"] = doc["expiresAt"].isoformat()
+    # Execution moved to the local sidecar (v0.2.0) — token caches are
+    # device-local now. Strip the stale cache fields still present on older
+    # Mongo docs so they stop leaking into sync pulls.
+    doc.pop("cachedToken", None)
+    doc.pop("expiresAt", None)
     return doc
 
 @router.get("")
@@ -67,8 +70,6 @@ async def create_auth_function(
         "description": payload.description,
         "script": payload.script,
         "expires_in": payload.expires_in,
-        "cachedToken": None,
-        "expiresAt": None,
         **new_version_fields(device_id),
     }
     res = await col.insert_one(doc)
@@ -94,14 +95,8 @@ async def update_auth_function(
         update_fields["description"] = payload.description
     if payload.script is not None:
         update_fields["script"] = payload.script
-        # Invalidate cache if script is updated
-        update_fields["cachedToken"] = None
-        update_fields["expiresAt"] = None
     if payload.expires_in is not None:
         update_fields["expires_in"] = payload.expires_in
-        # Invalidate cache if expires_in config changes
-        update_fields["cachedToken"] = None
-        update_fields["expiresAt"] = None
 
     doc = await apply_versioned_update(
         col, ObjectId(id), update_fields,
@@ -125,49 +120,3 @@ async def delete_auth_function(
 
     updated = await soft_delete(col, ObjectId(id), device_id=device_id)
     return {"message": "Auth function deleted successfully", **sync_state_projection(updated)}
-
-@router.get("/{id}/token")
-async def resolve_auth_function_token(id: str, envId: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    from services.executor import get_valid_auth_token
-    try:
-        token = await get_valid_auth_token(id, envId)
-        return {"token": token if isinstance(token, str) else None, "result": token}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to resolve auth function token: {str(e)}")
-
-class AuthFunctionTest(BaseModel):
-    script: str
-    environment_id: Optional[str] = None
-
-@router.post("/test")
-async def test_auth_function(payload: AuthFunctionTest, current_user: dict = Depends(get_current_user)):
-    """
-    Dry-runs the auth function script in the sandbox using the provided environment variables.
-    """
-    from services.auth_sandbox import run_unsafe_auth_script
-    
-    variables = {}
-    if payload.environment_id:
-        env_col = MongoDB.get_collection("environments")
-        env = await env_col.find_one({"_id": ObjectId(payload.environment_id)})
-        if env:
-            for var in env.get("variables", []):
-                variables[var["key"]] = var["value"]
-
-    try:
-        token_res = await run_unsafe_auth_script(payload.script, variables)
-        if isinstance(token_res, str) and token_res.startswith("ERROR:"):
-            return {
-                "success": False,
-                "error": token_res
-            }
-        return {
-            "success": True,
-            "token": token_res if isinstance(token_res, str) else None,
-            "result": token_res
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": f"Execution failed: {str(e)}"
-        }

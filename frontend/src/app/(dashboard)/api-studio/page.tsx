@@ -183,7 +183,7 @@ function StudioEditor() {
   const {
     flows, createFlow, updateFlow, deleteFlow,
     collections,
-    apiCall, selectedEnvCloudId, resolveAuthFunctionCloudId,
+    apiCall,
     environments, selectedEnvId,
   } = useAppContext();
 
@@ -571,7 +571,7 @@ function StudioEditor() {
 
     const handle = runFlow(
       flow,
-      { apiCall, collections, environmentId: selectedEnvCloudId, resolveAuthFunctionCloudId },
+      { apiCall, collections, environmentId: selectedEnvId || null },
       {
         onNodeStatus: setNodeStatus,
         onRecord: (record) => setRecords((prev) => [...prev, record]),
