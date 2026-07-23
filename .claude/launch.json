@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "frontend-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "frontend", "run", "dev"],
+      "port": 8481
+    },
+    {
+      "name": "frontend-dev-devflavor",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "frontend", "run", "dev:devflavor"],
+      "port": 8491
+    },
+    {
+      "name": "backend-sidecar",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["backend/bootstrap_sidecar.py"],
+      "port": 8484
+    },
+    {
+      "name": "docker-backend-stack",
+      "runtimeExecutable": "docker-compose",
+      "runtimeArgs": ["up"],
+      "port": 8480
+    }
+  ]
+}
