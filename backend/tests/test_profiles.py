@@ -17,10 +17,12 @@ def test_serialize_doc():
     }
     
     serialized = serialize_doc(mock_doc)
-    
+
     assert serialized["id"] == str(doc_id)
     assert serialized["ownerId"] == str(owner_id)
     assert serialized["authFunctionId"] == str(auth_func_id)
-    assert serialized["authInjection"]["key"] == "token"
+    # Legacy singular authInjection docs are migrated to a one-item list on read.
+    assert "authInjection" not in serialized
+    assert serialized["authInjections"] == [{"type": "cookie", "key": "token", "domainOrOrigin": "localhost"}]
     assert "name" in serialized
     assert "_id" not in serialized

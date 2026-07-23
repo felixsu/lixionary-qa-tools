@@ -1,7 +1,7 @@
 // API Studio client-side flow orchestrator: walks the graph in topological
-// order, executes request/looper/delay/verifier nodes against the existing
-// POST /api/executor/run endpoint, and feeds each node's outputs into
-// downstream input mappings.
+// order, executes request/looper/delay/verifier nodes against the local
+// sidecar's POST /api/executor/run endpoint, and feeds each node's outputs
+// into downstream input mappings.
 
 import type { Collection, RequestItem, InputBinding } from "../context/AppContext";
 import { findRequestInTree } from "../context/AppContext";
@@ -38,8 +38,7 @@ export interface RunRecord {
 export interface FlowRunDeps {
   apiCall: (path: string, options?: RequestInit) => Promise<any>;
   collections: Collection[];
-  environmentId: string | null; // selectedEnvCloudId
-  resolveAuthFunctionCloudId: (id?: string | null) => string | null;
+  environmentId: string | null; // selectedEnvId — the sidecar resolves local or cloud ids
 }
 
 export interface FlowRunCallbacks {
@@ -276,7 +275,8 @@ const executeRequestConfig = async (
       token: authConfig?.token,
       key: authConfig?.key,
       value: authConfig?.value,
-      authFunctionId: deps.resolveAuthFunctionCloudId(authConfig?.authFunctionId),
+      authFunctionId: authConfig?.authFunctionId ?? null,
+      tokenField: authConfig?.tokenField,
     },
     responseParserScript: request.responseParserScript || "",
     requestInterceptorScript: request.requestInterceptorScript || "",

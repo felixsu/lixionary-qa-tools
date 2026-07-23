@@ -33,8 +33,6 @@ export interface AuthFunction {
   description: string;
   script: string;
   expires_in?: number;
-  cachedToken?: string | Record<string, any>;
-  expiresAt?: string;
 }
 
 export interface UserGuideSummary {
@@ -281,12 +279,10 @@ interface AppContextType {
   // Databases & Shared States
   environments: Environment[];
   selectedEnvId: string;
-  selectedEnvCloudId: string | null; // cloud Mongo _id of the selected env, once synced — for cloud endpoints that expect one
   setSelectedEnvId: (id: string) => void;
   fetchEnvironments: () => Promise<Environment[]>;
   authFunctions: AuthFunction[];
   fetchAuthFunctions: () => Promise<AuthFunction[]>;
-  resolveAuthFunctionCloudId: (localId?: string | null) => string | null;
   syncConflicts: SyncConflict[];
   resolveSyncConflict: (conflict: SyncConflict, choice: "local" | "cloud") => Promise<void>;
   isOnline: boolean;
@@ -575,16 +571,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelectedEnvIdState(id);
     try { localStorage.setItem("lixionary_selected_env", id); } catch { /* non-fatal */ }
   };
-  const selectedEnvCloudId = environments.find((e) => e.id === selectedEnvId)?.cloudId || null;
   const [authFunctions, setAuthFunctions] = useState<AuthFunction[]>([]);
-  // Cloud endpoints that resolve HOOK auth (executor run/preview, profile token
-  // fetch) expect a Mongo _id — an auth function that hasn't synced yet only has
-  // a local id, so this resolves to null rather than send an id the cloud can't parse.
-  // id may be a local id (set via this device's own UI, which never changes even
-  // after the record syncs) or a cloud id (pulled from a record another device
-  // wrote) — check both rather than assume.
-  const resolveAuthFunctionCloudId = (id?: string | null): string | null =>
-    id ? (authFunctions.find((af) => af.id === id || af.cloudId === id)?.cloudId || null) : null;
   const [userGuides, setUserGuides] = useState<UserGuideSummary[]>([]);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [flows, setFlows] = useState<Flow[]>([]);
@@ -932,7 +919,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // REST API helpers
   const apiCall = async (path: string, options: RequestInit = {}) => {
     let startedAt: number | null = null;
-    const isLocal = path.startsWith("/api/browser") || path.startsWith("/api/workspace") || path.startsWith("/api/browser-helper") || path.startsWith("/api/local-store");
+    const isLocal = path.startsWith("/api/browser") || path.startsWith("/api/workspace") || path.startsWith("/api/browser-helper") || path.startsWith("/api/local-store") || path.startsWith("/api/executor");
     const baseUrl = isLocal ? LOCAL_API_URL : VPS_API_URL;
     const fullUrl = `${baseUrl}${path}`;
 
@@ -1172,8 +1159,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         description: r.description,
         script: r.script,
         expires_in: r.expires_in,
-        cachedToken: r.cachedToken,
-        expiresAt: r.expiresAt,
       }));
       setAuthFunctions(mapped);
       return mapped;
@@ -1412,105 +1397,79 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         } catch {}
 
         if (profile.authFunctionId && profile.authInjections && profile.authInjections.length > 0) {
-          // The cloud endpoint resolves the auth function id (a path segment,
-          // not optional) as a Mongo _id — if it hasn't synced yet (e.g. the
-          // auth function or profile was just created), run one scoped sync
-          // pass and retry before giving up, rather than silently skipping
-          // the injection until the next periodic sync (up to 5 minutes).
-          let authFunctionCloudId = resolveAuthFunctionCloudId(profile.authFunctionId);
-          let envCloudId = selectedEnvCloudId;
-          if (!authFunctionCloudId) {
-            await triggerSync(["auth_function", "browser_profile", "environment"]);
-            const [freshAuthFunctions, freshEnvironments] = await Promise.all([
-              fetchAuthFunctions(),
-              fetchEnvironments(),
-            ]);
-            authFunctionCloudId =
-              freshAuthFunctions.find(
-                (af) => af.id === profile.authFunctionId || af.cloudId === profile.authFunctionId
-              )?.cloudId || null;
-            envCloudId = freshEnvironments.find((e) => e.id === selectedEnvId)?.cloudId || envCloudId;
-          }
-
-          if (!authFunctionCloudId) {
-            showToast(
-              `Profile "${profile.name}"'s auth-function hook was skipped — the auth function hasn't finished syncing to the cloud yet. Try launching again in a moment.`,
-              { type: "error" }
-            );
-          } else {
-            try {
-              // Same reasoning for envId — an environment that hasn't synced yet
-              // only has a local id, so omit the param instead.
-              const tokenUrl = envCloudId
-                ? `/api/auth-functions/${authFunctionCloudId}/token?envId=${envCloudId}`
-                : `/api/auth-functions/${authFunctionCloudId}/token`;
-              const tokenData = await apiCall(tokenUrl);
-              const authResult = tokenData?.result;
-              if (authResult === undefined || authResult === null || authResult === "") {
-                showToast(
-                  `Profile "${profile.name}"'s auth function did not return a token — check the auth function's script.`,
-                  { type: "error" }
-                );
-              } else {
-                // Auth hook is called once above; each mapping just picks a
-                // field out of that single result (or the whole string).
-                for (const injection of profile.authInjections) {
-                  const { type: injType, key: injKey, domainOrOrigin, sourceField } = injection;
-
-                  let tokenVal: string;
-                  if (typeof authResult === "object") {
-                    if (!sourceField) {
-                      showToast(
-                        `Profile "${profile.name}": mapping for "${injKey}" needs a source field — the auth function returned multiple fields.`,
-                        { type: "error" }
-                      );
-                      continue;
-                    }
-                    if (!(sourceField in authResult)) {
-                      showToast(
-                        `Profile "${profile.name}": auth function result has no field named "${sourceField}".`,
-                        { type: "error" }
-                      );
-                      continue;
-                    }
-                    tokenVal = authResult[sourceField];
-                  } else {
-                    if (sourceField) {
-                      showToast(
-                        `Profile "${profile.name}": mapping for "${injKey}" expects field "${sourceField}", but the auth function returned a plain string.`,
-                        { type: "error" }
-                      );
-                      continue;
-                    }
-                    tokenVal = authResult;
-                  }
-
-                  if (injType === "cookie") {
-                    cookies = cookies.filter((c: any) => c.name !== injKey);
-                    cookies.push({ name: injKey, value: tokenVal, domain: domainOrOrigin, path: "/" });
-                  } else if (injType === "localStorage") {
-                    if (!localStorageData) localStorageData = { origins: [] };
-                    if (!localStorageData.origins) localStorageData.origins = [];
-                    const targetOrigin = domainOrOrigin.toLowerCase().replace(/\/$/, "");
-                    let originEntry = localStorageData.origins.find(
-                      (e: any) => e.origin.toLowerCase().replace(/\/$/, "") === targetOrigin
-                    );
-                    if (!originEntry) {
-                      originEntry = { origin: domainOrOrigin, localStorage: [] };
-                      localStorageData.origins.push(originEntry);
-                    }
-                    originEntry.localStorage = originEntry.localStorage.filter((kv: any) => kv.name !== injKey);
-                    originEntry.localStorage.push({ name: injKey, value: tokenVal });
-                  }
-                }
-              }
-            } catch (err: any) {
-              console.error("Failed to resolve auth function hook on frontend:", err);
+          try {
+            // The sidecar executor resolves local or cloud ids against the
+            // local store, so unsynced auth functions/environments work
+            // immediately — no pre-launch sync pass needed.
+            const tokenUrl = selectedEnvId
+              ? `/api/executor/auth-token/${profile.authFunctionId}?envId=${selectedEnvId}`
+              : `/api/executor/auth-token/${profile.authFunctionId}`;
+            const tokenData = await apiCall(tokenUrl);
+            const authResult = tokenData?.result;
+            if (authResult === undefined || authResult === null || authResult === "") {
               showToast(
-                `Failed to resolve auth-function hook for profile "${profile.name}": ${err?.message || err}`,
+                `Profile "${profile.name}"'s auth function did not return a token — check the auth function's script.`,
                 { type: "error" }
               );
+            } else {
+              // Auth hook is called once above; each mapping just picks a
+              // field out of that single result (or the whole string).
+              for (const injection of profile.authInjections) {
+                const { type: injType, key: injKey, domainOrOrigin, sourceField } = injection;
+
+                let tokenVal: string;
+                if (typeof authResult === "object") {
+                  if (!sourceField) {
+                    showToast(
+                      `Profile "${profile.name}": mapping for "${injKey}" needs a source field — the auth function returned multiple fields.`,
+                      { type: "error" }
+                    );
+                    continue;
+                  }
+                  if (!(sourceField in authResult)) {
+                    showToast(
+                      `Profile "${profile.name}": auth function result has no field named "${sourceField}".`,
+                      { type: "error" }
+                    );
+                    continue;
+                  }
+                  tokenVal = authResult[sourceField];
+                } else {
+                  if (sourceField) {
+                    showToast(
+                      `Profile "${profile.name}": mapping for "${injKey}" expects field "${sourceField}", but the auth function returned a plain string.`,
+                      { type: "error" }
+                    );
+                    continue;
+                  }
+                  tokenVal = authResult;
+                }
+
+                if (injType === "cookie") {
+                  cookies = cookies.filter((c: any) => c.name !== injKey);
+                  cookies.push({ name: injKey, value: tokenVal, domain: domainOrOrigin, path: "/" });
+                } else if (injType === "localStorage") {
+                  if (!localStorageData) localStorageData = { origins: [] };
+                  if (!localStorageData.origins) localStorageData.origins = [];
+                  const targetOrigin = domainOrOrigin.toLowerCase().replace(/\/$/, "");
+                  let originEntry = localStorageData.origins.find(
+                    (e: any) => e.origin.toLowerCase().replace(/\/$/, "") === targetOrigin
+                  );
+                  if (!originEntry) {
+                    originEntry = { origin: domainOrOrigin, localStorage: [] };
+                    localStorageData.origins.push(originEntry);
+                  }
+                  originEntry.localStorage = originEntry.localStorage.filter((kv: any) => kv.name !== injKey);
+                  originEntry.localStorage.push({ name: injKey, value: tokenVal });
+                }
+              }
             }
+          } catch (err: any) {
+            console.error("Failed to resolve auth function hook on frontend:", err);
+            showToast(
+              `Failed to resolve auth-function hook for profile "${profile.name}": ${err?.message || err}`,
+              { type: "error" }
+            );
           }
         }
       }
@@ -2017,26 +1976,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           token: reqAuthConfig.token,
           key: reqAuthConfig.key,
           value: reqAuthConfig.value,
-          authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId),
+          authFunctionId: reqAuthConfig.authFunctionId || null,
           tokenField: reqAuthConfig.tokenField
         },
         responseParserScript: reqParserScript,
         requestInterceptorScript: reqInterceptorScript,
         inputs: reqInputs,
         outputs: reqOutputs,
-        // Cloud resolves this as a Mongo _id — fall back to none if the selected
-        // environment hasn't synced to the cloud yet (only has a local id so far).
-        environmentId: selectedEnvCloudId
+        // The sidecar executor resolves local (or cloud) ids against the
+        // local store — unsynced environments work.
+        environmentId: selectedEnvId || null
       };
-
-      if (!deviceIdRef.current) {
-        const { deviceId } = await apiCall("/api/local-store/device-id");
-        deviceIdRef.current = deviceId;
-      }
 
       const result = await apiCall("/api/executor/run", {
         method: "POST",
-        headers: { "X-Device-Id": deviceIdRef.current! },
         body: JSON.stringify(payload)
       });
 
@@ -2687,12 +2640,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         environments,
         selectedEnvId,
-        selectedEnvCloudId,
         setSelectedEnvId,
         fetchEnvironments,
         authFunctions,
         fetchAuthFunctions,
-        resolveAuthFunctionCloudId,
         syncConflicts,
         resolveSyncConflict,
         isOnline,

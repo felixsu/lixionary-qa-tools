@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Plus, Trash2, Pencil, X, Clock, CheckCircle2, Circle, RefreshCw, Play } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, AuthFunction } from "../../context/AppContext";
@@ -50,7 +50,7 @@ return data.data.access_token;`,
 ];
 
 export default function AuthFunctionsPage() {
-  const { authFunctions, handleSaveAuthFunc, handleDeleteAuthFunc, apiCall, selectedEnvCloudId } = useAppContext();
+  const { authFunctions, handleSaveAuthFunc, handleDeleteAuthFunc, apiCall, selectedEnvId } = useAppContext();
   const { showToast } = useToast();
 
   const [showModal, setShowModal] = useState(false);
@@ -63,6 +63,20 @@ export default function AuthFunctionsPage() {
   // Script testing state
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; result?: string | Record<string, any>; error?: string } | null>(null);
+
+  // Which functions have a currently-valid device-local token cache — the
+  // sidecar validates expiry and script hash, so this map only ever contains
+  // live entries.
+  const [tokenCache, setTokenCache] = useState<Record<string, { expiresAt: string }>>({});
+  const refreshTokenCache = () => {
+    apiCall("/api/executor/auth-cache")
+      .then((res) => setTokenCache(res || {}))
+      .catch(() => setTokenCache({}));
+  };
+  useEffect(() => {
+    refreshTokenCache();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const openCreate = () => {
     setEditingId(null);
@@ -99,11 +113,11 @@ export default function AuthFunctionsPage() {
     setIsTesting(true);
     setTestResult(null);
     try {
-      const res = await apiCall("/api/auth-functions/test", {
+      const res = await apiCall("/api/executor/auth-test", {
         method: "POST",
         body: JSON.stringify({
           script,
-          environment_id: selectedEnvCloudId
+          environment_id: selectedEnvId || null
         })
       });
       setTestResult(res);
@@ -120,6 +134,7 @@ export default function AuthFunctionsPage() {
     try {
       await handleSaveAuthFunc(name, desc, script, expiresIn ? parseInt(expiresIn, 10) : null, editingId);
       setShowModal(false);
+      refreshTokenCache(); // a script/TTL edit invalidates the device-local cache
     } catch (err: any) {
       showToast(err.message, { type: "error" });
     }
@@ -182,16 +197,16 @@ export default function AuthFunctionsPage() {
                 </div>
 
                 <div className="px-5 py-3 border-t border-line flex items-center gap-2">
-                  {func.cachedToken ? (
+                  {tokenCache[func.id] ? (
                     <CheckCircle2 className="h-3.5 w-3.5 text-sage" />
                   ) : (
                     <Circle className="h-3.5 w-3.5 text-mute" />
                   )}
                   <span
                     className="text-xs font-medium"
-                    style={{ color: func.cachedToken ? "#276749" : "#8e8b82" }}
+                    style={{ color: tokenCache[func.id] ? "#276749" : "#8e8b82" }}
                   >
-                    {func.cachedToken ? "Cached token active" : "No token cached"}
+                    {tokenCache[func.id] ? "Cached token active" : "No token cached"}
                   </span>
                   {func.expires_in ? (
                     <div className="ml-auto flex items-center gap-1">

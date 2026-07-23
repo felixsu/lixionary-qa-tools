@@ -29,10 +29,12 @@ from services.naming import polish_method_names, dedupe_names, heuristic_method_
 from services.generator import generate_pom_class, generate_http_client, build_pom_method_code
 from db.local_store import LocalStore
 from routes.local_store import router as local_store_router
+from routes.local_executor import router as local_executor_router
 from services.search_indexer import start_background_worker
 
 app = FastAPI(title="Lixionary Local Automation Explorer Sidecar")
 app.include_router(local_store_router)
+app.include_router(local_executor_router)
 
 app.add_middleware(
     CORSMiddleware,
