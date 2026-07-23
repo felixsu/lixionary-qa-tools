@@ -131,7 +131,7 @@ async def resolve_auth_function_token(id: str, envId: Optional[str] = None, curr
     from services.executor import get_valid_auth_token
     try:
         token = await get_valid_auth_token(id, envId)
-        return {"token": token}
+        return {"token": token if isinstance(token, str) else None, "result": token}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to resolve auth function token: {str(e)}")
 
@@ -156,14 +156,15 @@ async def test_auth_function(payload: AuthFunctionTest, current_user: dict = Dep
 
     try:
         token_res = await run_unsafe_auth_script(payload.script, variables)
-        if token_res.startswith("ERROR:"):
+        if isinstance(token_res, str) and token_res.startswith("ERROR:"):
             return {
                 "success": False,
                 "error": token_res
             }
         return {
             "success": True,
-            "token": token_res
+            "token": token_res if isinstance(token_res, str) else None,
+            "result": token_res
         }
     except Exception as e:
         return {

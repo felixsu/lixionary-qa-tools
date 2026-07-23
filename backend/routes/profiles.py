@@ -19,13 +19,14 @@ class AuthInjection(BaseModel):
     type: str
     key: str
     domainOrOrigin: str
+    sourceField: Optional[str] = None
 
 class ProfileCreate(BaseModel):
     name: str
     cookies: Optional[str] = ""
     localStorage: Optional[str] = ""
     authFunctionId: Optional[str] = None
-    authInjection: Optional[AuthInjection] = None
+    authInjections: Optional[List[AuthInjection]] = None
     defaultUrl: Optional[str] = ""
 
 class ProfileUpdate(BaseModel):
@@ -33,7 +34,7 @@ class ProfileUpdate(BaseModel):
     cookies: Optional[str] = None
     localStorage: Optional[str] = None
     authFunctionId: Optional[str] = None
-    authInjection: Optional[AuthInjection] = None
+    authInjections: Optional[List[AuthInjection]] = None
     defaultUrl: Optional[str] = None
     expected_version: Optional[int] = None
     force: bool = False
@@ -47,6 +48,14 @@ def serialize_doc(doc) -> dict:
         doc["ownerId"] = str(doc["ownerId"])
     if "authFunctionId" in doc and doc["authFunctionId"]:
         doc["authFunctionId"] = str(doc["authFunctionId"])
+    # Migrate legacy singular `authInjection` docs into the `authInjections`
+    # list on read, so old profiles keep working without a manual re-save.
+    # Checked by key presence (not truthiness) so a profile that was
+    # explicitly re-saved with zero mappings (`authInjections: []`) doesn't
+    # get incorrectly resurrected from a stale legacy field.
+    legacy_injection = doc.pop("authInjection", None)
+    if "authInjections" not in doc or doc["authInjections"] is None:
+        doc["authInjections"] = [legacy_injection] if legacy_injection else []
     return doc
 
 @router.get("")
@@ -97,7 +106,7 @@ async def create_profile(
         "cookies": payload.cookies,
         "localStorage": payload.localStorage,
         "authFunctionId": ObjectId(payload.authFunctionId) if payload.authFunctionId else None,
-        "authInjection": payload.authInjection.dict() if payload.authInjection else None,
+        "authInjections": [inj.dict() for inj in payload.authInjections] if payload.authInjections else [],
         "defaultUrl": payload.defaultUrl,
         **new_version_fields(device_id),
     }
@@ -127,8 +136,8 @@ async def update_profile(
         update_fields["localStorage"] = payload.localStorage
     if payload.authFunctionId is not None:
         update_fields["authFunctionId"] = ObjectId(payload.authFunctionId) if payload.authFunctionId else None
-    if payload.authInjection is not None:
-        update_fields["authInjection"] = payload.authInjection.dict() if payload.authInjection else None
+    if payload.authInjections is not None:
+        update_fields["authInjections"] = [inj.dict() for inj in payload.authInjections]
     if payload.defaultUrl is not None:
         validate_url(payload.defaultUrl)
         update_fields["defaultUrl"] = payload.defaultUrl
