@@ -67,10 +67,12 @@ def python_fetch_handler(url: str, options_json: str = "{}") -> str:
         except Exception as e:
             return json.dumps({"error": f"Fetch failed: {str(e)}"})
 
-async def run_unsafe_auth_script(user_script: str, context_env: Dict[str, str]) -> str:
+async def run_unsafe_auth_script(user_script: str, context_env: Dict[str, str]):
     """
     Runs untrusted JavaScript code securely inside a QuickJS isolate.
-    Returns the evaluated string result.
+    Returns the evaluated result: a plain string, or a dict if the script
+    returns a JS object (e.g. { access_token, refresh_token }). Returns an
+    'ERROR: ...' string on failure.
     """
     # Create QuickJS context
     ctx = quickjs.Context()
@@ -99,11 +101,21 @@ async def run_unsafe_auth_script(user_script: str, context_env: Dict[str, str]) 
     # Expose a global console object for logging/debugging
     ctx.eval("const console = { log: function(...args) { return args.join(' '); } };")
 
-    # Wrap user script in a self-executing function
+    # Wrap user script in a self-executing function. The user's own `return`
+    # is captured inside an inner IIFE so the outer wrapper can inspect the
+    # result and decide how to hand it back to Python: quickjs can only
+    # bridge primitives, so object results are JSON-stringified with a
+    # sentinel prefix and decoded back into a dict on the Python side.
     wrapped_script = f"""
     (function() {{
         try {{
-            {user_script}
+            const __result = (function() {{
+                {user_script}
+            }})();
+            if (__result !== null && typeof __result === 'object') {{
+                return '__OBJECT__:' + JSON.stringify(__result);
+            }}
+            return __result === undefined ? '' : String(__result);
         }} catch(e) {{
             return 'ERROR: ' + e.message;
         }}
@@ -112,8 +124,10 @@ async def run_unsafe_auth_script(user_script: str, context_env: Dict[str, str]) 
 
     # Execute inside context
     try:
-        result = ctx.eval(wrapped_script)
-        return str(result)
+        result = str(ctx.eval(wrapped_script))
+        if result.startswith("__OBJECT__:"):
+            return json.loads(result[len("__OBJECT__:"):])
+        return result
     except Exception as e:
         return f"ERROR: Execution failed: {str(e)}"
 

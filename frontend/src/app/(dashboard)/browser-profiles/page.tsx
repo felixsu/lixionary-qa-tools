@@ -23,6 +23,8 @@ const DEFAULT_PROFILE_COOKIES = `[
 
 type SetupMethod = "manual" | "extension";
 type WizardStep = "method" | "localStorage" | "cookies" | "import" | "details";
+type AuthInjectionRow = { type: "cookie" | "localStorage"; key: string; domainOrOrigin: string; sourceField: string };
+const blankAuthInjectionRow = (): AuthInjectionRow => ({ type: "cookie", key: "", domainOrOrigin: "", sourceField: "" });
 
 const STEP_LABELS: Record<WizardStep, string> = {
   method: "Setup method",
@@ -46,9 +48,7 @@ export default function BrowserProfilesPage() {
   const [rawLsKey, setRawLsKey] = useState("");
   const [rawLsValue, setRawLsValue] = useState("");
   const [profileAuthFunctionId, setProfileAuthFunctionId] = useState<string>("");
-  const [profileAuthInjectionType, setProfileAuthInjectionType] = useState<"cookie" | "localStorage">("cookie");
-  const [profileAuthInjectionKey, setProfileAuthInjectionKey] = useState("");
-  const [profileAuthInjectionDomainOrOrigin, setProfileAuthInjectionDomainOrOrigin] = useState("");
+  const [profileAuthInjections, setProfileAuthInjections] = useState<AuthInjectionRow[]>([]);
 
   // Wizard states
   const [wizardStep, setWizardStep] = useState(0);
@@ -302,9 +302,7 @@ export default function BrowserProfilesPage() {
     setProfileLocalStorage("");
     setProfileAuthFunctionId("");
     setProfileDefaultUrl("");
-    setProfileAuthInjectionType("cookie");
-    setProfileAuthInjectionKey("");
-    setProfileAuthInjectionDomainOrOrigin("");
+    setProfileAuthInjections([]);
     resetWizard();
     setShowModal(true);
   };
@@ -316,15 +314,14 @@ export default function BrowserProfilesPage() {
     setProfileLocalStorage(profile.localStorage || "");
     setProfileAuthFunctionId(profile.authFunctionId || "");
     setProfileDefaultUrl(profile.defaultUrl || "");
-    if (profile.authInjection) {
-      setProfileAuthInjectionType((profile.authInjection.type as "cookie" | "localStorage") || "cookie");
-      setProfileAuthInjectionKey(profile.authInjection.key || "");
-      setProfileAuthInjectionDomainOrOrigin(profile.authInjection.domainOrOrigin || "");
-    } else {
-      setProfileAuthInjectionType("cookie");
-      setProfileAuthInjectionKey("");
-      setProfileAuthInjectionDomainOrOrigin("");
-    }
+    setProfileAuthInjections(
+      (profile.authInjections || []).map((inj) => ({
+        type: (inj.type as "cookie" | "localStorage") || "cookie",
+        key: inj.key || "",
+        domainOrOrigin: inj.domainOrOrigin || "",
+        sourceField: inj.sourceField || "",
+      }))
+    );
     resetWizard();
     setShowModal(true);
   };
@@ -461,11 +458,20 @@ export default function BrowserProfilesPage() {
         return;
       }
     }
+    if (profileAuthFunctionId && profileAuthInjections.some((r) => !r.key || !r.domainOrOrigin)) {
+      showToast("Each auth hook mapping needs a target key and a domain/origin.", { type: "error" });
+      return;
+    }
     try {
-      const authInjectionVal = profileAuthFunctionId
-        ? { type: profileAuthInjectionType, key: profileAuthInjectionKey, domainOrOrigin: profileAuthInjectionDomainOrOrigin }
+      const authInjectionsVal = profileAuthFunctionId
+        ? profileAuthInjections.map((r) => ({
+            type: r.type,
+            key: r.key,
+            domainOrOrigin: r.domainOrOrigin,
+            sourceField: r.sourceField || undefined,
+          }))
         : null;
-      await handleSaveProfile(profileName, profileCookies, profileLocalStorage, profileAuthFunctionId || null, authInjectionVal, profileDefaultUrl, editingId);
+      await handleSaveProfile(profileName, profileCookies, profileLocalStorage, profileAuthFunctionId || null, authInjectionsVal, profileDefaultUrl, editingId);
       setShowModal(false);
     } catch (err: any) {
       showToast(err.message, { type: "error" });
@@ -995,7 +1001,12 @@ export default function BrowserProfilesPage() {
                     <label className="text-[13px] font-medium text-graphite">Link auth hook</label>
                     <Dropdown
                       value={profileAuthFunctionId}
-                      onChange={setProfileAuthFunctionId}
+                      onChange={(v) => {
+                        setProfileAuthFunctionId(v);
+                        if (v && profileAuthInjections.length === 0) {
+                          setProfileAuthInjections([blankAuthInjectionRow()]);
+                        }
+                      }}
                       placeholder="— No auth hook linked —"
                       className="h-10 px-3 rounded-lg text-sm text-ink"
                       options={[
@@ -1009,46 +1020,93 @@ export default function BrowserProfilesPage() {
                   </div>
 
                   {profileAuthFunctionId && (
-                    <div className="bg-panel p-3.5 rounded-xl border border-line flex flex-col gap-3">
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-[13px] font-medium text-graphite">Injection type</label>
-                          <Dropdown
-                            value={profileAuthInjectionType}
-                            onChange={(v) => setProfileAuthInjectionType(v as "cookie" | "localStorage")}
-                            widthClass="w-full"
-                            className="h-9 px-2.5 rounded-md text-xs text-ink"
-                            options={[
-                              { value: "cookie", label: "Cookie" },
-                              { value: "localStorage", label: "Local storage" },
-                            ]}
-                          />
+                    <div className="flex flex-col gap-3">
+                      {profileAuthInjections.map((row, idx) => (
+                        <div key={idx} className="bg-panel p-3.5 rounded-xl border border-line flex flex-col gap-3 relative">
+                          <button
+                            type="button"
+                            onClick={() => setProfileAuthInjections((rows) => rows.filter((_, i) => i !== idx))}
+                            className="absolute top-2.5 right-2.5 text-mute hover:text-clay"
+                            title="Remove mapping"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="flex flex-col gap-1.5">
+                              <label className="text-[13px] font-medium text-graphite">Injection type</label>
+                              <Dropdown
+                                value={row.type}
+                                onChange={(v) =>
+                                  setProfileAuthInjections((rows) =>
+                                    rows.map((r, i) => (i === idx ? { ...r, type: v as "cookie" | "localStorage" } : r))
+                                  )
+                                }
+                                widthClass="w-full"
+                                className="h-9 px-2.5 rounded-md text-xs text-ink"
+                                options={[
+                                  { value: "cookie", label: "Cookie" },
+                                  { value: "localStorage", label: "Local storage" },
+                                ]}
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1.5">
+                              <label className="text-[13px] font-medium text-graphite">Target key / name</label>
+                              <input
+                                type="text"
+                                placeholder="e.g. auth_token"
+                                value={row.key}
+                                onChange={(e) =>
+                                  setProfileAuthInjections((rows) =>
+                                    rows.map((r, i) => (i === idx ? { ...r, key: e.target.value } : r))
+                                  )
+                                }
+                                required
+                                className="h-9 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay"
+                              />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="flex flex-col gap-1.5">
+                              <label className="text-[13px] font-medium text-graphite">
+                                {row.type === "cookie" ? "Domain (cookie)" : "Origin (local storage)"}
+                              </label>
+                              <input
+                                type="text"
+                                placeholder={row.type === "cookie" ? "e.g. .example.com" : "e.g. https://example.com"}
+                                value={row.domainOrOrigin}
+                                onChange={(e) =>
+                                  setProfileAuthInjections((rows) =>
+                                    rows.map((r, i) => (i === idx ? { ...r, domainOrOrigin: e.target.value } : r))
+                                  )
+                                }
+                                required
+                                className="h-9 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay"
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1.5">
+                              <label className="text-[13px] font-medium text-graphite">Source field</label>
+                              <input
+                                type="text"
+                                placeholder="e.g. access_token — blank if hook returns a string"
+                                value={row.sourceField}
+                                onChange={(e) =>
+                                  setProfileAuthInjections((rows) =>
+                                    rows.map((r, i) => (i === idx ? { ...r, sourceField: e.target.value } : r))
+                                  )
+                                }
+                                className="h-9 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay"
+                              />
+                            </div>
+                          </div>
                         </div>
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-[13px] font-medium text-graphite">Target key / name</label>
-                          <input
-                            type="text"
-                            placeholder="e.g. auth_token"
-                            value={profileAuthInjectionKey}
-                            onChange={(e) => setProfileAuthInjectionKey(e.target.value)}
-                            required={!!profileAuthFunctionId}
-                            className="h-9 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay"
-                          />
-                        </div>
-                      </div>
-                      <div className="flex flex-col gap-1.5">
-                        <label className="text-[13px] font-medium text-graphite">
-                          {profileAuthInjectionType === "cookie" ? "Domain (cookie)" : "Origin (local storage)"}
-                        </label>
-                        <input
-                          type="text"
-                          placeholder={profileAuthInjectionType === "cookie" ? "e.g. .example.com" : "e.g. https://example.com"}
-                          value={profileAuthInjectionDomainOrOrigin}
-                          onChange={(e) => setProfileAuthInjectionDomainOrOrigin(e.target.value)}
-                          required={!!profileAuthFunctionId}
-                          className="h-9 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay"
-                        />
-                      </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setProfileAuthInjections((rows) => [...rows, blankAuthInjectionRow()])}
+                        className="self-start flex items-center gap-1.5 text-[13px] font-medium text-clay hover:text-clay-dark"
+                      >
+                        <Plus className="h-3.5 w-3.5" /> Add mapping
+                      </button>
                     </div>
                   )}
                 </div>

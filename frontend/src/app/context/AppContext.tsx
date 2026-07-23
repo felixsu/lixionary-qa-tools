@@ -33,7 +33,7 @@ export interface AuthFunction {
   description: string;
   script: string;
   expires_in?: number;
-  cachedToken?: string;
+  cachedToken?: string | Record<string, any>;
   expiresAt?: string;
 }
 
@@ -68,6 +68,7 @@ export interface RequestItem {
     key?: string;
     value?: string;
     authFunctionId?: string;
+    tokenField?: string;
   };
   responseParserScript?: string;
   requestInterceptorScript?: string;
@@ -257,7 +258,7 @@ export interface BrowserProfile {
   cookies: string;
   localStorage: string;
   authFunctionId?: string;
-  authInjection?: { type: string; key: string; domainOrOrigin: string };
+  authInjections?: Array<{ type: string; key: string; domainOrOrigin: string; sourceField?: string }>;
   defaultUrl?: string;
   createdAt?: string;
 }
@@ -511,7 +512,7 @@ interface AppContextType {
     cookies: string,
     localStorage: string,
     authFunctionId: string | null,
-    authInjection: { type: string; key: string; domainOrOrigin: string } | null,
+    authInjections: Array<{ type: string; key: string; domainOrOrigin: string; sourceField?: string }> | null,
     defaultUrl: string,
     id: string | null
   ) => Promise<void>;
@@ -1329,7 +1330,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         cookies: r.cookies,
         localStorage: r.localStorage,
         authFunctionId: r.authFunctionId,
-        authInjection: r.authInjection,
+        // Local-store rows are untyped passthrough, so older records saved
+        // before multi-field injections may still only have the legacy
+        // singular `authInjection` — fall back to wrapping it in a list.
+        authInjections: r.authInjections || (r.authInjection ? [r.authInjection] : []),
         defaultUrl: r.defaultUrl,
       }));
       setProfiles(mapped);
@@ -1407,7 +1411,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           localStorageData = profile.localStorage ? JSON.parse(profile.localStorage) : null;
         } catch {}
 
-        if (profile.authFunctionId && profile.authInjection) {
+        if (profile.authFunctionId && profile.authInjections && profile.authInjections.length > 0) {
           // The cloud endpoint resolves the auth function id (a path segment,
           // not optional) as a Mongo _id — if it hasn't synced yet (e.g. the
           // auth function or profile was just created), run one scoped sync
@@ -1441,35 +1445,64 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 ? `/api/auth-functions/${authFunctionCloudId}/token?envId=${envCloudId}`
                 : `/api/auth-functions/${authFunctionCloudId}/token`;
               const tokenData = await apiCall(tokenUrl);
-              if (tokenData && tokenData.token) {
-                const tokenVal = tokenData.token;
-
-                const injType = profile.authInjection.type;
-                const injKey = profile.authInjection.key;
-                const domainOrOrigin = profile.authInjection.domainOrOrigin;
-
-                if (injType === "cookie") {
-                  cookies = cookies.filter((c: any) => c.name !== injKey);
-                  cookies.push({ name: injKey, value: tokenVal, domain: domainOrOrigin, path: "/" });
-                } else if (injType === "localStorage") {
-                  if (!localStorageData) localStorageData = { origins: [] };
-                  if (!localStorageData.origins) localStorageData.origins = [];
-                  const targetOrigin = domainOrOrigin.toLowerCase().replace(/\/$/, "");
-                  let originEntry = localStorageData.origins.find(
-                    (e: any) => e.origin.toLowerCase().replace(/\/$/, "") === targetOrigin
-                  );
-                  if (!originEntry) {
-                    originEntry = { origin: domainOrOrigin, localStorage: [] };
-                    localStorageData.origins.push(originEntry);
-                  }
-                  originEntry.localStorage = originEntry.localStorage.filter((kv: any) => kv.name !== injKey);
-                  originEntry.localStorage.push({ name: injKey, value: tokenVal });
-                }
-              } else {
+              const authResult = tokenData?.result;
+              if (authResult === undefined || authResult === null || authResult === "") {
                 showToast(
                   `Profile "${profile.name}"'s auth function did not return a token — check the auth function's script.`,
                   { type: "error" }
                 );
+              } else {
+                // Auth hook is called once above; each mapping just picks a
+                // field out of that single result (or the whole string).
+                for (const injection of profile.authInjections) {
+                  const { type: injType, key: injKey, domainOrOrigin, sourceField } = injection;
+
+                  let tokenVal: string;
+                  if (typeof authResult === "object") {
+                    if (!sourceField) {
+                      showToast(
+                        `Profile "${profile.name}": mapping for "${injKey}" needs a source field — the auth function returned multiple fields.`,
+                        { type: "error" }
+                      );
+                      continue;
+                    }
+                    if (!(sourceField in authResult)) {
+                      showToast(
+                        `Profile "${profile.name}": auth function result has no field named "${sourceField}".`,
+                        { type: "error" }
+                      );
+                      continue;
+                    }
+                    tokenVal = authResult[sourceField];
+                  } else {
+                    if (sourceField) {
+                      showToast(
+                        `Profile "${profile.name}": mapping for "${injKey}" expects field "${sourceField}", but the auth function returned a plain string.`,
+                        { type: "error" }
+                      );
+                      continue;
+                    }
+                    tokenVal = authResult;
+                  }
+
+                  if (injType === "cookie") {
+                    cookies = cookies.filter((c: any) => c.name !== injKey);
+                    cookies.push({ name: injKey, value: tokenVal, domain: domainOrOrigin, path: "/" });
+                  } else if (injType === "localStorage") {
+                    if (!localStorageData) localStorageData = { origins: [] };
+                    if (!localStorageData.origins) localStorageData.origins = [];
+                    const targetOrigin = domainOrOrigin.toLowerCase().replace(/\/$/, "");
+                    let originEntry = localStorageData.origins.find(
+                      (e: any) => e.origin.toLowerCase().replace(/\/$/, "") === targetOrigin
+                    );
+                    if (!originEntry) {
+                      originEntry = { origin: domainOrOrigin, localStorage: [] };
+                      localStorageData.origins.push(originEntry);
+                    }
+                    originEntry.localStorage = originEntry.localStorage.filter((kv: any) => kv.name !== injKey);
+                    originEntry.localStorage.push({ name: injKey, value: tokenVal });
+                  }
+                }
               }
             } catch (err: any) {
               console.error("Failed to resolve auth function hook on frontend:", err);
@@ -1984,7 +2017,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           token: reqAuthConfig.token,
           key: reqAuthConfig.key,
           value: reqAuthConfig.value,
-          authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId)
+          authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId),
+          tokenField: reqAuthConfig.tokenField
         },
         responseParserScript: reqParserScript,
         requestInterceptorScript: reqInterceptorScript,
@@ -2060,7 +2094,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           key: reqAuthConfig.key,
           value: reqAuthConfig.value,
           // HOOK auth function is user-local — don't embed in the shared collection document
-          authFunctionId: reqAuthType === "HOOK" ? null : (reqAuthConfig.authFunctionId || null)
+          authFunctionId: reqAuthType === "HOOK" ? null : (reqAuthConfig.authFunctionId || null),
+          tokenField: reqAuthConfig.tokenField
         },
         responseParserScript: reqParserScript,
         requestInterceptorScript: reqInterceptorScript,
@@ -2594,7 +2629,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     cookies: string,
     localStorage: string,
     authFunctionId: string | null,
-    authInjection: { type: string; key: string; domainOrOrigin: string } | null,
+    authInjections: Array<{ type: string; key: string; domainOrOrigin: string; sourceField?: string }> | null,
     defaultUrl: string,
     id: string | null
   ) => {
@@ -2602,12 +2637,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (id) {
         await apiCall(`/api/local-store/browser_profile/${id}`, {
           method: "PUT",
-          body: JSON.stringify({ payload: { name, cookies, localStorage, authFunctionId, authInjection, defaultUrl } })
+          body: JSON.stringify({ payload: { name, cookies, localStorage, authFunctionId, authInjections, defaultUrl } })
         });
       } else {
         await apiCall("/api/local-store/browser_profile", {
           method: "POST",
-          body: JSON.stringify({ payload: { name, cookies, localStorage, authFunctionId, authInjection, defaultUrl } })
+          body: JSON.stringify({ payload: { name, cookies, localStorage, authFunctionId, authInjections, defaultUrl } })
         });
       }
       await fetchProfiles();
@@ -2635,7 +2670,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       profile.cookies,
       profile.localStorage,
       profile.authFunctionId ?? null,
-      profile.authInjection ?? null,
+      profile.authInjections ?? null,
       profile.defaultUrl ?? "",
       null
     );

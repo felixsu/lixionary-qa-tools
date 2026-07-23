@@ -34,6 +34,7 @@ class AuthConfigSchema(BaseModel):
     key: Optional[str] = ""
     value: Optional[str] = ""
     authFunctionId: Optional[str] = None
+    tokenField: Optional[str] = None
 
 class ExtractedVariableSchema(BaseModel):
     variableName: str

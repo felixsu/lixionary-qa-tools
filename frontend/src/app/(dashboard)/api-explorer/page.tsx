@@ -1043,7 +1043,8 @@ export default function ApiExplorerPage() {
             token: reqAuthConfig.token,
             key: reqAuthConfig.key,
             value: reqAuthConfig.value,
-            authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId)
+            authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId),
+            tokenField: reqAuthConfig.tokenField
           },
           requestInterceptorScript: reqInterceptorScript,
           inputs: reqInputs,
@@ -1230,7 +1231,8 @@ export default function ApiExplorerPage() {
             token: reqAuthConfig.token,
             key: reqAuthConfig.key,
             value: reqAuthConfig.value,
-            authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId)
+            authFunctionId: resolveAuthFunctionCloudId(reqAuthConfig.authFunctionId),
+            tokenField: reqAuthConfig.tokenField
           },
           requestInterceptorScript: reqInterceptorScript,
           inputs: reqInputs,
@@ -1661,15 +1663,30 @@ export default function ApiExplorerPage() {
                     )}
 
                     {reqAuthType === "HOOK" && (
-                      <div className="flex flex-col gap-1.5">
-                        <label className="text-xs font-medium text-stone">Auth hook</label>
-                        <Dropdown
-                          value={reqAuthConfig.authFunctionId || ""}
-                          onChange={(v) => setReqAuthConfig({ ...reqAuthConfig, authFunctionId: v })}
-                          placeholder="Select auth hook…"
-                          widthClass="w-full"
-                          options={authFunctions.map((f) => ({ value: f.id, label: f.name }))}
-                        />
+                      <div className="flex flex-col gap-3">
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-xs font-medium text-stone">Auth hook</label>
+                          <Dropdown
+                            value={reqAuthConfig.authFunctionId || ""}
+                            onChange={(v) => setReqAuthConfig({ ...reqAuthConfig, authFunctionId: v })}
+                            placeholder="Select auth hook…"
+                            widthClass="w-full"
+                            options={authFunctions.map((f) => ({ value: f.id, label: f.name }))}
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-xs font-medium text-stone">Token field</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. access_token"
+                            value={reqAuthConfig.tokenField || ""}
+                            onChange={(e) => setReqAuthConfig({ ...reqAuthConfig, tokenField: e.target.value })}
+                            className="h-[38px] bg-cream border border-line rounded-lg px-3.5 font-mono text-xs text-ink outline-none focus:border-clay"
+                          />
+                          <p className="text-[11px] text-mute">
+                            Leave blank if this hook returns a plain string. Required if it returns an object (e.g. access_token).
+                          </p>
+                        </div>
                       </div>
                     )}
 

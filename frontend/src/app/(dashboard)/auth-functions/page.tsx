@@ -62,7 +62,7 @@ export default function AuthFunctionsPage() {
 
   // Script testing state
   const [isTesting, setIsTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; token?: string; error?: string } | null>(null);
+  const [testResult, setTestResult] = useState<{ success: boolean; result?: string | Record<string, any>; error?: string } | null>(null);
 
   const openCreate = () => {
     setEditingId(null);
@@ -312,7 +312,13 @@ export default function AuthFunctionsPage() {
                 {testResult.success ? (
                   <div className="text-emerald-400 break-all">
                     <span className="font-semibold text-emerald-300">✓ Token generated successfully:</span>
-                    <div className="mt-1 text-[11px] select-all">{testResult.token}</div>
+                    {typeof testResult.result === "object" && testResult.result !== null ? (
+                      <pre className="mt-1 text-[11px] select-all whitespace-pre-wrap">
+                        {JSON.stringify(testResult.result, null, 2)}
+                      </pre>
+                    ) : (
+                      <div className="mt-1 text-[11px] select-all">{testResult.result}</div>
+                    )}
                   </div>
                 ) : (
                   <div className="text-rose-400 whitespace-pre-wrap">

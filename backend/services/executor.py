@@ -4,7 +4,7 @@ import time
 import json
 import jwt
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 import httpx
 from bson import ObjectId
 
@@ -170,11 +170,13 @@ def extract_jwt_expiry(token: str) -> datetime:
     # Default fallback: 1 hour
     return datetime.now(timezone.utc) + timedelta(hours=1)
 
-async def get_valid_auth_token(auth_func_id: str, environment_id: Optional[str] = None) -> str:
+async def get_valid_auth_token(auth_func_id: str, environment_id: Optional[str] = None) -> Union[str, Dict[str, Any]]:
     """
     Resolves the valid auth token for the given auth function ID.
     If cached token is missing, expired, or almost expired (within 30 seconds),
-    reruns the sandbox script, caches the result, and returns it.
+    reruns the sandbox script, caches the result, and returns it. The result is
+    either a plain string or a dict, depending on what the auth function's
+    script returned.
     """
     auth_col = MongoDB.get_collection("auth_functions")
     auth_func = await auth_col.find_one({"_id": ObjectId(auth_func_id)})
@@ -206,15 +208,19 @@ async def get_valid_auth_token(auth_func_id: str, environment_id: Optional[str] 
 
         # Execute in QuickJS sandbox
         new_token = await run_unsafe_auth_script(script, variables)
-        
-        if new_token.startswith("ERROR:"):
+
+        if isinstance(new_token, str) and new_token.startswith("ERROR:"):
             raise ValueError(f"Auth Hook Execution Failed: {new_token}")
-        
-        # Compute expiry
+
+        # Compute expiry. Object results have no field-guessing for JWT
+        # decoding, so they rely on the function's configured expires_in
+        # (or the same 1-hour default extract_jwt_expiry falls back to).
         if expires_in is not None and expires_in > 0:
             token_expiry = now + timedelta(seconds=expires_in)
-        else:
+        elif isinstance(new_token, str):
             token_expiry = extract_jwt_expiry(new_token)
+        else:
+            token_expiry = now + timedelta(hours=1)
         
         # Update DB cache
         await auth_col.update_one(
@@ -275,7 +281,19 @@ async def resolve_request(request_data: Dict[str, Any], environment_id: str = No
 
     if auth_type in ("HOOK", "AUTH_HOOK") and auth_config.get("authFunctionId"):
         auth_func_id = auth_config["authFunctionId"]
-        cached_token = await get_valid_auth_token(auth_func_id, environment_id)
+        resolved_token = await get_valid_auth_token(auth_func_id, environment_id)
+        if isinstance(resolved_token, dict):
+            token_field = auth_config.get("tokenField")
+            if not token_field:
+                raise ValueError(
+                    "Auth function returned multiple fields; set a Token field in the "
+                    "Auth Hook config to pick which one to use as the Bearer token."
+                )
+            if token_field not in resolved_token:
+                raise ValueError(f"Auth function result has no field named '{token_field}'.")
+            cached_token = resolved_token[token_field]
+        else:
+            cached_token = resolved_token
         headers["Authorization"] = f"Bearer {cached_token}"
 
     elif auth_type == "BEARER" and auth_config.get("token"):
