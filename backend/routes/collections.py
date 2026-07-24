@@ -53,6 +53,7 @@ class RequestDefinitionSchema(BaseModel):
     authConfig: Optional[AuthConfigSchema] = None
     responseParserScript: Optional[str] = ""
     requestInterceptorScript: Optional[str] = ""
+    testScript: Optional[str] = ""
     extractedVariables: List[ExtractedVariableSchema] = []
     lastResponse: Optional[Dict[str, Any]] = None
     lastRunAt: Optional[str] = None

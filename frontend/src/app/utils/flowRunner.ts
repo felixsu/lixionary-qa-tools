@@ -30,6 +30,8 @@ export interface RunRecord {
   outputs: Record<string, any> | null;
   requestPayload: Record<string, any> | null; // exact /api/executor/run body
   response: { status: number; statusText: string; headers: Record<string, string>; body: any } | null;
+  testResults?: { name: string; passed: boolean }[] | null;
+  testError?: string | null;
   error?: string;
   startedAt: string; // ISO
   durationMs: number;
@@ -280,6 +282,7 @@ const executeRequestConfig = async (
     },
     responseParserScript: request.responseParserScript || "",
     requestInterceptorScript: request.requestInterceptorScript || "",
+    testScript: request.testScript || "",
     inputs: Array.from(bindings.values()),
     outputs: request.outputs || [],
     environmentId: deps.environmentId,
@@ -343,6 +346,8 @@ const makeRecord = (
   outputs: exec ? exec.outputs : null,
   requestPayload: exec?.requestPayload || null,
   response: exec?.response || null,
+  testResults: exec?.raw?.testResults ?? null,
+  testError: exec?.raw?.testError ?? null,
   error: exec?.error,
   startedAt,
   durationMs,

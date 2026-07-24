@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Optional, Union
 import httpx
 
 from db.local_store import LocalStore
-from services.auth_sandbox import run_unsafe_auth_script, run_unsafe_response_parser, run_unsafe_request_interceptor
+from services.auth_sandbox import run_unsafe_auth_script, run_unsafe_response_parser, run_unsafe_request_interceptor, run_unsafe_test_script
 
 _DATE_FORMAT_TOKENS = [
     ("YYYY", "%Y"), ("YY", "%y"),
@@ -402,7 +402,9 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
                 "parsedVariables": {},
                 "parserError": None,
                 "outputs": {},
-                "missingOutputs": []
+                "missingOutputs": [],
+                "testResults": None,
+                "testError": None
             }
 
     # 5. Execute Response Parser Script
@@ -465,6 +467,40 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
     except Exception:
         formatted_body = response_body
 
+    # 6. Execute Test Script (runs regardless of response status — asserting
+    # on error statuses is a legitimate test)
+    test_results = None
+    test_error = None
+    test_script = request_data.get("testScript")
+    if test_script and test_script.strip():
+        try:
+            req_body = body_content
+            try:
+                req_body = json.loads(body_content) if body_content else body_content
+            except Exception:
+                pass
+            test_results, test_error = await run_unsafe_test_script(
+                request_obj={
+                    "method": method,
+                    "url": url,
+                    "headers": headers,
+                    "params": params,
+                    "body": req_body,
+                    "bodyType": body_type
+                },
+                response_obj={
+                    "status": status_code,
+                    "statusText": status_text,
+                    "headers": response_headers,
+                    "body": formatted_body
+                },
+                outputs=outputs_result,
+                test_script=test_script
+            )
+        except Exception as e:
+            test_error = str(e)
+            print(f"Test script run failed: {str(e)}")
+
     return {
         "status": status_code,
         "statusText": status_text,
@@ -474,5 +510,7 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
         "parsedVariables": parsed_variables,
         "parserError": parser_error,
         "outputs": outputs_result,
-        "missingOutputs": missing_outputs
+        "missingOutputs": missing_outputs,
+        "testResults": test_results,
+        "testError": test_error
     }

@@ -70,6 +70,7 @@ export interface RequestItem {
   };
   responseParserScript?: string;
   requestInterceptorScript?: string;
+  testScript?: string;
   inputs?: InputBinding[];
   outputs?: string[];
   // Output name -> description, purely descriptive metadata (never sent to the executor).
@@ -331,6 +332,8 @@ interface AppContextType {
   setReqParserScript: (script: string) => void;
   reqInterceptorScript: string;
   setReqInterceptorScript: (script: string) => void;
+  reqTestScript: string;
+  setReqTestScript: (script: string) => void;
   reqInputs: InputBinding[];
   setReqInputs: React.Dispatch<React.SetStateAction<InputBinding[]>>;
   reqOutputs: string[];
@@ -345,8 +348,8 @@ interface AppContextType {
   setApiResponse: (res: any) => void;
   isExecutingApi: boolean;
   setIsExecutingApi: (executing: boolean) => void;
-  responseTab: "pretty" | "headers" | "raw" | "extracted" | "last";
-  setResponseTab: (tab: "pretty" | "headers" | "raw" | "extracted" | "last") => void;
+  responseTab: "pretty" | "headers" | "raw" | "extracted" | "tests" | "last";
+  setResponseTab: (tab: "pretty" | "headers" | "raw" | "extracted" | "tests" | "last") => void;
   showAiModal: boolean;
   setShowAiModal: (show: boolean) => void;
   aiPrompt: string;
@@ -597,6 +600,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [reqAuthConfig, setReqAuthConfig] = useState<any>({ token: "", key: "", value: "", authFunctionId: "" });
   const [reqParserScript, setReqParserScript] = useState("");
   const [reqInterceptorScript, setReqInterceptorScript] = useState("");
+  const [reqTestScript, setReqTestScript] = useState("");
   const [reqInputs, setReqInputs] = useState<InputBinding[]>([]);
   const [reqOutputs, setReqOutputs] = useState<string[]>([]);
   const [reqOutputDescriptions, setReqOutputDescriptions] = useState<Record<string, string>>({});
@@ -605,7 +609,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // API Explorer Response State
   const [apiResponse, setApiResponse] = useState<any>(null);
   const [isExecutingApi, setIsExecutingApi] = useState(false);
-  const [responseTab, setResponseTab] = useState<"pretty" | "headers" | "raw" | "extracted" | "last">("pretty");
+  const [responseTab, setResponseTab] = useState<"pretty" | "headers" | "raw" | "extracted" | "tests" | "last">("pretty");
   const [showAiModal, setShowAiModal] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [isGeneratingAiParser, setIsGeneratingAiParser] = useState(false);
@@ -855,6 +859,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         setReqParserScript(req.responseParserScript || "");
         setReqInterceptorScript(req.requestInterceptorScript || "");
+        setReqTestScript(req.testScript || "");
         setReqInputs(req.inputs || []);
 
         // Declared outputs: start from the saved request value, then overlay
@@ -1998,6 +2003,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         },
         responseParserScript: reqParserScript,
         requestInterceptorScript: reqInterceptorScript,
+        testScript: reqTestScript,
         inputs: reqInputs,
         outputs: reqOutputs,
         // The sidecar executor resolves local (or cloud) ids against the
@@ -2069,6 +2075,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         },
         responseParserScript: reqParserScript,
         requestInterceptorScript: reqInterceptorScript,
+        testScript: reqTestScript,
         // Drop bindings whose token no longer appears in any request field
         inputs: (() => {
           const detected = scanInputNames({
@@ -2709,6 +2716,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setReqParserScript,
         reqInterceptorScript,
         setReqInterceptorScript,
+        reqTestScript,
+        setReqTestScript,
         reqInputs,
         setReqInputs,
         reqOutputs,

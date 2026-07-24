@@ -40,6 +40,7 @@ class ExecutorPayload(BaseModel):
     authConfig: Optional[dict] = None
     responseParserScript: Optional[str] = ""
     requestInterceptorScript: Optional[str] = ""
+    testScript: Optional[str] = ""
     environmentId: Optional[str] = None
     inputs: Optional[List[InputBinding]] = None
     outputs: Optional[List[str]] = None

@@ -4,7 +4,7 @@ import hashlib
 import base64
 import httpx
 import quickjs
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List, Optional
 
 _HASH_ALGOS = {"sha256": hashlib.sha256, "sha1": hashlib.sha1, "sha512": hashlib.sha512, "md5": hashlib.md5}
 
@@ -208,6 +208,65 @@ async def run_unsafe_response_parser(response_body: str, response_headers: Dict[
         return outputs, extracted_vars
     except Exception as e:
         raise RuntimeError(f"Parser execution failed: {str(e)}")
+
+async def run_unsafe_test_script(
+    request_obj: Dict[str, Any],
+    response_obj: Dict[str, Any],
+    outputs: Dict[str, Any],
+    test_script: str,
+) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """
+    Runs a user test script against a completed request/response pair.
+    Injects 'request' (final resolved request), 'response', 'outputs', and a
+    'test(name, condition)' function that records a named pass/fail result.
+    Returns (results, error): results is [{name, passed}, ...] in call order;
+    error is None on success. On a script error, results recorded before the
+    throw are kept and the error message is returned instead of raised.
+    """
+    ctx = quickjs.Context()
+
+    try:
+        ctx.set_memory_limit(16 * 1024 * 1024)
+    except AttributeError:
+        pass
+
+    results: List[Dict[str, Any]] = []
+
+    def test_record_handler(name: str, passed: Any):
+        results.append({"name": str(name), "passed": bool(passed)})
+
+    ctx.add_callable("python_test_record", test_record_handler)
+    # Coerce the condition to 1/0 on the JS side: the quickjs->Python bridge
+    # only accepts primitives, so objects/undefined would otherwise raise.
+    ctx.eval("""
+    function test(name, condition) {
+        python_test_record(String(name), condition ? 1 : 0);
+    }
+    const console = { log: function(...args) { return args.join(' '); } };
+    """)
+
+    ctx.eval(f"const request = {json.dumps(request_obj)};")
+    ctx.eval(f"const response = {json.dumps(response_obj)};")
+    ctx.eval(f"const outputs = {json.dumps(outputs or {})};")
+
+    wrapped_script = f"""
+    (function() {{
+        try {{
+            {test_script}
+            return "SUCCESS";
+        }} catch(e) {{
+            return "ERROR: " + e.message;
+        }}
+    }})()
+    """
+
+    try:
+        status = str(ctx.eval(wrapped_script))
+        if status.startswith("ERROR:"):
+            return results, status
+        return results, None
+    except Exception as e:
+        return results, f"ERROR: {str(e)}"
 
 async def run_unsafe_request_interceptor(script: str, request_obj: Dict[str, Any], context_env: Dict[str, str]) -> Dict[str, Any]:
     """
