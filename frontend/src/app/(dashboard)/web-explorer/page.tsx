@@ -745,8 +745,9 @@ export default function WebExplorerPage() {
       }
       activeReaderRef.current = null;
     }
+    if (!sessionId) return;
     try {
-      await apiCall("/api/workspace/stop", { method: "POST" });
+      await apiCall(`/api/workspace/stop?session_id=${sessionId}`, { method: "POST" });
     } catch (e: any) {
       showToast(`Failed to stop script: ${e.message}`, { type: "error" });
     }
