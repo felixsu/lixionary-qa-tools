@@ -29,7 +29,7 @@ import {
   prepareImportedCollection,
 } from "../../utils/collectionTransfer";
 
-type ConfigTab = "headers" | "params" | "auth" | "inputs" | "output" | "interceptor" | "description" | "body";
+type ConfigTab = "headers" | "params" | "auth" | "inputs" | "output" | "test" | "interceptor" | "description" | "body";
 
 interface ParsedCurl {
   method: string;
@@ -586,6 +586,8 @@ export default function ApiExplorerPage() {
     setReqParserScript,
     reqInterceptorScript,
     setReqInterceptorScript,
+    reqTestScript,
+    setReqTestScript,
     reqInputs,
     setReqInputs,
     reqOutputs,
@@ -991,6 +993,12 @@ export default function ApiExplorerPage() {
     if (responseTab === "headers") return JSON.stringify(apiResponse.headers || {}, null, 2);
     if (responseTab === "raw") return JSON.stringify(apiResponse, null, 2);
     if (responseTab === "extracted") return JSON.stringify(apiResponse.outputs || {}, null, 2);
+    if (responseTab === "tests")
+      return JSON.stringify(
+        { testResults: apiResponse.testResults || [], testError: apiResponse.testError ?? null },
+        null,
+        2
+      );
     return typeof apiResponse.body === "object"
       ? JSON.stringify(apiResponse.body, null, 2)
       : String(apiResponse.body ?? "");
@@ -1268,13 +1276,14 @@ export default function ApiExplorerPage() {
     { id: "auth", label: "Auth" },
     { id: "inputs", label: detectedInputs.length ? `Input (${detectedInputs.length})` : "Input" },
     { id: "output", label: reqOutputs.length ? `Output (${reqOutputs.length})` : "Output" },
+    { id: "test", label: "Test" },
     { id: "interceptor", label: "Interceptor" },
     { id: "description", label: "Description" },
     { id: "body", label: "Body" },
   ];
 
-  const responseTabs: ("pretty" | "headers" | "raw" | "extracted" | "last")[] = [
-    "pretty", "headers", "raw", "extracted", "last",
+  const responseTabs: ("pretty" | "headers" | "raw" | "extracted" | "tests" | "last")[] = [
+    "pretty", "headers", "raw", "extracted", "tests", "last",
   ];
 
   const inputCls =
@@ -1840,6 +1849,36 @@ export default function ApiExplorerPage() {
                   </div>
                 )}
 
+                {configTab === "test" && (
+                  <div className="flex flex-col h-full">
+                    <div className="px-4 pt-3 pb-2 flex-shrink-0">
+                      <span className="text-[11px] text-mute">
+                        Runs after the response is received. Call <code className="font-mono">test(name, condition)</code> to record a named
+                        pass/fail result — shown in the Tests response tab and in the API Studio report. Globals:{" "}
+                        <code className="font-mono">request</code> (final resolved method/url/headers/params/body),{" "}
+                        <code className="font-mono">response</code> ({"{"}status, statusText, headers, body{"}"}) and{" "}
+                        <code className="font-mono">outputs</code> (values extracted by the parser script). Example:{" "}
+                        <code className="font-mono">test(&quot;order_id matched&quot;, response.body.id === request.body.order.id)</code>
+                      </span>
+                    </div>
+                    <div className="flex-1 mx-4 mb-4 rounded-lg overflow-hidden border border-line">
+                      <Editor
+                        height="100%"
+                        language="javascript"
+                        theme="vs-dark"
+                        value={reqTestScript}
+                        onChange={(val) => setReqTestScript(val || "")}
+                        options={{
+                          minimap: { enabled: false },
+                          fontSize: 12,
+                          lineNumbers: "on",
+                          scrollbar: { vertical: "auto", horizontal: "hidden" },
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
                 {configTab === "interceptor" && (
                   <div className="flex flex-col h-full">
                     <div className="px-4 pt-3 pb-2 flex-shrink-0">
@@ -2159,6 +2198,49 @@ export default function ApiExplorerPage() {
                           <Code2 className="h-6 w-6 text-mute" />
                           <p className="text-[13px] text-mute text-center">
                             No outputs declared. Declare outputs in the Output tab to extract values from the response.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {responseTab === "tests" && (
+                    <div className="flex-1 p-4 overflow-y-auto">
+                      {apiResponse.testError && (
+                        <div className="flex items-start gap-2.5 px-3.5 py-2.5 mb-3 bg-red-50 border border-red-300 rounded-lg">
+                          <AlertCircle className="h-4 w-4 text-red-600 flex-shrink-0 mt-0.5" />
+                          <span className="text-[12px] text-red-700 font-mono break-all">{apiResponse.testError}</span>
+                        </div>
+                      )}
+                      {(apiResponse.testResults?.length ?? 0) > 0 ? (
+                        <div className="flex flex-col gap-1.5">
+                          {(apiResponse.testResults as { name: string; passed: boolean }[]).map((t, i) => (
+                            <div
+                              key={`${t.name}-${i}`}
+                              className="flex items-center gap-2.5 px-3.5 py-2.5 bg-panel border border-line rounded-lg"
+                            >
+                              <span
+                                className="font-mono text-[11px] font-medium px-2.5 py-0.5 rounded-full flex-shrink-0"
+                                style={
+                                  t.passed
+                                    ? { background: "#e3f5e9", color: "#276749" }
+                                    : { background: "#fde8e8", color: "#c64545" }
+                                }
+                              >
+                                {t.passed ? "PASS" : "FAIL"}
+                              </span>
+                              <span className="font-mono text-xs text-ink flex-1 break-all">{t.name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center gap-2.5 min-h-[100px]">
+                          <Code2 className="h-6 w-6 text-mute" />
+                          <p className="text-[13px] text-mute text-center">
+                            {reqTestScript.trim()
+                              ? apiResponse.testError
+                                ? "The test script failed before registering any tests."
+                                : "The test script registered no tests. Call test(name, condition) to record results."
+                              : "No test script configured — add one in the Test tab."}
                           </p>
                         </div>
                       )}

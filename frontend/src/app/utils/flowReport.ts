@@ -17,6 +17,7 @@ const CSV_COLUMNS = [
   "response_status",
   "response_json",
   "error",
+  "test_results",
 ] as const;
 
 const escapeCell = (value: string): string => {
@@ -24,6 +25,19 @@ const escapeCell = (value: string): string => {
     return `"${value.replace(/"/g, '""')}"`;
   }
   return value;
+};
+
+// Combined human-readable test outcome, e.g. "order_id matched: PASS; status ok: FAIL".
+// Empty when the record has no test data (pre-feature runs, scriptless requests).
+const formatTestCell = (r: RunRecord): string => {
+  if (!r.testResults && !r.testError) return "";
+  return [
+    // sandbox errors already carry an "ERROR: " prefix; only add one when absent
+    r.testError ? (r.testError.startsWith("ERROR") ? r.testError : `ERROR: ${r.testError}`) : null,
+    ...(r.testResults || []).map((t) => `${t.name}: ${t.passed ? "PASS" : "FAIL"}`),
+  ]
+    .filter(Boolean)
+    .join("; ");
 };
 
 const jsonCell = (value: any): string => {
@@ -52,6 +66,7 @@ export function buildRunCsv(records: RunRecord[]): string {
       r.response ? String(r.response.status) : "",
       jsonCell(r.response),
       r.error || "",
+      formatTestCell(r),
     ];
     lines.push(cells.map(escapeCell).join(","));
   }
@@ -99,6 +114,7 @@ const shrinkRecord = (r: RunRecord): RunRecord => ({
     ? { ...r.response, body: shrinkValue(r.response.body) }
     : null,
   outputs: r.outputs ? JSON.parse(truncateJson(r.outputs)) : null,
+  testError: r.testError ? truncateString(r.testError) : r.testError,
 });
 
 const truncateJson = (value: any): string => {

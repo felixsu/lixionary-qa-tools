@@ -2,7 +2,12 @@ import hmac
 import hashlib
 import pytest
 import asyncio
-from services.auth_sandbox import run_unsafe_auth_script, run_unsafe_response_parser, run_unsafe_request_interceptor
+from services.auth_sandbox import (
+    run_unsafe_auth_script,
+    run_unsafe_response_parser,
+    run_unsafe_request_interceptor,
+    run_unsafe_test_script,
+)
 
 @pytest.mark.asyncio
 async def test_run_unsafe_auth_script_success():
@@ -207,3 +212,108 @@ async def test_run_unsafe_request_interceptor_method_and_bodytype_readonly():
     result = await run_unsafe_request_interceptor(script, request_obj, {})
     assert "method" not in result
     assert "bodyType" not in result
+
+def _test_request(body):
+    return {
+        "method": "POST",
+        "url": "https://api.example.com/orders",
+        "headers": {"Content-Type": "application/json"},
+        "params": {},
+        "body": body,
+        "bodyType": "JSON",
+    }
+
+def _test_response(body, status=200):
+    return {
+        "status": status,
+        "statusText": "OK",
+        "headers": {"Content-Type": "application/json"},
+        "body": body,
+    }
+
+@pytest.mark.asyncio
+async def test_run_unsafe_test_script_pass_and_fail_in_order():
+    script = """
+    test("status ok", response.status === 200);
+    test("has token", response.body.token === "expected");
+    """
+    results, error = await run_unsafe_test_script(
+        _test_request({}), _test_response({"token": "actual"}), {}, script
+    )
+    assert error is None
+    assert results == [
+        {"name": "status ok", "passed": True},
+        {"name": "has token", "passed": False},
+    ]
+
+@pytest.mark.asyncio
+async def test_run_unsafe_test_script_request_response_comparison():
+    script = """
+    const order_id_matcher = response.body.id === request.body.order.id;
+    test("order_id matched", order_id_matcher);
+    """
+    results, error = await run_unsafe_test_script(
+        _test_request({"order": {"id": "ORD-7"}}), _test_response({"id": "ORD-7"}), {}, script
+    )
+    assert error is None
+    assert results == [{"name": "order_id matched", "passed": True}]
+
+@pytest.mark.asyncio
+async def test_run_unsafe_test_script_truthiness_coercion():
+    script = """
+    test("nonempty string", "yes");
+    test("undefined", response.body.nope);
+    test("zero", 0);
+    test("object", {});
+    """
+    results, error = await run_unsafe_test_script(_test_request({}), _test_response({}), {}, script)
+    assert error is None
+    assert results == [
+        {"name": "nonempty string", "passed": True},
+        {"name": "undefined", "passed": False},
+        {"name": "zero", "passed": False},
+        {"name": "object", "passed": True},
+    ]
+
+@pytest.mark.asyncio
+async def test_run_unsafe_test_script_error_keeps_prior_results():
+    script = """
+    test("before", true);
+    throw new Error("boom");
+    """
+    results, error = await run_unsafe_test_script(_test_request({}), _test_response({}), {}, script)
+    assert results == [{"name": "before", "passed": True}]
+    assert error is not None and "boom" in error
+
+@pytest.mark.asyncio
+async def test_run_unsafe_test_script_syntax_error():
+    results, error = await run_unsafe_test_script(_test_request({}), _test_response({}), {}, "const x = ;")
+    assert results == []
+    assert error is not None and error.startswith("ERROR:")
+
+@pytest.mark.asyncio
+async def test_run_unsafe_test_script_non_json_bodies_stay_strings():
+    script = """
+    test("request body raw", request.body === "raw-payload");
+    test("response body raw", response.body === "<html>oops</html>");
+    """
+    results, error = await run_unsafe_test_script(
+        _test_request("raw-payload"), _test_response("<html>oops</html>", 500), {}, script
+    )
+    assert error is None
+    assert all(r["passed"] for r in results)
+
+@pytest.mark.asyncio
+async def test_run_unsafe_test_script_outputs_and_duplicate_names():
+    script = """
+    test("check", outputs.order_id === "ORD-7");
+    test("check", outputs.order_id === "WRONG");
+    """
+    results, error = await run_unsafe_test_script(
+        _test_request({}), _test_response({}), {"order_id": "ORD-7"}, script
+    )
+    assert error is None
+    assert results == [
+        {"name": "check", "passed": True},
+        {"name": "check", "passed": False},
+    ]
