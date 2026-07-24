@@ -80,6 +80,17 @@ _CLICKABLE_HEURISTIC_JS = """
             }
 """
 
+def append_or_replace_step(steps: List[str], action: str, step_code: str) -> None:
+    """Add a recorded step, coalescing consecutive fill/select_option on the
+    same locator into one step holding the latest value (the recorder emits a
+    fill per debounced batch of keystrokes)."""
+    if action in ("fill", "select_option") and steps:
+        call_prefix = step_code.rsplit(f".{action}(", 1)[0] + f".{action}("
+        if steps[-1].startswith(call_prefix):
+            steps[-1] = step_code
+            return
+    steps.append(step_code)
+
 def render_recording_script(steps: List[str]) -> str:
     """Render the full my_recording.py replay script for the recorded steps."""
     content = "import os\n"
@@ -1280,8 +1291,66 @@ class BrowserSessionManager:
             let recordingMode = false;
 
             window.__setLixionaryRecordingMode = function(enabled) {
+                // Flush before disabling so text typed right before Stop (which
+                // never blurs the field) still gets recorded.
+                if (!enabled) flushPendingFill();
                 recordingMode = enabled;
             };
+
+            // --- Text entry capture -------------------------------------------
+            // Fills are recorded from the 'input' event (fires per keystroke, on
+            // paste, and for contenteditable — unlike 'change', which only fires
+            // on blur and never fires for contenteditable). Keystrokes are
+            // debounced in-page; the server coalesces consecutive fills on the
+            // same field into one step holding the latest value.
+            const REC_FILL_TYPES = ['text', 'email', 'password', 'search', 'tel', 'url', 'number'];
+            let pendingFillEl = null, pendingFillTimer = null;
+            const lastSentFill = new WeakMap();
+
+            function isTextEntry(el) {
+                if (!el || !el.tagName) return false;
+                const tag = el.tagName.toLowerCase();
+                if (tag === 'textarea') return true;
+                if (el.getAttribute && el.getAttribute('contenteditable') === 'true') return true;
+                if (tag === 'input') {
+                    const type = (el.getAttribute('type') || '').toLowerCase();
+                    return !type || REC_FILL_TYPES.includes(type);
+                }
+                return false;
+            }
+
+            function textEntryValue(el) {
+                const tag = el.tagName.toLowerCase();
+                return (tag === 'input' || tag === 'textarea') ? el.value : (el.innerText || '');
+            }
+
+            function sendFill(el) {
+                const value = textEntryValue(el);
+                if (lastSentFill.get(el) === value) return;
+                lastSentFill.set(el, value);
+                if (window.pythonOnInteractionRecorded) {
+                    window.pythonOnInteractionRecorded(JSON.stringify({
+                        action: 'fill',
+                        element: getElementMetadata(el),
+                        value: value
+                    }));
+                }
+            }
+
+            function flushPendingFill() {
+                if (pendingFillTimer) { clearTimeout(pendingFillTimer); pendingFillTimer = null; }
+                if (pendingFillEl) { const el = pendingFillEl; pendingFillEl = null; sendFill(el); }
+            }
+
+            document.addEventListener('input', function(e) {
+                if (!recordingMode) return;
+                const el = e.target;
+                if (!isTextEntry(el)) return;
+                if (pendingFillEl && pendingFillEl !== el) flushPendingFill();
+                pendingFillEl = el;
+                if (pendingFillTimer) clearTimeout(pendingFillTimer);
+                pendingFillTimer = setTimeout(flushPendingFill, 400);
+            }, true);
 
             function getElementMetadata(el) {
                 const rect = el.getBoundingClientRect();
@@ -1355,6 +1424,9 @@ class BrowserSessionManager:
 
             document.addEventListener('click', function(e) {
                 if (!recordingMode) return;
+                // A pending debounced fill must land before the click step so
+                // replay order matches what the user did.
+                flushPendingFill();
                 const el = e.target;
 
                 // Clicks landing inside form fields keep the standard-path
@@ -1401,7 +1473,11 @@ class BrowserSessionManager:
                 const tag = el.tagName.toLowerCase();
                 const type = (el.getAttribute('type') || '').toLowerCase();
 
-                if (tag === 'input' || tag === 'textarea' || el.getAttribute('contenteditable') === 'true') {
+                if (isTextEntry(el)) {
+                    // Text entry is recorded from 'input' events; blur just
+                    // finalizes anything still pending (dedupe prevents doubles).
+                    flushPendingFill();
+                } else if (tag === 'input') {
                     let action = 'fill';
                     let value = el.value;
 
@@ -1521,8 +1597,8 @@ class BrowserSessionManager:
         else:
             return
 
-        # Add to step list
-        session.setdefault("recorded_steps", []).append(step_code)
+        # Add to step list, coalescing consecutive fills on the same field
+        append_or_replace_step(session.setdefault("recorded_steps", []), action, step_code)
 
         # Regenerate my_recording.py in the flavor-aware workspace (AE_DATA_DIR
         # in the packaged app) — the workspace file APIs only look there.
