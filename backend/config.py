@@ -28,6 +28,12 @@ class Settings:
     JWT_SECRET: str = os.getenv("JWT_SECRET", "supersecretjwttokenkey12345")
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRY_MINUTES: int = 1440 # 24 hours
+    # Refresh tokens outlive the access token by a long way — that is the whole
+    # point: the app renews silently instead of bouncing the user to Google
+    # every day. Deliberately NOT paired with a shorter access token: clients
+    # older than the refresh rollout store no refresh token, so shortening the
+    # access token would log THEM out sooner than they are today.
+    REFRESH_TOKEN_EXPIRY_DAYS: int = int(os.getenv("REFRESH_TOKEN_EXPIRY_DAYS", "30"))
     GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
     DEV_MODE: bool = os.getenv("DEV_MODE", "true").lower() == "true"

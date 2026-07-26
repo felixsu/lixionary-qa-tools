@@ -17,6 +17,7 @@ from tests.test_generator import test_generate_pom_class_strategies, test_build_
 from tests.test_workspace import test_sanitize_filename, test_reset_workspace_file
 from tests.test_admin import test_serialize_user, test_serialize_collection
 from tests.test_flows import test_serialize_flow_doc
+from tests.test_auth import test_expired_token_reports_expiry_not_bad_signature, test_refresh_token_rotates_and_rejects_replay, test_refresh_token_rejected_when_expired_or_user_disabled, test_spent_local_token_is_recognised_as_ours, test_revoke_is_idempotent
 
 def run():
     print("Running tests...")
@@ -75,7 +76,22 @@ def run():
 
         test_serialize_flow_doc()
         print("✓ test_serialize_flow_doc passed")
-        
+
+        asyncio.run(test_expired_token_reports_expiry_not_bad_signature())
+        print("✓ test_expired_token_reports_expiry_not_bad_signature passed")
+
+        asyncio.run(test_refresh_token_rotates_and_rejects_replay())
+        print("✓ test_refresh_token_rotates_and_rejects_replay passed")
+
+        asyncio.run(test_refresh_token_rejected_when_expired_or_user_disabled())
+        print("✓ test_refresh_token_rejected_when_expired_or_user_disabled passed")
+
+        asyncio.run(test_spent_local_token_is_recognised_as_ours())
+        print("\u2713 test_spent_local_token_is_recognised_as_ours passed")
+
+        asyncio.run(test_revoke_is_idempotent())
+        print("✓ test_revoke_is_idempotent passed")
+
         print("\nAll tests passed successfully!")
     except AssertionError as e:
         print(f"\nAssertion Error: {e}")
