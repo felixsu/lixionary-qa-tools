@@ -25,7 +25,15 @@ async def lifespan(app: FastAPI):
         )
         if res.modified_count > 0:
             print(f"Seeded/promoted {res.modified_count} users to admin role.")
-            
+
+        # Refresh tokens are looked up by hash on every renewal, and Mongo
+        # expires the rows itself once expiresAt passes so spent/stale ones
+        # don't accumulate forever.
+        refresh_col = MongoDB.get_collection("refresh_tokens")
+        await refresh_col.create_index("tokenHash", unique=True)
+        await refresh_col.create_index("expiresAt", expireAfterSeconds=0)
+
+
     except Exception as e:
         print(f"ERROR: Failed to connect to services or seed on boot: {e}")
     
