@@ -996,6 +996,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         console.error("Token refresh failed:", e);
         handleLogout();
       }
+    } else if (response.status === 401 && !currentRefreshToken && !isLocal && tokenRef.current) {
+      // Held a token, cloud backend rejected it, nothing to refresh with —
+      // the session is simply over (a session predating the refresh-token
+      // rollout, or one whose refresh token was revoked). Without this the
+      // 401 escaped as a raw error from whatever call happened to run first,
+      // typically a sync-state, and the app sat there looking signed in.
+      // Scoped to cloud calls: a sidecar hiccup must not end the session.
+      console.warn("Session expired with no refresh token available; signing out.");
+      handleLogout();
     }
 
     response.clone().text().then((text) => {
@@ -1102,13 +1111,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         method: "POST",
         body: JSON.stringify({ code, redirect_uri: process.env.NEXT_PUBLIC_REDIRECT_URI || "http://localhost:8481/callback" })
       });
-      // Direct Google sign-in issues a flat JWT with no refresh token — the
-      // session simply expires after JWT_EXPIRY_MINUTES and requires a fresh
-      // login, rather than the old IAM flow's silent access/refresh pair.
       setToken(data.token);
       setUser(data.user);
       localStorage.setItem("lixionary_token", data.token);
       localStorage.setItem("lixionary_user", JSON.stringify(data.user));
+      // Google sign-in now returns a refresh token alongside the access token,
+      // so apiCall can renew silently instead of the session dying after
+      // JWT_EXPIRY_MINUTES. Guarded because a client can be pointed at a
+      // backend older than that change, which still returns only a flat JWT.
+      if (data.refresh_token) {
+        setRefreshToken(data.refresh_token);
+        localStorage.setItem("lixionary_refresh_token", data.refresh_token);
+      }
       router.push("/home");
     } catch (e: any) {
       throw new Error(`Login failed: ${e.message}`);
