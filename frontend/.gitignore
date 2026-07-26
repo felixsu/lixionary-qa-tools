@@ -35,6 +35,8 @@ yarn-error.log*
 # No secrets in this one — it's the tracked, single-source-of-truth config
 # for the isolated dev-flavor Tauri app (see .env.devflavor's own header).
 !.env.devflavor
+# Likewise for the source-tree "local" flavor (see .env.devlocal's own header).
+!.env.devlocal
 
 # vercel
 .vercel
