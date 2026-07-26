@@ -3,13 +3,13 @@ name: verify
 description: Build, launch, and drive this app locally for end-to-end verification without touching the user's real desktop app or data.
 ---
 
-# Verifying nv-automation-explorer locally
+# Verifying lixionary-qa-tools locally
 
 ## CRITICAL isolation warnings (read first)
 
 - The user's **real Tauri desktop app** often runs and serves its bundled frontend on `[::1]:8481`. A browser resolving `localhost:8481` prefers `::1` and hits **the real app** (old code, prod cloud `qa-tools-api.lixionary.com`, real local store). Always drive `http://127.0.0.1:8481` — the Next dev server binds `*:8481` (IPv4 included); the desktop app binds `::1` only.
-- The user's **real local sidecar** listens on `127.0.0.1:8484` (SQLite at `~/Documents/AutomationExplorer/local.db`). Never point a test frontend at it. Run an isolated sidecar on **8485** instead (below).
-- The **dev flavor** desktop app (built with `--config src-tauri/tauri.dev.conf.json`) uses frontend **8491**, sidecar **8494**, CDP 9232, and data dir `~/Documents/AutomationExplorerDev` — treat 8491/8494 as another real app's ports, don't collide with them either.
+- The user's **real local sidecar** listens on `127.0.0.1:8484` (SQLite at `<app-data>/com.lixionary.automation-explorer/local.db`). Never point a test frontend at it. Run an isolated sidecar on **8485** instead (below).
+- Three flavors own real ports and real data — **don't collide with any of them**: prod app 8481/8484/9222, dev flavor app 8491/8494/9232, source-tree dev 8501/8504/9242. Each has its own data dir under the OS app-data dir (`com.lixionary.automation-explorer{,.dev,.local}`). 8485 is the verify-only slot.
 - `frontend/.env.local` sets `NEXT_PUBLIC_LOCAL_API_URL=http://localhost:8484` — override via shell env (shell env wins over .env files in Next.js).
 
 ## Launch
