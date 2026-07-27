@@ -87,9 +87,9 @@ async def consume_refresh_token(raw: str) -> Optional[dict]:
     once and the legitimate client's next refresh fails loudly rather than the
     theft going unnoticed.
 
-    Returns None when the token is unknown, already used, revoked or expired.
-    Callers that need to tell "not ours at all" (an IAM token, to be forwarded)
-    from "ours but spent" pair this with is_local_refresh_token.
+    Returns None when the token is unknown, already used, revoked or expired —
+    every one of which the caller reports identically, so probing cannot
+    distinguish "never existed" from "already spent".
     """
     col = MongoDB.get_collection("refresh_tokens")
     now = datetime.now(timezone.utc)
@@ -118,18 +118,6 @@ async def consume_refresh_token(raw: str) -> Optional[dict]:
     }
 
 
-async def is_local_refresh_token(raw: str) -> bool:
-    """
-    True if we ever issued this token, spent/revoked/expired or not.
-
-    Lets /refresh answer a dead local token itself instead of forwarding it to
-    IAM, which would both return IAM's unrelated error and hand an external
-    service every failed refresh attempt.
-    """
-    return await MongoDB.get_collection("refresh_tokens").find_one(
-        {"tokenHash": _hash_refresh_token(raw)}) is not None
-
-
 async def revoke_refresh_token(raw: str) -> bool:
     """Revokes a local refresh token. True if one was actually live."""
     res = await MongoDB.get_collection("refresh_tokens").update_one(
@@ -139,87 +127,33 @@ async def revoke_refresh_token(raw: str) -> bool:
     return res.modified_count > 0
 
 
-_cached_public_key = None
-_cached_key_expiry = None
-
-async def decode_iam_token(token: str) -> dict:
+async def decode_session_token(token: str) -> dict:
     """
-    Decodes and verifies a JWT — either a token this backend issued itself
-    (HS256, from /google, /google/exchange or /dev-login — the common case,
-    including in production) or, for backward compatibility with sessions
-    issued before the move to direct Google SSO, an RS256 token from
-    Lixionary IAM's JWKS endpoint.
-    """
-    global _cached_public_key, _cached_key_expiry
+    Decodes and verifies a session token issued by this backend (HS256, from
+    /google, /google/exchange or /dev-login).
 
+    Previously this also accepted RS256 tokens from Lixionary IAM's JWKS
+    endpoint, for sessions predating the move to direct Google SSO. That path
+    is gone: nothing issues IAM tokens any more, so the only thing it could
+    still verify was a credential no live client holds.
+    """
     try:
         return jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
-        # Reaching this means the signature DID verify against our secret and
-        # only `exp` failed, so the token is definitively one of ours and there
-        # is nothing for the IAM path below to try. Report it as expiry rather
-        # than falling through to a misleading "invalid signature" — that
-        # conflation is exactly what made an ordinary expired session look like
-        # a forged token.
-        raise HTTPException(status_code=401, detail="Token has expired")
-    except Exception:
-        pass
-
-    try:
-        now = datetime.now(timezone.utc)
-        if _cached_public_key is None or _cached_key_expiry is None or now > _cached_key_expiry:
-            async with httpx.AsyncClient() as client:
-                res = await client.get(f"{settings.IAM_URL}/oauth/jwks")
-                if res.status_code == 200:
-                    jwks = res.json()
-                    if jwks.get("keys"):
-                        from jwt import PyJWK
-                        # Fallback: if JWT has no kid or kid is not in JWKS, use the first key in the set
-                        header = jwt.get_unverified_header(token)
-                        kid = header.get("kid")
-
-                        target_key = None
-                        if kid:
-                            for key in jwks["keys"]:
-                                if key.get("kid") == kid:
-                                    target_key = key
-                                    break
-
-                        if not target_key:
-                            target_key = jwks["keys"][0]
-
-                        jwk = PyJWK(target_key)
-                        _cached_public_key = jwk.key
-                        _cached_key_expiry = now + timedelta(hours=1)
-                else:
-                    print(f"Failed to fetch JWKS from IAM (Status {res.status_code})")
-
-        if _cached_public_key is None:
-            raise Exception("No public key resolved from JWKS")
-
-        payload = jwt.decode(
-            token,
-            _cached_public_key,
-            algorithms=["RS256"],
-            options={"verify_aud": False}
-        )
-        return payload
-    except HTTPException:
-        raise
-    except jwt.ExpiredSignatureError:
+        # Distinct from a bad signature on purpose. Conflating the two is what
+        # made an ordinary day-old session read as a forged token.
         raise HTTPException(status_code=401, detail="Token has expired")
     except Exception as e:
-        print(f"IAM JWT verification failed: {e}")
+        print(f"Session token verification failed: {e}")
         raise HTTPException(status_code=401, detail="Invalid token signature")
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     """
     FastAPI dependency to secure routes and retrieve the logged-in user.
-    Supports local HS256 tokens and RS256 tokens from Lixionary IAM.
     """
     token = credentials.credentials
     try:
-        payload = await decode_iam_token(token)
+        payload = await decode_session_token(token)
 
         email = payload.get("email")
         if not email:
@@ -359,8 +293,7 @@ async def google_oauth_exchange(payload: OAuthExchangeRequest):
     Exchanges a Google OAuth authorization code (from the redirect-based
     consent flow used by both the browser tab and the desktop system-browser
     relay) for tokens, verifies the resulting ID token, and issues a local
-    JWT session — the direct-Google-SSO replacement for the old
-    Lixionary-IAM-mediated /oauth-token flow.
+    JWT session. The only way a session is established.
     """
     async with httpx.AsyncClient() as client:
         try:
@@ -407,7 +340,7 @@ async def google_oauth_exchange(payload: OAuthExchangeRequest):
 async def dev_login(payload: DevLoginRequest):
     """
     Dev-only backdoor: mints a session for ANY email/role without going
-    through Google or Lixionary IAM at all. Exists purely to simplify QA
+    through Google at all. Exists purely to simplify QA
     testing of role-gated flows (e.g. confirming an admin-only route rejects
     a "member", or reproducing a bug reported by a specific test user)
     without needing that person's real Google login.
@@ -481,175 +414,32 @@ async def dev_login(payload: DevLoginRequest):
         }
     }
 
-@router.post("/oauth-token")
-async def oauth_token_exchange(payload: OAuthExchangeRequest):
-    """
-    Exchanges OAuth auth code for tokens by calling the IAM token endpoint.
-    """
-    async with httpx.AsyncClient() as client:
-        try:
-            req_body = {
-                "grant_type": "authorization_code",
-                "client_id": settings.IAM_CLIENT_ID,
-                "client_secret": settings.IAM_CLIENT_SECRET,
-                "code": payload.code,
-                "redirect_uri": payload.redirect_uri
-            }
-            res = await client.post(
-                f"{settings.IAM_URL}/oauth/token",
-                json=req_body,
-                headers={"Content-Type": "application/json"}
-            )
-            if res.status_code != 200:
-                try:
-                    err_data = res.json()
-                    detail = err_data.get("error", "Failed to exchange authorization code")
-                    if "error_description" in err_data:
-                        detail += f": {err_data['error_description']}"
-                except Exception:
-                    detail = f"Failed to exchange authorization code (Status: {res.status_code}): {res.text[:200]}"
-                raise HTTPException(status_code=res.status_code, detail=detail)
-
-            tokens = res.json()
-
-            # Decode the access token to get user info and provision/upsert locally
-            access_token = tokens["access_token"]
-            claims = await decode_iam_token(access_token)
-
-            email = claims.get("email")
-            if not email:
-                raise HTTPException(status_code=400, detail="IAM access token is missing email claim")
-
-            users_col = MongoDB.get_collection("users")
-            user = await users_col.find_one({"email": email})
-
-            if not user:
-                # Check if this is the first user in the database
-                is_db_empty = await users_col.count_documents({}) == 0
-                user = {
-                    "googleId": claims.get("sub", ""),
-                    "email": email,
-                    "name": claims.get("name", email.split("@")[0].capitalize()),
-                    "avatarUrl": "",
-                    "role": "admin" if is_db_empty else "member",
-                    "disabled": False,
-                    "createdAt": datetime.now(timezone.utc),
-                    "updatedAt": datetime.now(timezone.utc)
-                }
-                insert_res = await users_col.insert_one(user)
-                user_id = str(insert_res.inserted_id)
-            else:
-                user_id = str(user["_id"])
-                # Sync name if changed (do NOT sync roles — local database is the source of truth for roles)
-                updates = {}
-                if claims.get("name") and user.get("name") != claims.get("name"):
-                    updates["name"] = claims.get("name")
-                if updates:
-                    updates["updatedAt"] = datetime.now(timezone.utc)
-                    await users_col.update_one({"_id": user["_id"]}, {"$set": updates})
-                    user.update(updates)
-
-            if user.get("disabled", False):
-                raise HTTPException(status_code=403, detail="User account is disabled")
-
-            return {
-                "access_token": access_token,
-                "refresh_token": tokens.get("refresh_token"),
-                "expires_in": tokens.get("expires_in", 900),
-                "user": {
-                    "id": user_id,
-                    "email": email,
-                    "name": user.get("name", ""),
-                    "avatarUrl": "",
-                    "role": user.get("role", "member"),
-                    "disabled": False
-                }
-            }
-        except httpx.RequestError as exc:
-            raise HTTPException(status_code=503, detail=f"IAM service connection error: {exc}")
-
 @router.post("/refresh")
 async def oauth_token_refresh(payload: OAuthRefreshRequest):
     """
-    Renews a session from a refresh token.
+    Renews a session from a refresh token, rotating it in the process.
 
-    Local tokens (issued by the Google SSO / dev-login paths) are checked
-    first and rotated on use; anything unrecognised falls through to the IAM
-    token endpoint, which is where refresh tokens from sessions predating
-    direct Google SSO still live. Same local-first-then-IAM shape as
-    decode_iam_token.
+    Previously fell through to the IAM token endpoint for anything it did not
+    recognise, for sessions predating direct Google SSO. Now a token we did
+    not issue is simply invalid.
     """
     local = await consume_refresh_token(payload.refresh_token)
-    if local:
-        return {
-            "access_token": local["access_token"],
-            "refresh_token": local["refresh_token"],
-            "token_type": "bearer",
-            "expires_in": settings.JWT_EXPIRY_MINUTES * 60,
-        }
-
-    if await is_local_refresh_token(payload.refresh_token) or not settings.IAM_URL:
+    if not local:
         raise HTTPException(status_code=401,
                             detail="Refresh token is invalid or expired")
 
-    async with httpx.AsyncClient() as client:
-        try:
-            req_body = {
-                "grant_type": "refresh_token",
-                "client_id": settings.IAM_CLIENT_ID,
-                "client_secret": settings.IAM_CLIENT_SECRET,
-                "refresh_token": payload.refresh_token
-            }
-            res = await client.post(
-                f"{settings.IAM_URL}/oauth/token",
-                json=req_body,
-                headers={"Content-Type": "application/json"}
-            )
-            if res.status_code != 200:
-                try:
-                    err_data = res.json()
-                    detail = err_data.get("error", "Failed to refresh token")
-                    if "error_description" in err_data:
-                        detail += f": {err_data['error_description']}"
-                except Exception:
-                    detail = f"Failed to refresh token (Status: {res.status_code}): {res.text[:200]}"
-                raise HTTPException(status_code=res.status_code, detail=detail)
-
-            return res.json()
-        except httpx.RequestError as exc:
-            raise HTTPException(status_code=503, detail=f"IAM service connection error: {exc}")
+    return {
+        "access_token": local["access_token"],
+        "refresh_token": local["refresh_token"],
+        "token_type": "bearer",
+        "expires_in": settings.JWT_EXPIRY_MINUTES * 60,
+    }
 
 @router.post("/revoke")
 async def oauth_token_revoke(payload: OAuthRevokeRequest):
     """
-    Revokes a refresh token — local first, then IAM, mirroring /refresh.
+    Revokes a refresh token. Always reports success — nothing to revoke is not
+    an error, since logout must not fail because the session was already gone.
     """
-    if await revoke_refresh_token(payload.refresh_token):
-        return {"success": True}
-
-    if await is_local_refresh_token(payload.refresh_token) or not settings.IAM_URL:
-        # Nothing to revoke is not an error: logout must not fail because the
-        # session was already gone.
-        return {"success": True}
-
-    async with httpx.AsyncClient() as client:
-        try:
-            req_body = {
-                "token": payload.refresh_token
-            }
-            res = await client.post(
-                f"{settings.IAM_URL}/oauth/revoke",
-                json=req_body,
-                headers={"Content-Type": "application/json"}
-            )
-            if res.status_code != 200:
-                try:
-                    err_data = res.json()
-                    detail = err_data.get("error", "Failed to revoke token")
-                except Exception:
-                    detail = f"Failed to revoke token (Status: {res.status_code}): {res.text[:200]}"
-                raise HTTPException(status_code=res.status_code, detail=detail)
-
-            return {"success": True}
-        except httpx.RequestError as exc:
-            raise HTTPException(status_code=503, detail=f"IAM service connection error: {exc}")
+    await revoke_refresh_token(payload.refresh_token)
+    return {"success": True}

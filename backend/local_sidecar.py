@@ -1529,7 +1529,7 @@ async def git_pull_directory(rootDir: str = Query(...), dirName: str = Query(...
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to execute git pull: {str(e)}")
 
-# Desktop OAuth relay: in the packaged app the IAM/Google sign-in must run in
+# Desktop OAuth relay: in the packaged app the Google sign-in must run in
 # the system browser (Google Identity Services popups don't work inside the
 # webview). The browser lands on the callback page, which drops the auth code
 # here; the app polls to pick it up. Single slot, consumed on read, short TTL.
