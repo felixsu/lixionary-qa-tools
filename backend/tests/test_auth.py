@@ -68,9 +68,9 @@ def _install_fake_db(monkeypatch_target, user_doc):
 
 async def test_expired_token_reports_expiry_not_bad_signature():
     """
-    An expired token used to fall through to the IAM path and surface as
-    "Invalid token signature", which made an ordinary day-old session look
-    like a forgery. Expiry must be reported as expiry.
+    An expired token used to surface as "Invalid token signature", which made
+    an ordinary day-old session look like a forgery. Expiry must be reported
+    as expiry.
     """
     now = datetime.now(timezone.utc)
     expired = jwt.encode(
@@ -78,7 +78,7 @@ async def test_expired_token_reports_expiry_not_bad_signature():
         settings.JWT_SECRET, algorithm="HS256")
 
     try:
-        await auth.decode_iam_token(expired)
+        await auth.decode_session_token(expired)
         assert False, "expected the expired token to be rejected"
     except HTTPException as e:
         assert e.status_code == 401
@@ -88,7 +88,7 @@ async def test_expired_token_reports_expiry_not_bad_signature():
     good = jwt.encode(
         {"sub": "u1", "email": "a@b.c", "exp": now + timedelta(hours=1)},
         settings.JWT_SECRET, algorithm="HS256")
-    assert (await auth.decode_iam_token(good))["email"] == "a@b.c"
+    assert (await auth.decode_session_token(good))["email"] == "a@b.c"
 
 
 async def test_refresh_token_rotates_and_rejects_replay():
@@ -132,25 +132,6 @@ async def test_refresh_token_rejected_when_expired_or_user_disabled():
     cols["users"].docs[0]["disabled"] = True
     raw2 = await auth.issue_refresh_token(user_id, "a@b.c")
     assert await auth.consume_refresh_token(raw2) is None
-
-
-async def test_spent_local_token_is_recognised_as_ours():
-    """
-    A spent local token must be answerable locally. Otherwise /refresh
-    forwards it to IAM, which returns its own unrelated error (a 403 that
-    reads as a permissions problem) and sees every failed refresh we get.
-    """
-    user_id = str(ObjectId())
-    _install_fake_db(auth, {"_id": ObjectId(user_id), "email": "a@b.c",
-                            "disabled": False})
-
-    raw = await auth.issue_refresh_token(user_id, "a@b.c")
-    await auth.consume_refresh_token(raw)
-
-    assert await auth.consume_refresh_token(raw) is None, "spent"
-    assert await auth.is_local_refresh_token(raw) is True, "still recognisably ours"
-    # An IAM token is not ours, so it may still be forwarded.
-    assert await auth.is_local_refresh_token("some-iam-token") is False
 
 
 async def test_revoke_is_idempotent():

@@ -80,7 +80,7 @@ Requires Node 20+, Python 3.11+, Docker, and — for desktop builds — the Rust
 toolchain.
 
 ```bash
-cp .env.example .env          # fill in GEMINI_API_KEY, JWT_SECRET, OAuth + IAM creds
+cp .env.example .env          # fill in GEMINI_API_KEY, JWT_SECRET, Google OAuth creds
 docker compose up -d          # backend :8480, mongo :8483, redis :8482
 npm --prefix frontend install
 ```

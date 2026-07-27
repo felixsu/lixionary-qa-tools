@@ -949,7 +949,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let response = await makeRequest(tokenRef.current);
 
     const currentRefreshToken = refreshTokenRef.current;
-    if (response.status === 401 && currentRefreshToken && path !== "/api/auth/refresh" && path !== "/api/auth/oauth-token") {
+    if (response.status === 401 && currentRefreshToken && path !== "/api/auth/refresh") {
       try {
         let newAccessToken: string;
 
