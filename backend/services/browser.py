@@ -544,6 +544,13 @@ class BrowserSessionManager:
             # on Playwright's implicit xpath auto-detection instead of being explicit,
             # and previously fell into the generic else-branch below by omission.
             return target.locator(f"xpath={selector}")
+        elif strategy == "get_by_placeholder":
+            return target.get_by_placeholder(selector)
+        elif strategy == "locator (Custom)":
+            # User-typed selector from the manual selector tester. Passed to
+            # locator() untouched so the full Playwright selector syntax works:
+            # CSS, xpath=, text=, role=, id=, and >> chaining.
+            return target.locator(selector)
         else:
             return target.locator(selector)
 
@@ -983,11 +990,103 @@ class BrowserSessionManager:
                 }
             }
 
+            // Highlight boxes for manual selector testing. Styling the live DOM
+            // means the highlight shows in both the screencast preview and the
+            // real (headed) browser window at once.
+            let lixHighlightNodes = [];
+            let lixHighlightTimer = null;
+
+            window.__lixionaryClearLixHighlights = function() {
+                if (lixHighlightTimer) {
+                    clearTimeout(lixHighlightTimer);
+                    lixHighlightTimer = null;
+                }
+                for (const node of lixHighlightNodes) {
+                    try { node.remove(); } catch (e) {}
+                }
+                lixHighlightNodes = [];
+            };
+
+            window.__lixionaryHighlightMatches = function(els) {
+                window.__lixionaryClearLixHighlights();
+                const all = els || [];
+                const list = Array.prototype.slice.call(all, 0, 25);
+                list.forEach(function(el, idx) {
+                    if (!el || !el.getBoundingClientRect) return;
+                    const rect = el.getBoundingClientRect();
+                    const box = document.createElement('div');
+                    box.className = 'lixionary-selector-highlight';
+                    box.style.position = 'absolute';
+                    box.style.pointerEvents = 'none';
+                    box.style.border = '2px solid #f59e0b';
+                    box.style.backgroundColor = 'rgba(245, 158, 11, 0.15)';
+                    box.style.zIndex = '999999';
+                    box.style.top = (rect.top + window.scrollY) + 'px';
+                    box.style.left = (rect.left + window.scrollX) + 'px';
+                    box.style.width = rect.width + 'px';
+                    box.style.height = rect.height + 'px';
+                    if (idx === 0) {
+                        const chip = document.createElement('div');
+                        chip.textContent = all.length + (all.length === 1 ? ' match' : ' matches');
+                        chip.style.position = 'absolute';
+                        chip.style.top = '-20px';
+                        chip.style.left = '0';
+                        chip.style.background = '#f59e0b';
+                        chip.style.color = '#fff';
+                        chip.style.font = '11px/16px sans-serif';
+                        chip.style.padding = '1px 6px';
+                        chip.style.borderRadius = '3px';
+                        chip.style.whiteSpace = 'nowrap';
+                        box.appendChild(chip);
+                    }
+                    (document.body || document.documentElement).appendChild(box);
+                    lixHighlightNodes.push(box);
+                });
+                lixHighlightTimer = setTimeout(window.__lixionaryClearLixHighlights, 4000);
+                return list.length;
+            };
+
+            // Inspect-mode indicator for the real (headed) browser window:
+            // crosshair cursor + a fixed badge so the user knows clicks are
+            // being captured. Top document only — iframes share the state but
+            // must not each render a badge.
+            let inspectBadge = null;
+            function setInspectIndicator(enabled) {
+                if (window !== window.top) return;
+                if (enabled) {
+                    document.documentElement.style.cursor = 'crosshair';
+                    if (!inspectBadge || !inspectBadge.isConnected) {
+                        inspectBadge = document.createElement('div');
+                        inspectBadge.id = 'lixionary-inspect-badge';
+                        inspectBadge.textContent = 'Inspect mode — click an element';
+                        inspectBadge.style.position = 'fixed';
+                        inspectBadge.style.top = '8px';
+                        inspectBadge.style.right = '8px';
+                        inspectBadge.style.zIndex = '999999';
+                        inspectBadge.style.pointerEvents = 'none';
+                        inspectBadge.style.background = '#6366f1';
+                        inspectBadge.style.color = '#fff';
+                        inspectBadge.style.font = '12px/18px sans-serif';
+                        inspectBadge.style.padding = '3px 10px';
+                        inspectBadge.style.borderRadius = '9999px';
+                        inspectBadge.style.boxShadow = '0 1px 4px rgba(0,0,0,0.3)';
+                        (document.body || document.documentElement).appendChild(inspectBadge);
+                    }
+                } else {
+                    document.documentElement.style.cursor = '';
+                    if (inspectBadge) {
+                        try { inspectBadge.remove(); } catch (e) {}
+                        inspectBadge = null;
+                    }
+                }
+            }
+
             // Expose control API
             window.__setLixionaryInspectMode = function(enabled) {
                 // Self-heal listeners stripped by legacy document.open() rewrites
                 ensureInspectorListeners();
                 inspectMode = enabled;
+                setInspectIndicator(enabled);
                 if (!inspectMode && hoverOverlay) {
                     hoverOverlay.style.display = 'none';
                 }
@@ -1197,6 +1296,8 @@ class BrowserSessionManager:
                     placeholder: el.getAttribute('placeholder') || '',
                     role: el.getAttribute('role') || '',
                     href: el.tagName.toLowerCase() === 'a' ? (el.getAttribute('href') || '') : '',
+                    id: el.id || '',
+                    nameAttr: el.getAttribute('name') || '',
                     cssSelector: getCssPath(el),
                     xpath: getXPath(el),
                     anchoredXpath: getAnchoredXPath(el),
@@ -2198,6 +2299,16 @@ def _filter_explore_candidates(scan_items: List[tuple], current_url: str) -> Lis
     return filtered
 
 
+def _looks_auto_generated_id(value: str) -> bool:
+    """
+    Framework-generated ids (React useId ":r1:", GUID fragments, numeric
+    suffixes) change between renders/deploys, so they make brittle locators.
+    """
+    if not re.fullmatch(r"[A-Za-z_][\w-]*", value):
+        return True
+    return bool(re.search(r"\d{4,}|[0-9a-fA-F]{8,}", value))
+
+
 def rank_locators(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Locator Priority Engine Algorithm:
@@ -2213,6 +2324,8 @@ def rank_locators(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
     role = metadata.get("role", "")
     css = metadata.get("cssSelector", "")
     xpath = metadata.get("xpath", "")
+    elem_id = metadata.get("id", "")
+    name_attr = metadata.get("nameAttr", "")
 
     # 1. Test ID
     if test_id:
@@ -2247,6 +2360,29 @@ def rank_locators(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Priority Weight = 80
         score = 80 - len(expr)
         locators.append({"strategy": "get_by_role", "selector": f'{computed_role}[name="{role_name}"]', "statement": expr, "score": score})
+
+    # 3b. Placeholder
+    if placeholder:
+        expr = f'page.get_by_placeholder("{placeholder}")'
+        # Priority Weight = 85
+        score = 85 - len(expr)
+        locators.append({"strategy": "get_by_placeholder", "selector": placeholder, "statement": expr, "score": score})
+
+    # 3c. Stable element id (skipped for framework-generated ids)
+    if elem_id and not _looks_auto_generated_id(elem_id):
+        sel = f"#{elem_id}"
+        expr = f'page.locator("{sel}")'
+        # Priority Weight = 95
+        score = 95 - len(expr)
+        locators.append({"strategy": "locator (CSS ID)", "selector": sel, "statement": expr, "score": score})
+
+    # 3d. name attribute (common on form inputs in older apps)
+    if name_attr:
+        sel = f'{tag_name}[name="{name_attr}"]'
+        expr = f"page.locator('{sel}')"
+        # Priority Weight = 70
+        score = 70 - len(expr)
+        locators.append({"strategy": "locator (CSS Name)", "selector": sel, "statement": expr, "score": score})
 
     # 4. Text Locator
     if text and len(text) < 40:

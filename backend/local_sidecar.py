@@ -248,6 +248,23 @@ async def get_frame_locators_chain(frame, page: Page) -> List[str]:
             break
     return chain
 
+# Reverse of get_frame_locators_chain: find the live frame whose iframe-locator
+# chain matches the one a client captured earlier (e.g. from a selector test).
+# Returns None when nothing matches — e.g. after a navigation replaced the frame.
+async def resolve_frame_by_chain(page: Page, frame_chain: List[str]):
+    if not frame_chain:
+        return page.main_frame
+    for frame in page.frames:
+        if frame == page.main_frame:
+            continue
+        try:
+            chain = await get_frame_locators_chain(frame, page)
+            if chain == frame_chain:
+                return frame
+        except Exception:
+            continue
+    return None
+
 # Local browser session WebSocket router
 @app.websocket("/api/browser/ws/browser-session/{session_id}")
 async def local_browser_websocket(websocket: WebSocket, session_id: str):
@@ -480,10 +497,7 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                 }
             })
 
-        page.on("request", lambda r: asyncio.create_task(handle_request(r)))
-        page.on("response", lambda r: asyncio.create_task(handle_response(r)))
-
-        async def handle_nav(frame):
+        async def handle_nav(owner_page: Page, frame):
             try:
                 await frame.evaluate(inspector_js)
                 await frame.evaluate(recorder_js)
@@ -495,11 +509,71 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                         await frame.evaluate("window.__setLixionaryRecordingMode(true)")
             except Exception:
                 pass
-            if frame == page.main_frame:
-                await send_to_client({"type": "navigation", "url": page.url})
+            if frame == owner_page.main_frame:
+                # Only the active tab drives the URL bar — background tabs
+                # navigating (e.g. an OAuth popup) must not hijack it.
+                session = _active_sessions.get(session_id)
+                is_active = True
+                if session:
+                    try:
+                        is_active = session["pages"][session["active_page_index"]] == owner_page
+                    except Exception:
+                        pass
+                if is_active:
+                    await send_to_client({"type": "navigation", "url": owner_page.url})
 
-        page.on("framenavigated", lambda f: asyncio.create_task(handle_nav(f)))
-        page.on("frameattached", lambda f: asyncio.create_task(handle_nav(f)))
+        async def handle_page_close(closed_page: Page):
+            session = _active_sessions.get(session_id)
+            if not session or closed_page not in session["pages"]:
+                return
+            idx = session["pages"].index(closed_page)
+            was_active = (idx == session["active_page_index"])
+            session["pages"].remove(closed_page)
+            if not session["pages"]:
+                # Last page gone — the whole context is closing, nothing to switch to.
+                return
+            new_active = session["active_page_index"]
+            if idx < new_active:
+                new_active -= 1
+            elif was_active:
+                new_active = min(new_active, len(session["pages"]) - 1)
+            session["active_page_index"] = new_active
+            if was_active:
+                session["last_clicked_frame"] = None
+                new_page = session["pages"][new_active]
+                try:
+                    await start_screencast(new_page)
+                except Exception:
+                    pass
+                await send_to_client({"type": "navigation", "url": new_page.url})
+            await send_to_client({"type": "tab_closed", "data": {"index": idx, "active_index": new_active}})
+
+        def attach_page_handlers(target_page: Page):
+            target_page.on("request", lambda r: asyncio.create_task(handle_request(r)))
+            target_page.on("response", lambda r: asyncio.create_task(handle_response(r)))
+            target_page.on("framenavigated", lambda f, p=target_page: asyncio.create_task(handle_nav(p, f)))
+            target_page.on("frameattached", lambda f, p=target_page: asyncio.create_task(handle_nav(p, f)))
+            target_page.on("close", lambda p: asyncio.create_task(handle_page_close(p)))
+
+        attach_page_handlers(page)
+
+        # Track tabs/popups the user opens while browsing directly in the
+        # headed window — without this they'd be invisible to the app (no
+        # screencast, wrong target for inspect/verify).
+        async def handle_new_page(new_page: Page):
+            session = _active_sessions.get(session_id)
+            if not session or new_page in session["pages"]:
+                return
+            session["pages"].append(new_page)
+            attach_page_handlers(new_page)
+            idx = session["pages"].index(new_page)
+            try:
+                await new_page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                pass
+            await send_to_client({"type": "tab_opened", "data": {"index": idx, "url": new_page.url}})
+
+        context.on("page", lambda p: asyncio.create_task(handle_new_page(p)))
 
         # Navigate to start URL
         url_to_open = default_url if default_url.startswith(("http://", "https://")) else "about:blank"
@@ -516,6 +590,7 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
             "context": context,
             "pages": [page],
             "active_page_index": 0,
+            "headless": headless,
             "inspect_enabled": False,
             "recording_enabled": False,
             "recorded_steps": [],
@@ -527,25 +602,43 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
         # Register in the shared BrowserSessionManager class registry so background services (e.g. exploration) can locate it
         BrowserSessionManager._sessions[session_id] = _active_sessions[session_id]
 
-        # Start Screencast frame capture via CDP
-        cdp_session = await context.new_cdp_session(page)
-        await cdp_session.send("Page.startScreencast", {"format": "jpeg", "quality": 80})
+        # Start Screencast frame capture via CDP. Wrapped in a restartable
+        # helper so tab switches can move the stream to another page.
+        screencast_ref = {"cdp": None}
 
-        async def on_screencast_frame(event):
-            await send_to_client({
-                "type": "screencast_frame",
-                "data": {
-                    "image": event["data"],
-                    "metadata": event["metadata"],
-                    "sessionId": event.get("sessionId")
-                }
-            })
-            try:
-                await cdp_session.send("Page.screencastFrameAck", {"sessionId": event["sessionId"]})
-            except Exception:
-                pass
+        async def start_screencast(target_page: Page):
+            old_cdp = screencast_ref["cdp"]
+            if old_cdp:
+                for teardown in ("Page.stopScreencast",):
+                    try:
+                        await old_cdp.send(teardown)
+                    except Exception:
+                        pass
+                try:
+                    await old_cdp.detach()
+                except Exception:
+                    pass
+            new_cdp = await context.new_cdp_session(target_page)
+            screencast_ref["cdp"] = new_cdp
 
-        cdp_session.on("Page.screencastFrame", lambda e: asyncio.create_task(on_screencast_frame(e)))
+            async def on_screencast_frame(event):
+                await send_to_client({
+                    "type": "screencast_frame",
+                    "data": {
+                        "image": event["data"],
+                        "metadata": event["metadata"],
+                        "sessionId": event.get("sessionId")
+                    }
+                })
+                try:
+                    await new_cdp.send("Page.screencastFrameAck", {"sessionId": event["sessionId"]})
+                except Exception:
+                    pass
+
+            new_cdp.on("Page.screencastFrame", lambda e: asyncio.create_task(on_screencast_frame(e)))
+            await new_cdp.send("Page.startScreencast", {"format": "jpeg", "quality": 80})
+
+        await start_screencast(page)
 
         # Tell client we are connected, including the effective viewport so
         # the frontend doesn't rely on its own possibly-stale copy of the
@@ -583,6 +676,39 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                         await frame.evaluate(eval_script)
                     except Exception:
                         pass
+            elif action == "focus-window":
+                if session.get("headless"):
+                    await send_to_client({
+                        "type": "window_focus_error",
+                        "data": {"message": "Session is headless — disable Headless in the browser profile to get a visible window"}
+                    })
+                    continue
+                try:
+                    await active_page.bring_to_front()
+                    raise_cdp = await context.new_cdp_session(active_page)
+                    try:
+                        info = await raise_cdp.send("Browser.getWindowForTarget")
+                        window_id = info.get("windowId")
+                        if window_id is not None:
+                            # Minimize/restore is the reliable cross-platform way to
+                            # raise the OS window above other applications via CDP.
+                            await raise_cdp.send("Browser.setWindowBounds", {"windowId": window_id, "bounds": {"windowState": "minimized"}})
+                            await raise_cdp.send("Browser.setWindowBounds", {"windowId": window_id, "bounds": {"windowState": "normal"}})
+                    finally:
+                        try:
+                            await raise_cdp.detach()
+                        except Exception:
+                            pass
+                    if sys.platform == "darwin":
+                        # CDP raises the window within the browser app, but macOS
+                        # won't bring the app itself above the Tauri window.
+                        subprocess.Popen(
+                            ["osascript", "-e", 'tell application "Chromium" to activate'],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                        )
+                    await send_to_client({"type": "window_focused", "data": {}})
+                except Exception as e:
+                    await send_to_client({"type": "window_focus_error", "data": {"message": str(e)}})
             elif action == "start-recording":
                 session["recording_enabled"] = True
                 session["recorded_steps"] = []
@@ -710,7 +836,14 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                 value = cmd.get("value")
                 await send_to_client({"type": "verify_started", "data": {"action": verify_action}})
                 try:
-                    frame = session.get("last_clicked_frame") or active_page.main_frame
+                    # A manual selector tested inside an iframe carries its frame
+                    # chain explicitly — inspect-clicks keep the legacy fallback.
+                    frame = None
+                    requested_chain = cmd.get("frameLocators")
+                    if requested_chain:
+                        frame = await resolve_frame_by_chain(active_page, requested_chain)
+                    if frame is None:
+                        frame = session.get("last_clicked_frame") or active_page.main_frame
                     success = False
                     result_text = None
                     attempts = []
@@ -765,7 +898,79 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                     })
                 except Exception as ex:
                     await send_to_client({"type": "verify_result", "data": {"success": False, "action": verify_action, "error": str(ex)}})
-            
+            elif action == "test-selector":
+                raw_selector = (cmd.get("selector") or "").strip()
+                if not raw_selector:
+                    await send_to_client({
+                        "type": "selector_test_result",
+                        "data": {"selector": "", "totalCount": 0, "frames": [], "error": "Selector is empty"}
+                    })
+                    continue
+                total_count = 0
+                frame_results = []
+                first_error = None
+                for frame in active_page.frames:
+                    try:
+                        loc = BrowserSessionManager._build_locator(frame, "locator (Custom)", raw_selector)
+                        count = await loc.count()
+                    except Exception as e:
+                        if first_error is None:
+                            first_error = BrowserSessionManager._clean_verify_error(e)
+                        continue
+                    if count > 0:
+                        total_count += count
+                        try:
+                            await loc.evaluate_all(
+                                "els => window.__lixionaryHighlightMatches && window.__lixionaryHighlightMatches(els)"
+                            )
+                        except Exception:
+                            pass
+                        frame_chain = await get_frame_locators_chain(frame, active_page)
+                        frame_results.append({"frameLocators": frame_chain, "count": count})
+                await send_to_client({
+                    "type": "selector_test_result",
+                    "data": {
+                        "selector": raw_selector,
+                        "totalCount": total_count,
+                        "frames": frame_results,
+                        # An invalid selector fails in every frame; a valid one that
+                        # simply matched nothing reports 0 without an error.
+                        "error": first_error if total_count == 0 else None,
+                    }
+                })
+            elif action == "clear-highlight":
+                for frame in active_page.frames:
+                    try:
+                        await frame.evaluate("window.__lixionaryClearLixHighlights && window.__lixionaryClearLixHighlights()")
+                    except Exception:
+                        pass
+            elif action == "switch_tab":
+                idx = int(cmd.get("page_index", 0))
+                if 0 <= idx < len(session["pages"]) and idx != session["active_page_index"]:
+                    session["active_page_index"] = idx
+                    session["last_clicked_frame"] = None
+                    new_active = session["pages"][idx]
+                    try:
+                        await new_active.bring_to_front()
+                    except Exception:
+                        pass
+                    try:
+                        await start_screencast(new_active)
+                    except Exception:
+                        pass
+                    if session.get("inspect_enabled"):
+                        for frame in new_active.frames:
+                            try:
+                                await frame.evaluate("window.__setLixionaryInspectMode(true)")
+                            except Exception:
+                                pass
+                    await send_to_client({"type": "navigation", "url": new_active.url})
+            elif action == "close_tab":
+                idx = int(cmd.get("page_index", 0))
+                if 0 <= idx < len(session["pages"]) and len(session["pages"]) > 1:
+                    # handle_page_close (page "close" event) does the bookkeeping
+                    await session["pages"][idx].close()
+
             # Interactive Canvas mouse inputs
             elif action == "mouse_click":
                 x = cmd.get("x", 0.5)

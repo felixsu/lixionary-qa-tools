@@ -5,7 +5,7 @@ import {
   Globe, Terminal, Eye, Crosshair, Download, Trash2, Plus, FileCode, Play,
   Save, File, Folder, XCircle, Rows, Lock, X, Layers, Code2, Clipboard, Activity,
   ChevronDown, ChevronUp, RotateCcw, Copy, Check, Mail, Anchor, Loader2, ScanSearch,
-  Sparkles, StopCircle,
+  Sparkles, StopCircle, AppWindow, Braces,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
@@ -84,6 +84,12 @@ export default function WebExplorerPage() {
     verifyAttempts,
     verifyResult,
     handleVerifyElement,
+    selectorTestResult,
+    isTestingSelector,
+    handleTestSelector,
+    handleClearHighlights,
+    handleVerifyCustomSelector,
+    handleFocusBrowserWindow,
     isExploring,
     exploreSteps,
     setExploreSteps,
@@ -818,6 +824,13 @@ export default function WebExplorerPage() {
   const [showScanMenu, setShowScanMenu] = useState(false);
   const [showExploreMenu, setShowExploreMenu] = useState(false);
   const [exploreScope, setExploreScope] = useState<"page" | "selected">("page");
+  // Manual selector testing — inspector-card override input + standalone tester card
+  const [customSelectorInput, setCustomSelectorInput] = useState("");
+  const [showSelectorTester, setShowSelectorTester] = useState(false);
+  const [testerSelector, setTesterSelector] = useState("");
+  const [testerAction, setTesterAction] = useState("click");
+  const [testerValue, setTesterValue] = useState("");
+  const [testerMethodName, setTesterMethodName] = useState("");
   const scanMenuRef = useRef<HTMLDivElement>(null);
   const exploreMenuRef = useRef<HTMLDivElement>(null);
   const sessionsMenuRef = useRef<HTMLDivElement>(null);
@@ -907,6 +920,63 @@ export default function WebExplorerPage() {
       showToast(e.message || "Failed to record scanned elements.", { type: "error" });
     } finally {
       setIsRecordingScan(false);
+    }
+  };
+
+  // When a custom selector typed in the inspector card tests successfully, it
+  // becomes the primary strategy (index 0) — Verify and Record both use the
+  // list head, so the manual selector automatically wins over generated ones.
+  useEffect(() => {
+    if (!selectorTestResult || selectorTestResult.error) return;
+    if (showSelectorTester || !selectedElement) return;
+    if (selectorTestResult.selector !== customSelectorInput.trim()) return;
+    const entry = {
+      strategy: "locator (Custom)",
+      selector: selectorTestResult.selector,
+      statement: `page.locator("${selectorTestResult.selector.replace(/"/g, '\\"')}")`,
+      count: selectorTestResult.totalCount,
+      unique: selectorTestResult.totalCount === 1,
+      score: 200,
+    };
+    setSelectedElementLocators([entry, ...selectedElementLocators.filter((l) => l.strategy !== "locator (Custom)")]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectorTestResult]);
+
+  // The frame chain a tested custom selector should execute/record against —
+  // only unambiguous when exactly one frame matched.
+  const testerFrameLocators =
+    selectorTestResult && selectorTestResult.frames.length === 1
+      ? selectorTestResult.frames[0].frameLocators
+      : [];
+  const testerHasValidResult =
+    !!selectorTestResult &&
+    !selectorTestResult.error &&
+    selectorTestResult.selector === testerSelector.trim() &&
+    selectorTestResult.totalCount > 0;
+
+  const handleSaveTesterToPOM = async () => {
+    if (!sessionId || !testerHasValidResult) return;
+    const methodName = testerMethodName || `${testerAction}_custom_element`;
+    try {
+      await apiCall("/api/browser/pom/add", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId,
+          methodName,
+          action: testerAction,
+          strategy: "locator (Custom)",
+          selector: testerSelector.trim(),
+          frameLocators: testerFrameLocators,
+        }),
+      });
+      showToast(`Method ${methodName} added to MyPage.`, { type: "info" });
+      setTesterMethodName("");
+      await fetchWorkspaceFiles();
+      if (selectedWorkspaceFile === "inspection_code/my_page.py") {
+        await fetchFileContent("inspection_code/my_page.py");
+      }
+    } catch (e: any) {
+      showToast(e.message || "Failed to record selector to POM class.", { type: "error" });
     }
   };
 
@@ -1646,6 +1716,32 @@ export default function WebExplorerPage() {
               <Crosshair className="h-3.5 w-3.5" />
               {inspectMode ? "Inspecting" : "Inspect"}
             </button>
+            <button
+              onClick={() => {
+                const next = !showSelectorTester;
+                setShowSelectorTester(next);
+                if (!next) handleClearHighlights();
+              }}
+              disabled={isVerifying || isExploring || isRecording}
+              title="Type a selector manually, test it against the page, run actions and save it"
+              className="h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border disabled:opacity-60"
+              style={
+                showSelectorTester
+                  ? { background: "rgba(204,120,92,0.12)", borderColor: "rgba(204,120,92,0.4)", color: "#cc785c" }
+                  : { background: "transparent", borderColor: "var(--color-line)", color: "var(--color-graphite)" }
+              }
+            >
+              <Braces className="h-3.5 w-3.5" />
+              Selector
+            </button>
+            <button
+              onClick={handleFocusBrowserWindow}
+              title="Raise the live browser window — browsing and inspect clicks work there too"
+              className="h-[34px] px-3 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border bg-transparent border-line text-graphite hover:bg-panel"
+            >
+              <AppWindow className="h-3.5 w-3.5" />
+              Window
+            </button>
             <div className="relative" ref={scanMenuRef}>
               <button
                 onClick={() => setShowScanMenu((v) => !v)}
@@ -2254,14 +2350,14 @@ export default function WebExplorerPage() {
               )}
 
               {/* Floating element inspector card overlay */}
-              {selectedElement && (
+              {selectedElement && !showSelectorTester && (
                 <div className="absolute bottom-4 right-4 z-40 w-80 bg-cream border border-line rounded-xl shadow-[0_12px_24px_rgba(20,20,19,0.15)] flex flex-col overflow-hidden">
                   <div className="px-4 py-3 border-b border-line flex items-center justify-between bg-panel">
                     <span className="text-xs font-semibold uppercase tracking-[0.08em] text-ink flex items-center gap-2">
                       <Crosshair className="h-4 w-4 text-clay animate-pulse" /> Inspect Element
                     </span>
                     <button
-                      onClick={() => { setSelectedElement(null); setSelectedElementLocators([]); setSelectedElementStale({ stale: false, reason: null }); }}
+                      onClick={() => { setSelectedElement(null); setSelectedElementLocators([]); setSelectedElementStale({ stale: false, reason: null }); setCustomSelectorInput(""); handleClearHighlights(); }}
                       className="h-6 w-6 rounded-md hover:bg-line flex items-center justify-center transition-colors"
                     >
                       <X className="h-4 w-4 text-mute hover:text-graphite" />
@@ -2354,6 +2450,45 @@ export default function WebExplorerPage() {
                       />
                     </div>
 
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">Custom selector (optional)</label>
+                      <div className="flex gap-1.5">
+                        <input
+                          type="text"
+                          value={customSelectorInput}
+                          onChange={(e) => setCustomSelectorInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && customSelectorInput.trim() && !isTestingSelector) {
+                              handleTestSelector(customSelectorInput.trim());
+                            }
+                          }}
+                          placeholder='css, xpath=…, text=…, a >> b'
+                          className="flex-1 h-8 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay font-mono min-w-0"
+                        />
+                        <button
+                          onClick={() => handleTestSelector(customSelectorInput.trim())}
+                          disabled={!customSelectorInput.trim() || isTestingSelector}
+                          title="Check how many elements this selector matches and highlight them"
+                          className="h-8 px-2.5 bg-panel border border-line hover:border-clay rounded-md text-xs font-semibold text-ink transition-colors flex items-center gap-1 disabled:opacity-60"
+                        >
+                          {isTestingSelector ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3 text-clay" />}
+                          Test
+                        </button>
+                      </div>
+                      {selectorTestResult?.error && selectorTestResult.selector === customSelectorInput.trim() && (
+                        <p className="text-[11px] text-red-600 font-mono break-all">{selectorTestResult.error}</p>
+                      )}
+                      {selectorTestResult && !selectorTestResult.error && selectorTestResult.selector === customSelectorInput.trim() && (
+                        <p className={`text-[11px] font-medium ${selectorTestResult.totalCount === 1 ? "text-green-700" : "text-amber-700"}`}>
+                          {selectorTestResult.totalCount === 0
+                            ? "No matches on this page"
+                            : selectorTestResult.totalCount === 1
+                              ? "✅ Unique match — set as primary strategy"
+                              : `⚠️ ${selectorTestResult.totalCount} matches — actions need a unique selector (try >> nth=0)`}
+                        </p>
+                      )}
+                    </div>
+
                     <div className="flex gap-2 mt-1">
                       <button
                         onClick={handleSetAnchor}
@@ -2391,6 +2526,161 @@ export default function WebExplorerPage() {
                             {verifyResult.success
                               ? `✅ Verified${verifyResult.resultText ? `: "${verifyResult.resultText}"` : ""}`
                               : "❌ All candidates failed"}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Standalone manual selector tester card — no inspect-click needed */}
+              {showSelectorTester && (
+                <div className="absolute bottom-4 right-4 z-40 w-80 bg-cream border border-line rounded-xl shadow-[0_12px_24px_rgba(20,20,19,0.15)] flex flex-col overflow-hidden">
+                  <div className="px-4 py-3 border-b border-line flex items-center justify-between bg-panel">
+                    <span className="text-xs font-semibold uppercase tracking-[0.08em] text-ink flex items-center gap-2">
+                      <Braces className="h-4 w-4 text-clay" /> Selector Tester
+                    </span>
+                    <button
+                      onClick={() => { setShowSelectorTester(false); handleClearHighlights(); }}
+                      className="h-6 w-6 rounded-md hover:bg-line flex items-center justify-center transition-colors"
+                    >
+                      <X className="h-4 w-4 text-mute hover:text-graphite" />
+                    </button>
+                  </div>
+
+                  <div className="p-4 flex flex-col gap-3">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">Selector</label>
+                      <div className="flex gap-1.5">
+                        <input
+                          type="text"
+                          value={testerSelector}
+                          onChange={(e) => setTesterSelector(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && testerSelector.trim() && !isTestingSelector) {
+                              handleTestSelector(testerSelector.trim());
+                            }
+                          }}
+                          placeholder='css, xpath=…, text=…, a >> b'
+                          className="flex-1 h-8 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay font-mono min-w-0"
+                        />
+                        <button
+                          onClick={() => handleTestSelector(testerSelector.trim())}
+                          disabled={!testerSelector.trim() || isTestingSelector}
+                          title="Check how many elements this selector matches and highlight them on the page"
+                          className="h-8 px-2.5 bg-panel border border-line hover:border-clay rounded-md text-xs font-semibold text-ink transition-colors flex items-center gap-1 disabled:opacity-60"
+                        >
+                          {isTestingSelector ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3 text-clay" />}
+                          Test
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-mute">
+                        Playwright syntax: CSS, <span className="font-mono">xpath=//…</span>, <span className="font-mono">text=Submit</span>, chaining with <span className="font-mono">&gt;&gt;</span>
+                      </p>
+                    </div>
+
+                    {selectorTestResult && selectorTestResult.selector === testerSelector.trim() && (
+                      selectorTestResult.error ? (
+                        <p className="px-3 py-2 bg-red-50 border border-red-300 rounded-lg text-[11px] text-red-700 font-mono break-all">
+                          {selectorTestResult.error}
+                        </p>
+                      ) : (
+                        <div className={`px-3 py-2 rounded-lg border text-[11px] font-medium ${
+                          selectorTestResult.totalCount === 1
+                            ? "bg-green-50 border-green-300 text-green-800"
+                            : selectorTestResult.totalCount === 0
+                              ? "bg-panel border-line text-mute"
+                              : "bg-amber-50 border-amber-300 text-amber-800"
+                        }`}>
+                          {selectorTestResult.totalCount === 0
+                            ? "No matches on this page"
+                            : selectorTestResult.totalCount === 1
+                              ? "✅ Unique match (highlighted on the page)"
+                              : `⚠️ ${selectorTestResult.totalCount} matches — Playwright strict mode rejects actions on multi-match selectors; refine it or append >> nth=0`}
+                          {selectorTestResult.frames.filter((f) => f.frameLocators.length > 0).map((f, i) => (
+                            <div key={i} className="text-[10px] font-mono mt-1">
+                              {f.count} in frame: {f.frameLocators.join(" → ")}
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    )}
+
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">Action</label>
+                      <Dropdown
+                        value={testerAction}
+                        onChange={setTesterAction}
+                        className="h-8 px-2.5 rounded-md text-xs text-ink bg-cream"
+                        options={[
+                          { value: "click", label: "Click" },
+                          { value: "fill", label: "Fill" },
+                          { value: "type", label: "Type" },
+                          { value: "hover", label: "Hover" },
+                          { value: "check", label: "Check" },
+                          { value: "select_option", label: "Select option" },
+                          { value: "getText", label: "Get Text" },
+                        ]}
+                      />
+                    </div>
+
+                    {["fill", "type", "select_option"].includes(testerAction) && (
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">Test value</label>
+                        <input
+                          type="text"
+                          value={testerValue}
+                          onChange={(e) => setTesterValue(e.target.value)}
+                          placeholder={testerAction === "select_option" ? "option value attribute" : "sample value to type/fill"}
+                          className="h-8 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay font-mono"
+                        />
+                      </div>
+                    )}
+
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">Method name</label>
+                      <input
+                        type="text"
+                        value={testerMethodName}
+                        onChange={(e) => setTesterMethodName(e.target.value)}
+                        placeholder={`e.g. ${testerAction}_custom_element`}
+                        className="h-8 bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay font-mono"
+                      />
+                    </div>
+
+                    <div className="flex gap-2 mt-1">
+                      <button
+                        onClick={() => handleVerifyCustomSelector(testerSelector.trim(), testerAction, testerValue, testerFrameLocators)}
+                        disabled={!testerHasValidResult || isVerifying}
+                        title={testerHasValidResult ? "Run this action with the selector live against the browser" : "Test the selector first — it must match at least one element"}
+                        className="flex-1 h-9 bg-panel border border-line hover:border-blue-500 rounded-lg text-xs font-semibold text-ink transition-colors flex items-center justify-center gap-1.5 disabled:opacity-60"
+                      >
+                        {isVerifying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5 text-blue-600" />}
+                        {isVerifying ? "Running…" : "Run"}
+                      </button>
+                      <button
+                        onClick={handleSaveTesterToPOM}
+                        disabled={!testerHasValidResult}
+                        title={testerHasValidResult ? "Save as a POM method using this selector" : "Test the selector first — it must match at least one element"}
+                        className="flex-1 h-9 bg-clay hover:bg-clay-dark rounded-lg text-xs font-semibold text-white transition-colors shadow-sm flex items-center justify-center gap-1.5 disabled:opacity-60"
+                      >
+                        <Save className="h-3.5 w-3.5" /> Save to POM
+                      </button>
+                    </div>
+
+                    {(verifyAttempts.length > 0 || verifyResult) && (
+                      <div className="px-3 py-2 bg-panel rounded-lg border border-line text-[11px] font-mono max-h-28 overflow-y-auto">
+                        {verifyAttempts.map((a, i) => (
+                          <div key={i} className={a.status === "success" ? "text-green-700" : "text-mute"}>
+                            {a.source === "llm" ? "🤖 " : ""}{a.strategy}: {a.status}{a.error ? ` — ${a.error}` : ""}
+                          </div>
+                        ))}
+                        {verifyResult && (
+                          <div className={verifyResult.success ? "text-green-700 font-semibold mt-1" : "text-red-600 font-semibold mt-1"}>
+                            {verifyResult.success
+                              ? `✅ Ran successfully${verifyResult.resultText ? `: "${verifyResult.resultText}"` : ""}`
+                              : "❌ Action failed with this selector"}
                           </div>
                         )}
                       </div>
