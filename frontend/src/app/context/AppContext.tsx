@@ -272,6 +272,13 @@ export interface SessionInfo {
   profile_id: string | null;
 }
 
+export interface SelectorTestResult {
+  selector: string;
+  totalCount: number;
+  frames: { frameLocators: string[]; count: number }[];
+  error: string | null;
+}
+
 interface AppContextType {
   // Auth State
   token: string | null;
@@ -413,6 +420,16 @@ interface AppContextType {
   verifyAttempts: any[];
   verifyResult: { success: boolean; resultText?: string } | null;
   handleVerifyElement: () => void;
+
+  // Manual selector testing
+  selectorTestResult: SelectorTestResult | null;
+  isTestingSelector: boolean;
+  handleTestSelector: (selector: string) => void;
+  handleClearHighlights: () => void;
+  handleVerifyCustomSelector: (selector: string, action: string, value?: string, frameLocators?: string[]) => void;
+
+  // Live browser window
+  handleFocusBrowserWindow: () => void;
   isExploring: boolean;
   exploreSteps: any[];
   setExploreSteps: React.Dispatch<React.SetStateAction<any[]>>;
@@ -643,6 +660,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [isVerifying, setIsVerifying] = useState(false);
   const [verifyAttempts, setVerifyAttempts] = useState<any[]>([]);
   const [verifyResult, setVerifyResult] = useState<{ success: boolean; resultText?: string } | null>(null);
+  const [selectorTestResult, setSelectorTestResult] = useState<SelectorTestResult | null>(null);
+  const [isTestingSelector, setIsTestingSelector] = useState(false);
   const [isExploring, setIsExploring] = useState(false);
   const [exploreSteps, setExploreSteps] = useState<any[]>([]);
   const [explorePrompt, setExplorePrompt] = useState("");
@@ -1657,6 +1676,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         case "anchor_cleared":
           setAnchorElement(null);
           break;
+        case "selector_test_result":
+          setIsTestingSelector(false);
+          setSelectorTestResult(msg.data);
+          break;
+        case "window_focused":
+          break;
+        case "window_focus_error":
+          showToast(msg.data?.message || "Could not raise the browser window", { type: "error" });
+          break;
         case "error":
           showToast(`Browser session error: ${msg.message}`, { type: "error" });
           setIsBrowserConnected(false);
@@ -1677,6 +1705,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // mid-Verify/Explore — there'd be no other signal left to clear these.
       setIsVerifying(false);
       setIsExploring(false);
+      setIsTestingSelector(false);
+      setSelectorTestResult(null);
       
       // Auto-terminate the session on WebSocket close since the browser was shut down or connection dropped/errored.
       setTimeout(() => {
@@ -1866,6 +1896,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       value: ["fill", "type", "select_option"].includes(selectedElementAction) ? selectedElementTestValue : undefined,
       element: selectedElement,
     }));
+  };
+
+  const handleTestSelector = (selector: string) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    setIsTestingSelector(true);
+    setSelectorTestResult(null);
+    wsRef.current.send(JSON.stringify({ action: "test-selector", selector }));
+  };
+
+  const handleClearHighlights = () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ action: "clear-highlight" }));
+  };
+
+  // Runs an action with a user-typed selector through the same verify path the
+  // inspector uses; frameLocators (from the selector test) target an iframe.
+  const handleVerifyCustomSelector = (selector: string, action: string, value?: string, frameLocators?: string[]) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({
+      action: "verify",
+      verifyAction: action,
+      locators: [{ strategy: "locator (Custom)", selector }],
+      value: ["fill", "type", "select_option"].includes(action) ? (value ?? "") : undefined,
+      frameLocators: frameLocators && frameLocators.length ? frameLocators : undefined,
+    }));
+  };
+
+  const handleFocusBrowserWindow = () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ action: "focus-window" }));
   };
 
   const resetPageScan = () => {
@@ -2809,6 +2869,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         verifyAttempts,
         verifyResult,
         handleVerifyElement,
+        selectorTestResult,
+        isTestingSelector,
+        handleTestSelector,
+        handleClearHighlights,
+        handleVerifyCustomSelector,
+        handleFocusBrowserWindow,
         isExploring,
         exploreSteps,
         setExploreSteps,
