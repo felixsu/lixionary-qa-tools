@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { ArrowLeft, BookOpen } from "lucide-react";
-import { useAppContext } from "../../context/AppContext";
+import { ArrowLeft, BookOpen, ChevronRight } from "lucide-react";
+import { useAppContext, UserGuideSummary } from "../../context/AppContext";
 import GuideBlockRenderer, { GuideBlock } from "../../components/guide/GuideBlockRenderer";
+import { buildGuideTree, flattenGuideTree } from "../../utils/guideTree";
 
 interface UserGuideDetail {
   id: string;
@@ -19,11 +20,27 @@ interface UserGuideDetail {
 export default function UserGuideDetailPage() {
   const searchParams = useSearchParams();
   const guideId = searchParams.get("id");
-  const { token, apiCall } = useAppContext();
+  const { token, apiCall, userGuides } = useAppContext();
 
   const [guide, setGuide] = useState<UserGuideDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+
+  // Ancestor chain (root first) and direct children, from the summaries the
+  // sidebar already fetched. Both are empty until userGuides loads — fine.
+  const { ancestors, childPages } = useMemo(() => {
+    const byId = new Map(userGuides.map((g) => [g.id, g]));
+    const ancestors: UserGuideSummary[] = [];
+    const seen = new Set<string>();
+    let parentId = guideId ? byId.get(guideId)?.parentId : null;
+    while (parentId && byId.has(parentId) && !seen.has(parentId)) {
+      seen.add(parentId);
+      ancestors.unshift(byId.get(parentId)!);
+      parentId = byId.get(parentId)!.parentId;
+    }
+    const node = flattenGuideTree(buildGuideTree(userGuides)).find((n) => n.id === guideId);
+    return { ancestors, childPages: node?.children ?? [] };
+  }, [userGuides, guideId]);
 
   useEffect(() => {
     if (!token || !guideId) return;
@@ -79,12 +96,25 @@ export default function UserGuideDetailPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-3xl px-6 py-8" style={{ animation: "fadeUp 0.3s ease" }}>
-        <Link
-          href="/user-guides"
-          className="inline-flex items-center gap-1.5 text-xs text-stone hover:text-clay transition-colors mb-5"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> All guides
-        </Link>
+        <div className="flex items-center gap-1.5 flex-wrap text-xs mb-5">
+          <Link
+            href="/user-guides"
+            className="inline-flex items-center gap-1.5 text-stone hover:text-clay transition-colors"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" /> All guides
+          </Link>
+          {ancestors.map((a) => (
+            <React.Fragment key={a.id}>
+              <ChevronRight className="h-3 w-3 text-mute" />
+              <Link
+                href={`/user-guides/detail?id=${a.id}`}
+                className="text-stone hover:text-clay transition-colors truncate max-w-[180px]"
+              >
+                {a.title}
+              </Link>
+            </React.Fragment>
+          ))}
+        </div>
 
         <h1 className="m-0 font-serif text-3xl font-medium text-ink">{guide.title}</h1>
         {guide.description && (
@@ -97,6 +127,32 @@ export default function UserGuideDetailPage() {
         </div>
 
         <GuideBlockRenderer blocks={guide.blocks || []} />
+
+        {childPages.length > 0 && (
+          <div className="mt-8 pt-5 border-t border-line">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-stone mb-3">
+              In this section
+            </div>
+            <div className="flex flex-col gap-1.5">
+              {childPages.map((child) => (
+                <Link
+                  key={child.id}
+                  href={`/user-guides/detail?id=${child.id}`}
+                  className="group flex items-center gap-2.5 bg-cream border border-line rounded-xl px-4 py-2.5 hover:border-clay/50 hover:bg-panel/40 transition-colors"
+                >
+                  <BookOpen className="h-3.5 w-3.5 text-clay flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-ink truncate">{child.title}</div>
+                    {child.description && (
+                      <div className="text-[11px] text-mute truncate">{child.description}</div>
+                    )}
+                  </div>
+                  <ChevronRight className="h-3.5 w-3.5 text-mute group-hover:text-clay transition-colors flex-shrink-0" />
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

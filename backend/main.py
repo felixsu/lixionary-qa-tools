@@ -33,6 +33,12 @@ async def lifespan(app: FastAPI):
         await refresh_col.create_index("tokenHash", unique=True)
         await refresh_col.create_index("expiresAt", expireAfterSeconds=0)
 
+        # Guide slugs are the stable keys for in-app help links; sparse so
+        # guides without a slug (field omitted entirely) don't collide.
+        guides_col = MongoDB.get_collection("user_guides")
+        await guides_col.create_index("slug", unique=True, sparse=True)
+        await guides_col.create_index("parentId")
+
 
     except Exception as e:
         print(f"ERROR: Failed to connect to services or seed on boot: {e}")

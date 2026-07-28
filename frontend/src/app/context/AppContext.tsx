@@ -41,6 +41,9 @@ export interface UserGuideSummary {
   description: string;
   blockCount: number;
   updatedAt?: string;
+  parentId?: string | null;
+  order?: number;
+  slug?: string | null;
 }
 
 export interface InputBinding {

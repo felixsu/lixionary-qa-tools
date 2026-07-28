@@ -15,11 +15,13 @@ import { useAppVersion } from "../utils/useAppVersion";
 import { useUpdateChecker } from "../utils/useUpdateChecker";
 import { isTauri } from "../utils/tauri";
 import { formatRelativeTime } from "../utils/formatRelativeTime";
+import { buildGuideTree, flattenGuideTree } from "../utils/guideTree";
+import GuideHelpButton from "../components/guide/GuideHelpButton";
 
 type NavEntry =
   | { type: "section"; label: string }
   | { type: "item"; href: string; icon: typeof Send; label: string; badge?: "env" }
-  | { type: "group"; href: string; icon: typeof Send; label: string; children: { href: string; label: string }[] };
+  | { type: "group"; href: string; icon: typeof Send; label: string; children: { href: string; label: string; depth?: number }[] };
 
 const NAV: NavEntry[] = [
   { type: "section", label: "Home" },
@@ -146,6 +148,11 @@ export default function DashboardLayout({
     }
   };
 
+  // A guide slugged "page-<route>" (e.g. "page-api-studio") surfaces a help
+  // icon next to that page's header title — no per-page wiring needed.
+  const pageHelpSlug = `page${pathname.replace(/\//g, "-")}`;
+  const pageHelpGuide = userGuides.find((g) => g.slug === pageHelpSlug);
+
   const showEnvPill = pathname === "/api-explorer" || pathname === "/api-studio" || pathname === "/web-explorer";
   const userInitial = (user?.name || user?.email || "D").charAt(0).toUpperCase();
 
@@ -156,7 +163,11 @@ export default function DashboardLayout({
       href: "/user-guides",
       icon: BookOpen,
       label: "User guide",
-      children: userGuides.map((g) => ({ href: `/user-guides/detail?id=${g.id}`, label: g.title })),
+      children: flattenGuideTree(buildGuideTree(userGuides)).map((g) => ({
+        href: `/user-guides/detail?id=${g.id}`,
+        label: g.title,
+        depth: g.depth,
+      })),
     },
   ];
   if (user?.role === "admin") {
@@ -250,10 +261,11 @@ export default function DashboardLayout({
                         <Link
                           key={child.href}
                           href={child.href}
-                          className="flex items-center rounded-lg py-1.5 pr-2 pl-[34px] transition-colors hover:bg-panel"
+                          className="flex items-center rounded-lg py-1.5 pr-2 transition-colors hover:bg-panel"
                           style={{
                             background: childActive ? "var(--color-hover)" : "transparent",
                             borderLeft: `3px solid ${childActive ? "var(--color-clay)" : "transparent"}`,
+                            paddingLeft: 34 + ((child.depth ?? 1) - 1) * 12,
                           }}
                         >
                           <span className={`text-[12.5px] truncate ${childActive ? "font-medium text-clay" : "text-stone"}`}>
@@ -422,9 +434,14 @@ export default function DashboardLayout({
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Header */}
         <header className="h-14 flex items-center gap-4 px-6 bg-cream border-b border-line flex-shrink-0">
-          <h1 className="flex-1 m-0 font-serif text-[22px] font-medium tracking-[-0.3px] text-ink">
-            {getHeaderTitle()}
-          </h1>
+          <div className="flex-1 flex items-center gap-2 min-w-0">
+            <h1 className="m-0 font-serif text-[22px] font-medium tracking-[-0.3px] text-ink truncate">
+              {getHeaderTitle()}
+            </h1>
+            {pageHelpGuide && (
+              <GuideHelpButton slug={pageHelpGuide.slug!} title="How this page works" />
+            )}
+          </div>
 
           {showEnvPill && (
             <>
