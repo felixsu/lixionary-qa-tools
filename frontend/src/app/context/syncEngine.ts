@@ -50,6 +50,26 @@ export interface SyncConflict {
   cloud: { updatedAt: string | null; deviceId: string | null; version: number; deleted: boolean; payload: Record<string, any> };
 }
 
+/** A non-conflict failure during a sync pass (cloud rejected a push, a pull or
+ * mark-synced write failed, etc). Unlike the offline case — where the whole
+ * pass is silently skipped — these mean the backends were reachable but
+ * something genuinely went wrong, so callers can surface them to the user. */
+export interface SyncErrorInfo {
+  entityType: EntityType;
+  op: "push-create" | "push-delete" | "push-update" | "pull" | "mark-synced";
+  localId?: string;
+  message: string;
+}
+
+export interface SyncRunResult {
+  conflicts: SyncConflict[];
+  errors: SyncErrorInfo[];
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 const LOCAL_META_KEYS = ["localId", "cloudId", "version", "baseVersion", "dirty"];
 function stripLocalMeta(record: Record<string, any>): Record<string, any> {
   const out = { ...record };
@@ -82,18 +102,20 @@ function isNameCollision(e: any): boolean {
 export type OutgoingPayloadResolver = (payload: Record<string, any>) => Record<string, any> | null;
 
 /** Reconciles one entity type between the sidecar's local store and the cloud.
- * Returns any conflicts found (dirty locally AND moved on cloud since last sync) —
- * callers decide how to surface them. Never throws: sidecar/cloud unreachability
- * is treated as "offline," the pass is silently skipped and retried next time. */
+ * Returns any conflicts found (dirty locally AND moved on cloud since last sync)
+ * plus any non-conflict errors — callers decide how to surface them. Never
+ * throws: sidecar/cloud unreachability is treated as "offline," the pass is
+ * silently skipped (no errors reported) and retried next time. */
 export async function runSync(
   entityType: EntityType,
   apiCall: ApiCallFn,
   deviceId: string,
   resolveOutgoing?: OutgoingPayloadResolver
-): Promise<SyncConflict[]> {
+): Promise<SyncRunResult> {
   const localPath = `/api/local-store/${entityType}`;
   const cloudPath = CLOUD_PATH[entityType];
   const conflicts: SyncConflict[] = [];
+  const errors: SyncErrorInfo[] = [];
   const deviceHeaders = { "X-Device-Id": deviceId };
 
   let localState: LocalSyncRow[];
@@ -108,7 +130,7 @@ export async function runSync(
       apiCall(cloudPath),
     ]);
   } catch {
-    return conflicts;
+    return { conflicts, errors };
   }
 
   const localFullById = new Map(localFull.map((r) => [r.localId, r]));
@@ -165,6 +187,7 @@ export async function runSync(
           }
         }
         console.warn(`[sync] failed to push new ${entityType}`, local.localId, e);
+        errors.push({ entityType, op: "push-create", localId: local.localId, message: errorMessage(e) });
       }
       continue;
     }
@@ -188,6 +211,7 @@ export async function runSync(
         });
       } catch (e) {
         console.warn(`[sync] failed to push delete for ${entityType}`, local.localId, e);
+        errors.push({ entityType, op: "push-delete", localId: local.localId, message: errorMessage(e) });
       }
       continue;
     }
@@ -225,6 +249,7 @@ export async function runSync(
         });
       } else {
         console.warn(`[sync] failed to push update for ${entityType}`, local.localId, e);
+        errors.push({ entityType, op: "push-update", localId: local.localId, message: errorMessage(e) });
       }
     }
   }
@@ -266,6 +291,7 @@ export async function runSync(
       await apiCall(`${localPath}/pull`, { method: "POST", body: JSON.stringify({ entries: newRecordsToPull }) });
     } catch (e) {
       console.warn(`[sync] failed to pull new ${entityType} records`, e);
+      errors.push({ entityType, op: "pull", message: errorMessage(e) });
     }
   }
   if (pullMarkSynced.length) {
@@ -273,10 +299,11 @@ export async function runSync(
       await apiCall(`${localPath}/mark-synced`, { method: "POST", body: JSON.stringify({ entries: pullMarkSynced }) });
     } catch (e) {
       console.warn(`[sync] failed to mark-synced pulled ${entityType} records`, e);
+      errors.push({ entityType, op: "mark-synced", message: errorMessage(e) });
     }
   }
 
-  return conflicts;
+  return { conflicts, errors };
 }
 
 /** User picked "keep local" on a conflict: force-pushes the local content over
@@ -403,9 +430,10 @@ export async function runAllSync(
   apiCall: ApiCallFn,
   deviceId: string,
   entityTypes: EntityType[] = SYNC_ORDER
-): Promise<SyncConflict[]> {
+): Promise<SyncRunResult> {
   const orderedTypes = SYNC_ORDER.filter((t) => entityTypes.includes(t));
   const allConflicts: SyncConflict[] = [];
+  const allErrors: SyncErrorInfo[] = [];
 
   for (const type of orderedTypes) {
     let resolveOutgoing: OutgoingPayloadResolver | undefined;
@@ -417,7 +445,9 @@ export async function runAllSync(
         : resolveCollectionOutgoing(resolveAuthFunctionId);
     }
 
-    allConflicts.push(...(await runSync(type, apiCall, deviceId, resolveOutgoing)));
+    const result = await runSync(type, apiCall, deviceId, resolveOutgoing);
+    allConflicts.push(...result.conflicts);
+    allErrors.push(...result.errors);
   }
-  return allConflicts;
+  return { conflicts: allConflicts, errors: allErrors };
 }

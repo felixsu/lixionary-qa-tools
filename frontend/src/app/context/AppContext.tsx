@@ -11,7 +11,7 @@ import { generateDuplicateName } from "../utils/uniqueName";
 import { useBackendStatus } from "./BackendStatusContext";
 import { useToast } from "./ToastContext";
 import { isTauri } from "../utils/tauri";
-import { recordNetworkEntry, redactBody } from "../utils/diagnostics";
+import { copyDiagnostics, recordNetworkEntry, redactBody } from "../utils/diagnostics";
 
 const VPS_API_URL = process.env.NEXT_PUBLIC_VPS_API_URL ||
   (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://qa-tools-api.lixionary.com');
@@ -302,7 +302,7 @@ interface AppContextType {
   isOnline: boolean;
   lastSyncAt: string | null;
   syncStatus: "idle" | "syncing" | "error";
-  triggerSync: (entityTypes?: import("./syncEngine").EntityType[]) => Promise<void>;
+  triggerSync: (entityTypes?: import("./syncEngine").EntityType[], opts?: { notify?: boolean }) => Promise<void>;
   userGuides: UserGuideSummary[];
   fetchUserGuides: () => Promise<void>;
   collections: Collection[];
@@ -550,7 +550,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { localDb } = useBackendStatus();
+  const { tauri, sidecar, localDb } = useBackendStatus();
   const { showToast } = useToast();
 
   // Authentication State
@@ -607,6 +607,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [flows, setFlows] = useState<Flow[]>([]);
   const [selectedCollectionId, setSelectedCollectionId] = useState<string>("");
   const [selectedRequestId, setSelectedRequestId] = useState<string>("");
+  // Mirror of the committed selection for async callbacks that run inside
+  // stale closures — the background-sync effects (focus listener, 5-minute
+  // interval) capture triggerSync/fetchCollections from an old render where
+  // selectedCollectionId was still "", which made every background sync
+  // re-trigger the first-load auto-select and yank the user back to the first
+  // request of the first collection.
+  const selectedCollectionIdRef = useRef(selectedCollectionId);
+  selectedCollectionIdRef.current = selectedCollectionId;
 
   // API Explorer Active Request Editor State
   const [reqName, setReqName] = useState("New Request");
@@ -800,6 +808,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       triggerSync();
     }
   }, [localDb?.status, token, user]);
+
+  // Toast once when the desktop backend flips into a hard failure (Tauri IPC
+  // dead, sidecar process gone, local DB broken) so the user has something to
+  // report instead of just a quiet status pill. Only on the transition into
+  // "error" — "degraded" is the normal first-launch boot state, and vps
+  // unreachability is already covered by the offline pill.
+  const prevBackendBrokenRef = useRef(false);
+  useEffect(() => {
+    const brokenDetail =
+      tauri?.status === "error" ? tauri.detail :
+      sidecar?.status === "error" ? sidecar.detail :
+      localDb?.status === "error" ? localDb.detail : null;
+    if (brokenDetail && !prevBackendBrokenRef.current) {
+      showBackendErrorToast(`Desktop backend problem: ${brokenDetail}`);
+    }
+    prevBackendBrokenRef.current = !!brokenDetail;
+  }, [tauri?.status, sidecar?.status, localDb?.status]);
 
   // Ref to suppress the auth-persist write on the render right after a selection
   // change (when reqAuthType/reqAuthConfig haven't synced to the new request yet).
@@ -1059,7 +1084,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // since last sync) accumulate in syncConflicts for the SyncConflictModal to
   // resolve — resolved elsewhere or no longer applicable, they're replaced with
   // whatever this pass finds for the same entity types, never silently dropped.
-  const triggerSync = (entityTypes: import("./syncEngine").EntityType[] = ["environment", "auth_function", "browser_profile", "collection", "flow"]): Promise<void> => {
+  // Error toast with the same "Copy diagnostics" affordance as the global
+  // unhandled-error handler, so backend/sync failures give the user something
+  // concrete to paste into a bug report.
+  const showBackendErrorToast = (message: string, details?: unknown) => {
+    showToast(message, {
+      type: "error",
+      action: {
+        label: "Copy diagnostics",
+        onClick: async () => {
+          const err = Object.assign(new Error(message), { details });
+          const copied = await copyDiagnostics(err);
+          showToast(copied ? "Diagnostics copied" : "Diagnostics downloaded", { type: "success" });
+        },
+      },
+    });
+  };
+  // Dedupes background-sync error toasts: the same failing summary is toasted
+  // once, then suppressed until a clean pass resets it (or the user syncs
+  // manually with notify). Without this, the 5-minute interval would stack an
+  // identical toast every pass while e.g. one push keeps 500ing.
+  const lastSyncErrorToastRef = useRef<string | null>(null);
+
+  const triggerSync = (entityTypes: import("./syncEngine").EntityType[] = ["environment", "auth_function", "browser_profile", "collection", "flow"], opts?: { notify?: boolean }): Promise<void> => {
     // A sync is already running — await that same pass instead of resolving
     // immediately with nothing, so callers that need the result (e.g. a
     // pre-launch resolution retry) don't race it and see stale data.
@@ -1073,8 +1120,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const { deviceId } = await apiCall("/api/local-store/device-id");
           deviceIdRef.current = deviceId;
         }
-        const conflicts = await runAllSync(apiCall, deviceIdRef.current!, entityTypes);
+        const { conflicts, errors } = await runAllSync(apiCall, deviceIdRef.current!, entityTypes);
         setSyncConflicts((prev) => [...prev.filter((c) => !entityTypes.includes(c.entityType)), ...conflicts]);
+        if (errors.length) {
+          const summary = `Sync finished with ${errors.length} error${errors.length === 1 ? "" : "s"}: ${errors[0].message}${errors.length > 1 ? " (+ more)" : ""}`;
+          if (opts?.notify || summary !== lastSyncErrorToastRef.current) {
+            lastSyncErrorToastRef.current = summary;
+            showBackendErrorToast(summary, errors);
+          }
+        } else {
+          lastSyncErrorToastRef.current = null;
+        }
         // Refetch whichever local state changed so the UI reflects synced content
         // (new cloudIds, pulled remote edits, FK-remapped references, etc).
         if (entityTypes.includes("environment")) fetchEnvironments();
@@ -1094,9 +1150,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         } catch {
           setIsOnline(false);
         }
-        setSyncStatus("idle");
+        setSyncStatus(errors.length ? "error" : "idle");
       } catch (e) {
+        // Reaching here means even the sidecar's device-id lookup failed (the
+        // sidecar is down/booting). Keep background passes to the status pill
+        // — offline laptops shouldn't toast every 5 minutes — but a manually
+        // requested sync should say why it failed.
         console.warn("[sync] sync pass failed", e);
+        if (opts?.notify) {
+          showBackendErrorToast(`Sync failed: ${e instanceof Error ? e.message : String(e)}`, e);
+        }
         setSyncStatus("error");
       } finally {
         syncInFlightPromiseRef.current = null;
@@ -1240,7 +1303,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         children: r.children || [],
       }));
       setCollections(mapped);
-      if (mapped.length && !selectedCollectionId) {
+      // Read the selection through its ref, not the closed-over state: this
+      // function is often called from stale closures (background sync), and
+      // the closed-over "" would re-run this first-load auto-select on every
+      // sync, resetting whatever the user had selected.
+      if (mapped.length && !selectedCollectionIdRef.current) {
         setSelectedCollectionId(mapped[0].id);
         if (mapped[0].requests.length) {
           setSelectedRequestId(mapped[0].requests[0].id);

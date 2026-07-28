@@ -725,19 +725,41 @@ export default function ApiExplorerPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // Persist the selected request in the URL so it survives a refresh.
+  // Persist the selected request in the URL so it survives a refresh. Held
+  // off until the deep-link effect below has consumed the URL: the auto-select
+  // that fires when collections first load would otherwise queue a
+  // router.replace that lands *after* the deep link corrects the selection,
+  // leaving the URL pointing at the auto-selected request instead.
+  const deepLinkDoneRef = useRef(false);
   useEffect(() => {
-    if (!selectedRequestId) return;
+    if (!selectedRequestId || !deepLinkDoneRef.current) return;
     const params = new URLSearchParams(searchParams.toString());
     if (params.get("request") === selectedRequestId) return;
     params.set("request", selectedRequestId);
     router.replace(`${pathname}?${params.toString()}`, { scroll: false });
   }, [selectedRequestId]);
 
-  // Deep-link: once collections load, select the request named in the URL (if any).
+  // Deep-link: once collections load, select the request named in the URL (if
+  // any). One-shot: after the first pass the URL is a write-through mirror of
+  // the selection (effect above), so re-applying it on every `collections`
+  // identity change (each background sync produces one) could yank a fresh
+  // user selection back to a momentarily-stale URL param. Reads
+  // window.location directly instead of useSearchParams: the hook's value can
+  // lag the real URL during hydration.
   useEffect(() => {
-    const requestParam = searchParams.get("request");
-    if (!requestParam || requestParam === selectedRequestId) return;
+    if (deepLinkDoneRef.current || collections.length === 0) return;
+    deepLinkDoneRef.current = true;
+    const requestParam = new URLSearchParams(window.location.search).get("request");
+    if (!requestParam || requestParam === selectedRequestId) {
+      // No deep link to apply — backfill the URL with whatever got
+      // auto-selected, since the write-back effect above was locked until now.
+      if (selectedRequestId && requestParam !== selectedRequestId) {
+        const params = new URLSearchParams(window.location.search);
+        params.set("request", selectedRequestId);
+        router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+      }
+      return;
+    }
     const owner = findRequestOwnerCollection(collections, requestParam);
     if (owner) {
       setSelectedCollectionId(owner.id);
