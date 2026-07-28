@@ -265,6 +265,22 @@ async def resolve_frame_by_chain(page: Page, frame_chain: List[str]):
             continue
     return None
 
+async def get_live_viewport(session, active_page: Page) -> dict:
+    """Current page size in CSS px, for scaling normalized mouse coords.
+
+    Screencast frame metadata is authoritative (it tracks window resizes in
+    headed no_viewport mode); page.evaluate bridges the gap right after
+    connect/tab-switch before the first frame lands; viewport_size is the
+    headless last resort (it is None under no_viewport).
+    """
+    vp = session.get("live_viewport")
+    if vp:
+        return vp
+    try:
+        return await active_page.evaluate("({width: window.innerWidth, height: window.innerHeight})")
+    except Exception:
+        return active_page.viewport_size or {"width": 1280, "height": 720}
+
 # Local browser session WebSocket router
 @app.websocket("/api/browser/ws/browser-session/{session_id}")
 async def local_browser_websocket(websocket: WebSocket, session_id: str):
@@ -308,22 +324,31 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
         viewport_height = int(init_cmd.get("viewportHeight") or 720)
 
         # Launch local Chromium browser with remote debugging port enabled.
-        # --start-maximized only applies to a visible OS window, so it's
-        # skipped entirely in headless mode.
+        # In headed mode the OS window is sized to the profile's resolution
+        # (--window-size only applies to a visible window, so it's skipped
+        # entirely in headless mode).
         launch_args = [f"--remote-debugging-port={CDP_PORT}"]
         if not headless:
-            launch_args.append("--start-maximized")
+            launch_args.append(f"--window-size={viewport_width},{viewport_height}")
         playwright_mgr = await async_playwright().start()
         browser = await playwright_mgr.chromium.launch(
             headless=headless,
             args=launch_args
         )
 
-        # Define context with the profile's viewport and auto-granted permissions to avoid prompt overlays
-        context = await browser.new_context(
-            viewport={"width": viewport_width, "height": viewport_height},
-            permissions=["geolocation", "notifications", "camera", "microphone", "clipboard-read", "clipboard-write"]
-        )
+        # Auto-granted permissions avoid prompt overlays. Headed mode uses
+        # no_viewport so the page tracks the real OS window (including manual
+        # resizes) instead of being letterboxed inside an emulated viewport;
+        # headless has no OS window, so the profile resolution is applied as
+        # an emulated viewport there.
+        context_kwargs = {
+            "permissions": ["geolocation", "notifications", "camera", "microphone", "clipboard-read", "clipboard-write"]
+        }
+        if headless:
+            context_kwargs["viewport"] = {"width": viewport_width, "height": viewport_height}
+        else:
+            context_kwargs["no_viewport"] = True
+        context = await browser.new_context(**context_kwargs)
 
         if cookies:
             try:
@@ -540,6 +565,7 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
             session["active_page_index"] = new_active
             if was_active:
                 session["last_clicked_frame"] = None
+                session["live_viewport"] = None
                 new_page = session["pages"][new_active]
                 try:
                     await start_screencast(new_page)
@@ -582,6 +608,38 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
         except Exception as e:
             print(f"Initial navigation failed: {e}")
 
+        # --window-size sets the *outer* window (including tab strip and
+        # address bar chrome), but the profile resolution should describe the
+        # page content area. Measure the actual inner size and grow the
+        # window by the chrome delta so the viewport matches the profile
+        # exactly. Best effort — a failure just leaves the outer size.
+        if not headless:
+            try:
+                inner = await page.evaluate("({width: window.innerWidth, height: window.innerHeight})")
+                delta_w = viewport_width - int(inner["width"])
+                delta_h = viewport_height - int(inner["height"])
+                if delta_w or delta_h:
+                    bounds_cdp = await context.new_cdp_session(page)
+                    try:
+                        info = await bounds_cdp.send("Browser.getWindowForTarget")
+                        window_id = info.get("windowId")
+                        bounds = info.get("bounds") or {}
+                        if window_id is not None and bounds.get("width") and bounds.get("height"):
+                            await bounds_cdp.send("Browser.setWindowBounds", {
+                                "windowId": window_id,
+                                "bounds": {
+                                    "width": int(bounds["width"]) + delta_w,
+                                    "height": int(bounds["height"]) + delta_h
+                                }
+                            })
+                    finally:
+                        try:
+                            await bounds_cdp.detach()
+                        except Exception:
+                            pass
+            except Exception as e:
+                print(f"Viewport size correction failed: {e}")
+
         # Setup active session dict
         _active_sessions[session_id] = {
             "session_id": session_id,
@@ -596,6 +654,10 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
             "recorded_steps": [],
             "last_clicked_frame": None,
             "anchor_frame": None,
+            # Live page size in CSS px, refreshed from screencast frame
+            # metadata — the mouse handlers scale normalized coords with it
+            # so clicks stay accurate after the user resizes the real window.
+            "live_viewport": None,
             "callback": send_to_client
         }
 
@@ -622,6 +684,11 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
             screencast_ref["cdp"] = new_cdp
 
             async def on_screencast_frame(event):
+                meta = event.get("metadata") or {}
+                if meta.get("deviceWidth") and meta.get("deviceHeight"):
+                    sess = _active_sessions.get(session_id)
+                    if sess is not None:
+                        sess["live_viewport"] = {"width": meta["deviceWidth"], "height": meta["deviceHeight"]}
                 await send_to_client({
                     "type": "screencast_frame",
                     "data": {
@@ -642,13 +709,21 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
 
         # Tell client we are connected, including the effective viewport so
         # the frontend doesn't rely on its own possibly-stale copy of the
-        # profile's resolution for click-coordinate scaling.
+        # profile's resolution for click-coordinate scaling. In headed mode
+        # the real viewport can differ from the requested one (window chrome,
+        # OS constraints), so measure it rather than echoing the profile.
+        status_viewport = {"width": viewport_width, "height": viewport_height}
+        if not headless:
+            try:
+                status_viewport = await page.evaluate("({width: window.innerWidth, height: window.innerHeight})")
+            except Exception:
+                pass
         await send_to_client({
             "type": "status",
             "data": {
                 "connected": True,
                 "url": page.url,
-                "viewport": {"width": viewport_width, "height": viewport_height}
+                "viewport": status_viewport
             }
         })
 
@@ -949,6 +1024,9 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                 if 0 <= idx < len(session["pages"]) and idx != session["active_page_index"]:
                     session["active_page_index"] = idx
                     session["last_clicked_frame"] = None
+                    # Drop the cached size until the new tab's first frame
+                    # lands — get_live_viewport falls back to measuring.
+                    session["live_viewport"] = None
                     new_active = session["pages"][idx]
                     try:
                         await new_active.bring_to_front()
@@ -975,24 +1053,24 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
             elif action == "mouse_click":
                 x = cmd.get("x", 0.5)
                 y = cmd.get("y", 0.5)
-                viewport = active_page.viewport_size or {"width": 1280, "height": 720}
+                viewport = await get_live_viewport(session, active_page)
                 await active_page.mouse.click(x * viewport["width"], y * viewport["height"])
             elif action == "mouse_down":
                 x = cmd.get("x", 0.5)
                 y = cmd.get("y", 0.5)
-                viewport = active_page.viewport_size or {"width": 1280, "height": 720}
+                viewport = await get_live_viewport(session, active_page)
                 await active_page.mouse.move(x * viewport["width"], y * viewport["height"])
                 await active_page.mouse.down(button=cmd.get("button", "left"))
             elif action == "mouse_up":
                 x = cmd.get("x", 0.5)
                 y = cmd.get("y", 0.5)
-                viewport = active_page.viewport_size or {"width": 1280, "height": 720}
+                viewport = await get_live_viewport(session, active_page)
                 await active_page.mouse.move(x * viewport["width"], y * viewport["height"])
                 await active_page.mouse.up(button=cmd.get("button", "left"))
             elif action == "mouse_move":
                 x = cmd.get("x", 0.5)
                 y = cmd.get("y", 0.5)
-                viewport = active_page.viewport_size or {"width": 1280, "height": 720}
+                viewport = await get_live_viewport(session, active_page)
                 await active_page.mouse.move(x * viewport["width"], y * viewport["height"])
             elif action == "mouse_wheel":
                 delta_x = cmd.get("deltaX", 0)

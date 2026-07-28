@@ -41,7 +41,6 @@ export default function WebExplorerPage() {
     isBrowserConnected,
     viewportSize,
     inspectMode,
-    vncUrl,
     sessionId,
     sendBrowserMouseEvent,
     sendBrowserWheelEvent,
@@ -138,21 +137,6 @@ export default function WebExplorerPage() {
     handleCloseTab,
   } = useAppContext();
   const latestFrame = useScreencastFrame();
-
-  // While verifying an inspected element (or running an autonomous Explore
-  // session), the noVNC view must be watch-only — the automation is really
-  // driving the tab, so the user shouldn't be able to fight it for control.
-  // Changing the iframe src forces noVNC to reconnect (brief flicker), which
-  // is an accepted tradeoff over patching the VNC container's static assets
-  // for a runtime toggle.
-  //
-  // IMPORTANT: always pass view_only explicitly (0 or 1), never omit it.
-  // noVNC's own webutil.js falls back to (and re-persists into) localStorage
-  // for this origin whenever the URL doesn't specify it — so omitting the
-  // param once we're done verifying/exploring doesn't "unset" it, it silently
-  // inherits whatever was last stored, permanently wedging every future
-  // session read-only until that stale localStorage entry is overwritten.
-  const effectiveVncUrl = vncUrl ? `${vncUrl}&view_only=${(isVerifying || isExploring) ? 1 : 0}` : vncUrl;
 
   const previewContainerRef = useRef<HTMLDivElement>(null);
 
@@ -1967,7 +1951,7 @@ export default function WebExplorerPage() {
               {isStartingSession ? (
                 <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Starting…</>
               ) : (
-                <><Play className="h-3.5 w-3.5" /> New session</>
+                <><Play className="h-3.5 w-3.5" /> New Session</>
               )}
             </button>
           </>
@@ -2061,7 +2045,7 @@ export default function WebExplorerPage() {
                       </div>
                     ) : (
                       <div className="flex h-full w-full items-center justify-center text-cream/40 text-xs">
-                        Select a profile and click Connect browser to start a session.
+                        Select a profile and click New Session to start a session.
                       </div>
                     )}
                     {(isDraggingSplit || isDraggingSidebar) && (
@@ -2136,7 +2120,7 @@ export default function WebExplorerPage() {
                         </div>
                       ) : (
                         <div className="flex h-full w-full items-center justify-center text-cream/40 text-xs">
-                          Select a profile and click Connect browser to start a session.
+                          Select a profile and click New Session to start a session.
                         </div>
                       )}
                       {(isDraggingSplit || isDraggingSidebar) && (
@@ -2696,7 +2680,7 @@ export default function WebExplorerPage() {
           <Globe className="h-12 w-12 text-mute" />
           <div className="text-lg font-medium text-graphite">Browser session inactive</div>
           <div className="text-[13px] text-mute text-center max-w-[360px] leading-relaxed">
-            Select a browser profile and click Connect VNC browser to start a live session. You can then
+            Select a browser profile and click New Session to start a live session. You can then
             inspect elements and record Page Object Models.
           </div>
           <button
@@ -2707,7 +2691,7 @@ export default function WebExplorerPage() {
             {isStartingSession ? (
               <><Loader2 className="h-4 w-4 animate-spin" /> Starting…</>
             ) : (
-              <><Play className="h-4 w-4" /> Connect VNC browser</>
+              <><Play className="h-4 w-4" /> New Session</>
             )}
           </button>
         </div>
