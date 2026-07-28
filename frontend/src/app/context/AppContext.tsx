@@ -1619,9 +1619,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             setViewportSize({ width: msg.data.viewport.width, height: msg.data.viewport.height });
           }
           break;
-        case "screencast_frame":
+        case "screencast_frame": {
           setScreencastFrame(msg.data.image);
+          // Frame metadata carries the live page size (CSS px), which tracks
+          // manual window resizes — keep viewportSize in sync so the preview's
+          // click-coordinate letterbox math matches what's actually rendered.
+          // The functional bailout avoids a context re-render per frame.
+          const meta = msg.data.metadata;
+          if (meta?.deviceWidth && meta?.deviceHeight) {
+            setViewportSize((prev) =>
+              prev.width === meta.deviceWidth && prev.height === meta.deviceHeight
+                ? prev
+                : { width: meta.deviceWidth, height: meta.deviceHeight }
+            );
+          }
           break;
+        }
         case "navigation":
           const navUrl = msg.data?.url || msg.url;
           setBrowserUrl(navUrl);
