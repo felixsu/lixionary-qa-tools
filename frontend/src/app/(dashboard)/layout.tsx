@@ -338,7 +338,7 @@ export default function DashboardLayout({
 
           {/* Sync status */}
           <button
-            onClick={() => triggerSync()}
+            onClick={() => triggerSync(undefined, { notify: true })}
             disabled={syncStatus === "syncing"}
             title={
               collapsed
