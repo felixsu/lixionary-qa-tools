@@ -191,14 +191,15 @@ User draft description:
 class VerifyKeyPayload(BaseModel):
     provider: str
     key: str
+    model: Optional[str] = None
 
 
 @router.post("/verify-key")
 async def verify_key(payload: VerifyKeyPayload):
-    """Makes a minimal round trip against the given provider/key pair."""
+    """Makes a minimal round trip against the given provider/key/model."""
     try:
         ok, message = await asyncio.wait_for(
-            asyncio.to_thread(llm_provider.verify_key_sync, payload.provider, payload.key),
+            asyncio.to_thread(llm_provider.verify_key_sync, payload.provider, payload.key, payload.model),
             timeout=30,
         )
     except asyncio.TimeoutError:
