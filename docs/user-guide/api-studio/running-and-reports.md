@@ -3,10 +3,11 @@
 ## **Running a Flow**
 
 * Click **Run** in the toolbar. It's disabled while the flow is empty or has a validation error (the error shows in the toolbar banner; clicking anyway toasts *Cannot run: …*).
-* Nodes execute **strictly sequentially in topological order** — one at a time, even on independent branches. Looper iterations and Verifier attempts are sequential too.
-* Live status badges appear on each node: `queued`, `running…`, `success`, `failed`, `skipped`.
-* **First failure stops the run**: the failing node turns red and **every node remaining in the run order is marked `skipped`** — including nodes on unrelated parallel branches.
-* While running, **Run** is replaced by a red **Stop** button. Stopping aborts the in-flight request; the interrupted node is marked `failed` with error *Run cancelled* and the rest are skipped.
+* **Branches run in parallel.** Every node with no incoming connection starts immediately (multiple start nodes are fine), and every outgoing connection fires — a node with several outgoing connections fans its successors out concurrently. Looper iterations and Verifier attempts remain sequential *within* their node.
+* **Merging is implicit**: a node with two or more incoming connections waits until **all** of its predecessors have succeeded before it runs. Nodes running in parallel never depend on each other — connections are the only dependencies.
+* Live status badges appear on each node: `queued`, `running…`, `success`, `failed`, `skipped` — several nodes can show `running…` at once.
+* **A failure only skips its own downstream**: the failing node turns red and every node reachable from it — including any merge waiting on it — is marked `skipped` with the reason *Skipped: upstream "X" failed*. Independent branches keep running to completion; the run is reported as failed if any node failed.
+* While running, **Run** is replaced by a red **Stop** button. Stopping aborts **all** in-flight nodes — each is marked `failed` with error *Run cancelled* — and everything not yet started is skipped.
 * Completion toasts: *Run finished — N steps in M ms*, *Run cancelled*, or *Run failed — see node statuses*.
 
 > **Note**: Run executes the **live canvas state**, including unsaved edits. Pressing Run also clears the previous run's results immediately.
@@ -30,7 +31,7 @@ Request **test scripts** do run during flows, but their results appear only in t
 
 ## **CSV Report**
 
-Click **Report** (enabled once a run has records) to download `<flowName>-run-<timestamp>.csv` — one row per record, including every Looper iteration, every Verifier attempt, and skipped nodes. Columns:
+Click **Report** (enabled once a run has records) to download `<flowName>-run-<timestamp>.csv` — one row per record, including every Looper iteration, every Verifier attempt, and skipped nodes. Rows are ordered by `started_at`, so parallel branches interleave chronologically. Columns:
 
 | Column | Contents |
 | :---- | :---- |

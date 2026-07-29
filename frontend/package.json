@@ -12,6 +12,7 @@
     "build:desktop:dev": "dotenv -e .env.devflavor -- next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "vitest run",
     "tauri": "tauri",
     "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build:dev": "tauri build --config src-tauri/tauri.dev.conf.json"
@@ -42,6 +43,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.10"
   }
 }

@@ -1,7 +1,11 @@
-// API Studio client-side flow orchestrator: walks the graph in topological
-// order, executes request/looper/delay/verifier nodes against the local
-// sidecar's POST /api/executor/run endpoint, and feeds each node's outputs
-// into downstream input mappings.
+// API Studio client-side flow orchestrator: schedules the graph as a parallel
+// wavefront — every root (in-degree 0) node starts immediately, all outgoing
+// edges fan out concurrently, and a node with multiple incoming edges waits
+// until every predecessor has succeeded (implicit merge). Nodes execute
+// request/looper/delay/verifier work against the local sidecar's
+// POST /api/executor/run endpoint and feed their outputs into downstream
+// input mappings. A failure skips only the failed node's descendants;
+// independent branches run to completion.
 
 import type { Collection, RequestItem, InputBinding } from "../context/AppContext";
 import { findRequestInTree } from "../context/AppContext";
@@ -60,8 +64,8 @@ export interface RunHandle {
   done: Promise<FlowRunSummary>;
 }
 
-// Kahn's algorithm. Nodes with no incoming edges run first; edges only
-// define ordering (fan-in/fan-out allowed).
+// Kahn's algorithm. Used for cycle detection (validation and the pre-run
+// check); execution itself is scheduled by the wavefront runner in runFlow.
 export function topoSort(nodes: FlowNode[], edges: FlowEdge[]): { order: string[] } | { cycle: string[] } {
   const inDegree = new Map<string, number>(nodes.map((n) => [n.id, 0]));
   const adjacency = new Map<string, string[]>(nodes.map((n) => [n.id, []]));
@@ -409,9 +413,139 @@ const evaluateComparison = (
   return { pass, actual, detail };
 };
 
+// Execute one node to completion. Per-iteration looper records, per-attempt
+// verifier records, and the node's terminal status are emitted here. Returns
+// whether the node succeeded and the outputs object to publish under the
+// node's name (null = nothing to publish). Throws FlowCancelledError when the
+// run is cancelled mid-node.
+const executeNode = async (
+  node: FlowNode,
+  ctx: RunContext,
+  deps: FlowRunDeps,
+  state: RunState,
+  emit: (record: RunRecord) => void,
+  onNodeStatus: FlowRunCallbacks["onNodeStatus"]
+): Promise<{ ok: boolean; publish: Record<string, any> | null }> => {
+  const nodeStartedAt = new Date().toISOString();
+  const nodeStart = Date.now();
+
+  if (node.type === "delay") {
+    const cfg = node.config as DelayNodeConfig;
+    await cancellableDelay(Math.max(0, cfg.ms || 0), state);
+    onNodeStatus(node.id, "success");
+    emit(makeRecord(node, null, "success", nodeStartedAt, Date.now() - nodeStart));
+    return { ok: true, publish: null };
+  }
+
+  if (node.type === "request") {
+    const cfg = node.config as RequestNodeConfig;
+    const exec = await executeRequestConfig(cfg, ctx, deps, state);
+    const status = exec.ok ? "success" : "failed";
+    onNodeStatus(node.id, status);
+    emit(makeRecord(node, exec, status, nodeStartedAt, Date.now() - nodeStart));
+    return { ok: exec.ok, publish: exec.ok ? exec.outputs : null };
+  }
+
+  if (node.type === "looper") {
+    const cfg = node.config as LooperNodeConfig;
+    let items: any[];
+    try {
+      if (cfg.itemsSource === "reference") {
+        const { found, value } = resolveReference(cfg.itemsValue, ctx);
+        if (!found) throw new Error(`Items reference "${cfg.itemsValue}" not found`);
+        const resolved = typeof value === "string" ? JSON.parse(value) : value;
+        if (!Array.isArray(resolved)) throw new Error(`Items reference "${cfg.itemsValue}" is not an array`);
+        items = resolved;
+      } else {
+        const parsed = JSON.parse(cfg.itemsValue || "[]");
+        if (!Array.isArray(parsed)) throw new Error("Static items must be a JSON array");
+        items = parsed;
+      }
+    } catch (e: any) {
+      onNodeStatus(node.id, "failed");
+      emit(makeRecord(node, null, "failed", nodeStartedAt, Date.now() - nodeStart, { error: e.message }));
+      return { ok: false, publish: null };
+    }
+
+    const results: Record<string, any>[] = [];
+    for (let iter = 0; iter < items.length; iter++) {
+      const iterStartedAt = new Date().toISOString();
+      const iterStart = Date.now();
+      const exec = await executeRequestConfig(cfg.request, ctx, deps, state, items[iter]);
+      const status = exec.ok ? "success" : "failed";
+      emit(makeRecord(node, exec, status, iterStartedAt, Date.now() - iterStart, { iteration: iter }));
+      if (!exec.ok) {
+        onNodeStatus(node.id, "failed");
+        return { ok: false, publish: null };
+      }
+      results.push(exec.outputs);
+    }
+    onNodeStatus(node.id, "success");
+    return { ok: true, publish: { results, count: results.length } };
+  }
+
+  if (node.type === "verifier") {
+    const cfg = node.config as VerifierNodeConfig;
+    const maxAttempts = Math.max(1, cfg.maxAttempts || 1);
+    let lastExec: ExecutionResult | null = null;
+    let passed = false;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const attemptStartedAt = new Date().toISOString();
+      const attemptStart = Date.now();
+      const exec = await executeRequestConfig(cfg.request, ctx, deps, state);
+      lastExec = exec;
+
+      let attemptError = exec.error;
+      let attemptPassed = false;
+      // Comparisons run even when the request "failed" (e.g. asserting
+      // on an expected error status) as long as we got a response.
+      if (exec.response) {
+        const evaluations = (cfg.comparisons || []).map((c) => evaluateComparison(c, exec, ctx));
+        attemptPassed = evaluations.length > 0 && evaluations.every((e) => e.pass);
+        const detail = evaluations.map((e) => e.detail).join("; ");
+        if (!attemptPassed) {
+          attemptError = (cfg.comparisons || []).length
+            ? `Verification failed: ${detail}`
+            : "Verifier has no comparisons configured";
+        } else {
+          attemptError = undefined;
+        }
+      }
+
+      emit(
+        makeRecord(node, { ...exec, error: attemptError }, attemptPassed ? "success" : "failed", attemptStartedAt, Date.now() - attemptStart, {
+          attempt,
+        })
+      );
+
+      if (attemptPassed) {
+        passed = true;
+        break;
+      }
+      if (attempt < maxAttempts) {
+        await cancellableDelay(Math.max(0, cfg.intervalMs || 0), state);
+      }
+    }
+
+    if (!passed) {
+      onNodeStatus(node.id, "failed");
+      return { ok: false, publish: null };
+    }
+    onNodeStatus(node.id, "success");
+    return { ok: true, publish: { ...(lastExec?.outputs || {}), passed: true } };
+  }
+
+  // Exhaustiveness guard — a new FlowNodeType must be handled above.
+  const exhaustive: never = node.type;
+  throw new Error(`Unknown node type: ${exhaustive}`);
+};
+
 export function runFlow(flow: Flow, deps: FlowRunDeps, cb: FlowRunCallbacks): RunHandle {
   const state: RunState = { cancelled: false, abort: new AbortController(), wakers: new Set() };
 
+  // Aborts every in-flight fetch (shared AbortController) and wakes every
+  // pending delay/verifier-interval sleep (shared wakers set) — all branches.
   const cancel = () => {
     if (state.cancelled) return;
     state.cancelled = true;
@@ -423,6 +557,8 @@ export function runFlow(flow: Flow, deps: FlowRunDeps, cb: FlowRunCallbacks): Ru
     const startedAt = new Date().toISOString();
     const runStart = Date.now();
     const records: RunRecord[] = [];
+    // Single-threaded push keeps records in emission order; parallel branches
+    // interleave chronologically while per-node order stays sequential.
     const emit = (record: RunRecord) => {
       records.push(record);
       cb.onRecord(record);
@@ -432,174 +568,114 @@ export function runFlow(flow: Flow, deps: FlowRunDeps, cb: FlowRunCallbacks): Ru
     if ("cycle" in sorted) {
       throw new Error(`Flow contains a cycle involving: ${sorted.cycle.join(", ")}`);
     }
+
     const nodeById = new Map(flow.nodes.map((n) => [n.id, n]));
-    const order = sorted.order.map((id) => nodeById.get(id)!);
 
-    for (const node of order) cb.onNodeStatus(node.id, "pending");
+    // Adjacency + runtime in-degree (dangling edges skipped, as in topoSort).
+    const succ = new Map<string, string[]>(flow.nodes.map((n) => [n.id, []]));
+    const remaining = new Map<string, number>(flow.nodes.map((n) => [n.id, 0]));
+    for (const e of flow.edges) {
+      if (!succ.has(e.source) || !succ.has(e.target)) continue;
+      remaining.set(e.target, (remaining.get(e.target) || 0) + 1);
+      succ.get(e.source)!.push(e.target);
+    }
 
+    for (const node of flow.nodes) cb.onNodeStatus(node.id, "pending");
+
+    // Each node writes exactly one unique ctx key (names are validated
+    // unique) and only reads keys of its edge-ancestors, which are always
+    // written before it launches — concurrent branches can't conflict.
     const ctx: RunContext = {};
+    const terminal = new Set<string>(); // nodes with a final status
     let failed = false;
-    let cancelled = false;
+    let active = 0;
+    let resolveAll: () => void = () => {};
+    const allSettled = new Promise<void>((resolve) => {
+      resolveAll = resolve;
+    });
 
-    const skipRemaining = (fromIndex: number) => {
-      for (let i = fromIndex; i < order.length; i++) {
-        const node = order[i];
-        cb.onNodeStatus(node.id, "skipped");
-        emit(makeRecord(node, null, "skipped", new Date().toISOString(), 0));
+    const skipNode = (node: FlowNode, reason: string) => {
+      terminal.add(node.id);
+      cb.onNodeStatus(node.id, "skipped");
+      emit(makeRecord(node, null, "skipped", new Date().toISOString(), 0, { error: reason }));
+    };
+
+    // Mark every descendant of fromId skipped (exclusive). Descendants of a
+    // failed node can never already be running — they transitively required
+    // it — so this only touches nodes that haven't started. The terminal
+    // guard gives shared descendants exactly one skip record even when
+    // multiple upstream branches fail.
+    const skipDescendants = (fromId: string, reasonName: string) => {
+      const reason = `Skipped: upstream "${reasonName}" ${state.cancelled ? "was cancelled" : "failed"}`;
+      const stack = [...(succ.get(fromId) || [])];
+      while (stack.length) {
+        const id = stack.pop()!;
+        if (terminal.has(id)) continue;
+        skipNode(nodeById.get(id)!, reason);
+        stack.push(...(succ.get(id) || []));
       }
     };
 
-    for (let i = 0; i < order.length; i++) {
-      const node = order[i];
+    const runOne = async (node: FlowNode) => {
       cb.onNodeStatus(node.id, "running");
       const nodeStartedAt = new Date().toISOString();
       const nodeStart = Date.now();
-
       try {
-        if (node.type === "delay") {
-          const cfg = node.config as DelayNodeConfig;
-          await cancellableDelay(Math.max(0, cfg.ms || 0), state);
-          cb.onNodeStatus(node.id, "success");
-          emit(makeRecord(node, null, "success", nodeStartedAt, Date.now() - nodeStart));
-          continue;
+        const { ok, publish } = await executeNode(node, ctx, deps, state, emit, cb.onNodeStatus);
+        terminal.add(node.id);
+        if (!ok) {
+          failed = true;
+          skipDescendants(node.id, node.name);
+          return;
         }
-
-        if (node.type === "request") {
-          const cfg = node.config as RequestNodeConfig;
-          const exec = await executeRequestConfig(cfg, ctx, deps, state);
-          const status = exec.ok ? "success" : "failed";
-          cb.onNodeStatus(node.id, status);
-          emit(makeRecord(node, exec, status, nodeStartedAt, Date.now() - nodeStart));
-          if (!exec.ok) {
-            failed = true;
-            skipRemaining(i + 1);
-            break;
-          }
-          ctx[node.name] = exec.outputs;
-          continue;
-        }
-
-        if (node.type === "looper") {
-          const cfg = node.config as LooperNodeConfig;
-          let items: any[];
-          try {
-            if (cfg.itemsSource === "reference") {
-              const { found, value } = resolveReference(cfg.itemsValue, ctx);
-              if (!found) throw new Error(`Items reference "${cfg.itemsValue}" not found`);
-              const resolved = typeof value === "string" ? JSON.parse(value) : value;
-              if (!Array.isArray(resolved)) throw new Error(`Items reference "${cfg.itemsValue}" is not an array`);
-              items = resolved;
-            } else {
-              const parsed = JSON.parse(cfg.itemsValue || "[]");
-              if (!Array.isArray(parsed)) throw new Error("Static items must be a JSON array");
-              items = parsed;
-            }
-          } catch (e: any) {
-            cb.onNodeStatus(node.id, "failed");
-            emit(makeRecord(node, null, "failed", nodeStartedAt, Date.now() - nodeStart, { error: e.message }));
-            failed = true;
-            skipRemaining(i + 1);
-            break;
-          }
-
-          const results: Record<string, any>[] = [];
-          let looperFailed = false;
-          for (let iter = 0; iter < items.length; iter++) {
-            const iterStartedAt = new Date().toISOString();
-            const iterStart = Date.now();
-            const exec = await executeRequestConfig(cfg.request, ctx, deps, state, items[iter]);
-            const status = exec.ok ? "success" : "failed";
-            emit(makeRecord(node, exec, status, iterStartedAt, Date.now() - iterStart, { iteration: iter }));
-            if (!exec.ok) {
-              looperFailed = true;
-              break;
-            }
-            results.push(exec.outputs);
-          }
-
-          if (looperFailed) {
-            cb.onNodeStatus(node.id, "failed");
-            failed = true;
-            skipRemaining(i + 1);
-            break;
-          }
-          cb.onNodeStatus(node.id, "success");
-          ctx[node.name] = { results, count: results.length };
-          continue;
-        }
-
-        if (node.type === "verifier") {
-          const cfg = node.config as VerifierNodeConfig;
-          const maxAttempts = Math.max(1, cfg.maxAttempts || 1);
-          let lastExec: ExecutionResult | null = null;
-          let passed = false;
-
-          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-            const attemptStartedAt = new Date().toISOString();
-            const attemptStart = Date.now();
-            const exec = await executeRequestConfig(cfg.request, ctx, deps, state);
-            lastExec = exec;
-
-            let attemptError = exec.error;
-            let attemptPassed = false;
-            // Comparisons run even when the request "failed" (e.g. asserting
-            // on an expected error status) as long as we got a response.
-            if (exec.response) {
-              const evaluations = (cfg.comparisons || []).map((c) => evaluateComparison(c, exec, ctx));
-              attemptPassed = evaluations.length > 0 && evaluations.every((e) => e.pass);
-              const detail = evaluations.map((e) => e.detail).join("; ");
-              if (!attemptPassed) {
-                attemptError = (cfg.comparisons || []).length
-                  ? `Verification failed: ${detail}`
-                  : "Verifier has no comparisons configured";
-              } else {
-                attemptError = undefined;
-              }
-            }
-
-            emit(
-              makeRecord(node, { ...exec, error: attemptError }, attemptPassed ? "success" : "failed", attemptStartedAt, Date.now() - attemptStart, {
-                attempt,
-              })
-            );
-
-            if (attemptPassed) {
-              passed = true;
-              break;
-            }
-            if (attempt < maxAttempts) {
-              await cancellableDelay(Math.max(0, cfg.intervalMs || 0), state);
-            }
-          }
-
-          if (!passed) {
-            cb.onNodeStatus(node.id, "failed");
-            failed = true;
-            skipRemaining(i + 1);
-            break;
-          }
-          cb.onNodeStatus(node.id, "success");
-          ctx[node.name] = { ...(lastExec?.outputs || {}), passed: true };
-          continue;
+        if (publish !== null) ctx[node.name] = publish;
+        for (const succId of succ.get(node.id) || []) {
+          const d = remaining.get(succId)! - 1;
+          remaining.set(succId, d);
+          // The terminal guard blocks launching a merge that was already
+          // skipped because another of its incoming branches failed.
+          if (d === 0 && !terminal.has(succId)) launch(nodeById.get(succId)!);
         }
       } catch (e: any) {
-        if (e instanceof FlowCancelledError) {
-          cancelled = true;
-          cb.onNodeStatus(node.id, "failed");
-          emit(makeRecord(node, null, "failed", nodeStartedAt, Date.now() - nodeStart, { error: "Run cancelled" }));
-          skipRemaining(i + 1);
-          break;
-        }
+        terminal.add(node.id);
         cb.onNodeStatus(node.id, "failed");
-        emit(makeRecord(node, null, "failed", nodeStartedAt, Date.now() - nodeStart, { error: e.message || String(e) }));
-        failed = true;
-        skipRemaining(i + 1);
-        break;
+        if (e instanceof FlowCancelledError) {
+          emit(makeRecord(node, null, "failed", nodeStartedAt, Date.now() - nodeStart, { error: "Run cancelled" }));
+        } else {
+          failed = true;
+          emit(makeRecord(node, null, "failed", nodeStartedAt, Date.now() - nodeStart, { error: e.message || String(e) }));
+        }
+        skipDescendants(node.id, node.name);
       }
+    };
+
+    // No concurrency cap: fan-out is bounded by the hand-built graph's width,
+    // each node issues at most one HTTP call at a time, and the browser
+    // throttles per-host connections anyway.
+    const launch = (node: FlowNode) => {
+      if (state.cancelled) return; // never start new work after Stop
+      active += 1;
+      // Successors launch inside runOne before this decrement, so `active`
+      // never transiently hits 0 while work remains.
+      void runOne(node).finally(() => {
+        active -= 1;
+        if (active === 0) resolveAll();
+      });
+    };
+
+    const roots = flow.nodes.filter((n) => remaining.get(n.id) === 0);
+    if (roots.length === 0) resolveAll(); // empty flow (cycles already threw)
+    roots.forEach(launch);
+    await allSettled;
+
+    // Anything still non-terminal was stranded by cancellation (its
+    // ancestors were aborted before it became ready).
+    for (const node of flow.nodes) {
+      if (!terminal.has(node.id)) skipNode(node, "Skipped: run cancelled");
     }
 
     return {
-      status: cancelled ? "cancelled" : failed ? "failed" : "success",
+      status: state.cancelled ? "cancelled" : failed ? "failed" : "success",
       records,
       startedAt,
       durationMs: Date.now() - runStart,
