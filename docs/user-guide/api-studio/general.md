@@ -19,7 +19,7 @@
 1. **Visual Flow Composition**: Drag building blocks onto a canvas and connect them with edges that define execution order. Cycles are rejected automatically.
 2. **Output-to-Input Chaining**: Any node can reference an upstream node's outputs as `nodeName.output`, including deep dot-paths and `*` wildcard projections over arrays.
 3. **Control-Flow Blocks**: Beyond plain requests — **Looper** (repeat a request per array item), **Delay** (fixed wait), and **Verifier** (assert on a response with automatic retries).
-4. **Live Execution & Reporting**: Run flows sequentially with per-node status badges, inspect the exact request/response of every step, and download a CSV report of the entire run.
+4. **Live Execution & Reporting**: Run flows with parallel branches and implicit merges (a node with multiple incoming edges waits for all of them), follow per-node status badges live, inspect the exact request/response of every step, and download a CSV report of the entire run.
 5. **Synced Flows**: Flows are stored local-first and synced to the cloud like collections, so they follow you across devices.
 
 ## **Workspace Layout At a Glance**

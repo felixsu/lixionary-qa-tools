@@ -50,8 +50,15 @@ const jsonCell = (value: any): string => {
 };
 
 export function buildRunCsv(records: RunRecord[]): string {
+  // Parallel branches emit interleaved records; sort by start time (ISO
+  // strings compare lexicographically) with the emission index as a stable
+  // tiebreak for same-millisecond rows.
+  const sorted = records
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => a.r.startedAt.localeCompare(b.r.startedAt) || a.i - b.i)
+    .map(({ r }) => r);
   const lines = [CSV_COLUMNS.join(",")];
-  for (const r of records) {
+  for (const r of sorted) {
     const cells = [
       r.nodeName,
       r.nodeType,
