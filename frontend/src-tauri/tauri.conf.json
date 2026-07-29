@@ -44,6 +44,7 @@
       "../../backend/db/*.py": "backend/db/",
       "../../backend/routes/local_store.py": "backend/routes/local_store.py",
       "../../backend/routes/local_executor.py": "backend/routes/local_executor.py",
+      "../../backend/routes/local_ai.py": "backend/routes/local_ai.py",
       "../../chrome-extension/*": "chrome-extension/"
     },
     "android": {
