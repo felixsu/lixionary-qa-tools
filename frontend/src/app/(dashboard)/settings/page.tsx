@@ -8,11 +8,15 @@ import SecretInput from "../../components/SecretInput";
 
 const LLM_SETTINGS_PREF_KEY = "llm_settings";
 
-const PROVIDERS: { id: LlmProvider; name: string; model: string; hint: string }[] = [
-  { id: "claude", name: "Claude", model: "claude-opus-5", hint: "Get an API key at console.anthropic.com" },
-  { id: "minimax", name: "MiniMax", model: "MiniMax-M2", hint: "Get an API key at platform.minimax.io" },
-  { id: "gemini", name: "Gemini", model: "gemini-2.5-flash", hint: "Get an API key at aistudio.google.com/apikey" },
+// First entry per provider is the default model when the user hasn't picked one
+// (keep in sync with DEFAULT_MODELS in backend/services/llm_provider.py).
+const PROVIDERS: { id: LlmProvider; name: string; models: string[]; hint: string }[] = [
+  { id: "claude", name: "Claude", models: ["claude-opus-5", "claude-sonnet-5", "claude-opus-4-8"], hint: "Get an API key at console.anthropic.com" },
+  { id: "minimax", name: "MiniMax", models: ["MiniMax-M2.5", "MiniMax-M3", "MiniMax-M2"], hint: "Get an API key at platform.minimax.io" },
+  { id: "gemini", name: "Gemini", models: ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-2.5-flash"], hint: "Get an API key at aistudio.google.com/apikey" },
 ];
+
+const CUSTOM_MODEL = "__custom__";
 
 type VerifyState = { status: "idle" | "verifying" | "ok" | "fail"; message?: string };
 
@@ -20,7 +24,17 @@ export default function SettingsPage() {
   const { apiCall, getPref, setPref, refreshLlmSettings } = useAppContext();
   const { showToast } = useToast();
 
+  const defaultModels = (): Record<LlmProvider, string> => ({
+    claude: PROVIDERS[0].models[0],
+    minimax: PROVIDERS[1].models[0],
+    gemini: PROVIDERS[2].models[0],
+  });
+
   const [keys, setKeys] = useState<Record<LlmProvider, string>>({ claude: "", minimax: "", gemini: "" });
+  // modelChoice is the <select> value (a known model id or CUSTOM_MODEL);
+  // customModels holds the free-text id when Custom… is chosen.
+  const [modelChoice, setModelChoice] = useState<Record<LlmProvider, string>>(defaultModels());
+  const [customModels, setCustomModels] = useState<Record<LlmProvider, string>>({ claude: "", minimax: "", gemini: "" });
   const [activeProvider, setActiveProvider] = useState<LlmProvider | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -29,6 +43,14 @@ export default function SettingsPage() {
     minimax: { status: "idle" },
     gemini: { status: "idle" },
   });
+
+  const effectiveModel = (provider: LlmProvider): string => {
+    const suggestions = PROVIDERS.find((p) => p.id === provider)!.models;
+    if (modelChoice[provider] === CUSTOM_MODEL) {
+      return customModels[provider].trim() || suggestions[0];
+    }
+    return modelChoice[provider];
+  };
 
   useEffect(() => {
     (async () => {
@@ -41,6 +63,20 @@ export default function SettingsPage() {
             minimax: parsed?.keys?.minimax || "",
             gemini: parsed?.keys?.gemini || "",
           });
+          const nextChoice = defaultModels();
+          const nextCustom: Record<LlmProvider, string> = { claude: "", minimax: "", gemini: "" };
+          for (const provider of PROVIDERS) {
+            const stored = parsed?.models?.[provider.id];
+            if (typeof stored !== "string" || !stored.trim()) continue;
+            if (provider.models.includes(stored)) {
+              nextChoice[provider.id] = stored;
+            } else {
+              nextChoice[provider.id] = CUSTOM_MODEL;
+              nextCustom[provider.id] = stored;
+            }
+          }
+          setModelChoice(nextChoice);
+          setCustomModels(nextCustom);
           if (parsed?.activeProvider === "claude" || parsed?.activeProvider === "minimax" || parsed?.activeProvider === "gemini") {
             setActiveProvider(parsed.activeProvider);
           }
@@ -65,6 +101,11 @@ export default function SettingsPage() {
             claude: keys.claude.trim(),
             minimax: keys.minimax.trim(),
             gemini: keys.gemini.trim(),
+          },
+          models: {
+            claude: effectiveModel("claude"),
+            minimax: effectiveModel("minimax"),
+            gemini: effectiveModel("gemini"),
           },
         })
       );
@@ -92,7 +133,7 @@ export default function SettingsPage() {
     try {
       const res = await apiCall("/api/ai/verify-key", {
         method: "POST",
-        body: JSON.stringify({ provider, key }),
+        body: JSON.stringify({ provider, key, model: effectiveModel(provider) }),
       });
       setVerify((v) => ({ ...v, [provider]: { status: res.ok ? "ok" : "fail", message: res.message } }));
     } catch (err: any) {
@@ -125,7 +166,7 @@ export default function SettingsPage() {
                 <div className="flex items-center gap-3">
                   <div className="flex-1">
                     <div className="text-sm font-medium text-ink">{provider.name}</div>
-                    <div className="text-[11px] text-mute font-mono mt-0.5">{provider.model}</div>
+                    <div className="text-[11px] text-mute font-mono mt-0.5">{effectiveModel(provider.id)}</div>
                   </div>
                   <label
                     className={`flex items-center gap-2 text-[13px] font-medium ${hasKey ? "text-graphite cursor-pointer" : "text-mute cursor-not-allowed"}`}
@@ -145,6 +186,37 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="flex gap-2 items-center">
+                  <label className="text-[13px] font-medium text-graphite w-12 flex-shrink-0">Model</label>
+                  <select
+                    value={modelChoice[provider.id]}
+                    onChange={(e) => {
+                      setModelChoice((m) => ({ ...m, [provider.id]: e.target.value }));
+                      setVerify((v) => ({ ...v, [provider.id]: { status: "idle" } }));
+                    }}
+                    className="h-10 flex-1 bg-cream border border-line rounded-lg px-3 font-mono text-xs text-ink outline-none focus:border-clay cursor-pointer"
+                  >
+                    {provider.models.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                    <option value={CUSTOM_MODEL}>Custom…</option>
+                  </select>
+                  {modelChoice[provider.id] === CUSTOM_MODEL && (
+                    <input
+                      type="text"
+                      value={customModels[provider.id]}
+                      onChange={(e) => {
+                        setCustomModels((m) => ({ ...m, [provider.id]: e.target.value }));
+                        setVerify((v) => ({ ...v, [provider.id]: { status: "idle" } }));
+                      }}
+                      placeholder="model id"
+                      spellCheck={false}
+                      className="h-10 flex-1 bg-cream border border-line rounded-lg px-3 font-mono text-xs text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
+                    />
+                  )}
+                </div>
+
+                <div className="flex gap-2 items-center">
+                  <label className="text-[13px] font-medium text-graphite w-12 flex-shrink-0">Key</label>
                   <SecretInput
                     value={keys[provider.id]}
                     onChange={(value) => {

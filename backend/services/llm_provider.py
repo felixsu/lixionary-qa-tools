@@ -6,6 +6,7 @@ the cloud) under a single JSON pref:
     llm_settings = {
         "activeProvider": "claude" | "minimax" | "gemini" | null,
         "keys": {"claude": "...", "minimax": "...", "gemini": "..."},
+        "models": {"claude": "...", ...},  # optional per-provider model override
         "minimaxBaseUrl": "..."   # optional override, e.g. mainland endpoint
     }
 
@@ -25,9 +26,12 @@ PROVIDERS = ("claude", "minimax", "gemini")
 
 LLM_SETTINGS_PREF_KEY = "llm_settings"
 
-CLAUDE_MODEL = "claude-opus-5"
-GEMINI_MODEL = "gemini-2.5-flash"
-MINIMAX_MODEL = "MiniMax-M2"
+# Used when the user hasn't picked a model for a provider in Settings.
+DEFAULT_MODELS = {
+    "claude": "claude-opus-5",
+    "minimax": "MiniMax-M2.5",
+    "gemini": "gemini-3.5-flash",
+}
 # International endpoint; mainland accounts use https://api.minimaxi.com/v1/chat/completions
 # (overridable via the optional "minimaxBaseUrl" pref field).
 MINIMAX_CHAT_URL = "https://api.minimax.io/v1/chat/completions"
@@ -74,8 +78,18 @@ def is_configured() -> bool:
     return active_provider_key() is not None
 
 
+def model_for(provider: str) -> str:
+    """The user's chosen model for a provider, or the built-in default."""
+    models = get_llm_settings().get("models")
+    chosen = (models or {}).get(provider) if isinstance(models, dict) else None
+    if isinstance(chosen, str) and chosen.strip():
+        return chosen.strip()
+    return DEFAULT_MODELS[provider]
+
+
 def _generate_claude(
     key: str,
+    model: str,
     system_instruction: str,
     prompt: str,
     max_output_tokens: int,
@@ -83,14 +97,16 @@ def _generate_claude(
     import anthropic
 
     client = anthropic.Anthropic(api_key=key)
-    # claude-opus-5 rejects temperature/top_p (400) — never forward them.
+    # Current Claude models reject temperature/top_p (400) — never forward them.
     # Thinking is on by default; effort "low" keeps these small JSON tasks fast.
+    # Haiku-tier models don't accept the effort parameter, so skip it there.
+    kwargs = {} if "haiku" in model.lower() else {"output_config": {"effort": "low"}}
     response = client.messages.create(
-        model=CLAUDE_MODEL,
+        model=model,
         max_tokens=max_output_tokens,
         system=system_instruction,
         messages=[{"role": "user", "content": prompt}],
-        output_config={"effort": "low"},
+        **kwargs,
     )
     if response.stop_reason == "refusal":
         raise RuntimeError("Claude declined this request (stop_reason: refusal).")
@@ -99,6 +115,7 @@ def _generate_claude(
 
 def _generate_gemini(
     key: str,
+    model: str,
     system_instruction: str,
     prompt: str,
     temperature: Optional[float],
@@ -118,7 +135,7 @@ def _generate_gemini(
     if top_p is not None:
         config_kwargs["top_p"] = top_p
     response = client.models.generate_content(
-        model=GEMINI_MODEL,
+        model=model,
         contents=prompt,
         config=types.GenerateContentConfig(**config_kwargs),
     )
@@ -127,6 +144,7 @@ def _generate_gemini(
 
 def _generate_minimax(
     key: str,
+    model: str,
     system_instruction: str,
     prompt: str,
     temperature: Optional[float],
@@ -137,7 +155,7 @@ def _generate_minimax(
 
     base_url = get_llm_settings().get("minimaxBaseUrl") or MINIMAX_CHAT_URL
     body: Dict[str, Any] = {
-        "model": MINIMAX_MODEL,
+        "model": model,
         "max_tokens": max_output_tokens,
         "messages": [
             {"role": "system", "content": system_instruction},
@@ -183,11 +201,12 @@ def generate_sync(
     if active is None:
         raise LLMNotConfiguredError()
     provider, key = active
+    model = model_for(provider)
     if provider == "claude":
-        return _generate_claude(key, system_instruction, prompt, max_output_tokens)
+        return _generate_claude(key, model, system_instruction, prompt, max_output_tokens)
     if provider == "minimax":
-        return _generate_minimax(key, system_instruction, prompt, temperature, top_p, max_output_tokens)
-    return _generate_gemini(key, system_instruction, prompt, temperature, top_p, max_output_tokens)
+        return _generate_minimax(key, model, system_instruction, prompt, temperature, top_p, max_output_tokens)
+    return _generate_gemini(key, model, system_instruction, prompt, temperature, top_p, max_output_tokens)
 
 
 async def generate(
@@ -212,23 +231,25 @@ async def generate(
     )
 
 
-def verify_key_sync(provider: str, key: str) -> Tuple[bool, str]:
-    """Minimal round trip to validate a key. Returns (ok, human-readable message)."""
+def verify_key_sync(provider: str, key: str, model: Optional[str] = None) -> Tuple[bool, str]:
+    """Minimal round trip to validate a key against the model that generation
+    will actually use. Returns (ok, human-readable message)."""
     if provider not in PROVIDERS:
         return False, f"Unknown provider: {provider}"
     key = (key or "").strip()
     if not key:
         return False, "API key is empty."
+    model = (model or "").strip() or model_for(provider)
     system = "You are a connectivity check."
     prompt = "Reply with OK"
     try:
         if provider == "claude":
-            # max_tokens caps thinking + text on claude-opus-5 — leave headroom.
-            _generate_claude(key, system, prompt, max_output_tokens=256)
+            # max_tokens caps thinking + text on current Claude models — leave headroom.
+            _generate_claude(key, model, system, prompt, max_output_tokens=256)
         elif provider == "minimax":
-            _generate_minimax(key, system, prompt, None, None, max_output_tokens=64)
+            _generate_minimax(key, model, system, prompt, None, None, max_output_tokens=64)
         else:
-            _generate_gemini(key, system, prompt, None, None, max_output_tokens=16)
-        return True, "Key verified."
+            _generate_gemini(key, model, system, prompt, None, None, max_output_tokens=16)
+        return True, f"Key verified with {model}."
     except Exception as e:
         return False, f"Verification failed: {e}"
