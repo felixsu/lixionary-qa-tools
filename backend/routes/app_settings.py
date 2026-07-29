@@ -5,23 +5,13 @@ from bson import ObjectId
 
 from db.mongo import MongoDB
 from routes.auth import require_admin, get_current_user
+from services.ai_prompts import DESCRIPTION_BASE_PROMPT_KEY, DEFAULT_DESCRIPTION_BASE_PROMPT
 
 admin_router = APIRouter(prefix="/api/admin/settings", tags=["settings-admin"], dependencies=[Depends(require_admin)])
 
-DESCRIPTION_BASE_PROMPT_KEY = "description_base_prompt"
-
-DEFAULT_DESCRIPTION_BASE_PROMPT = (
-    "You are a senior API technical writer. Given an HTTP request definition "
-    "(method, URL, body, declared inputs, declared outputs) and the user's draft description, "
-    "produce a clear, concise Markdown description of the request.\n\n"
-    "Structure the description with:\n"
-    "- A short opening paragraph explaining the purpose of the request and when to use it.\n"
-    "- An Inputs section (table of declared inputs, their sources and values) when inputs exist.\n"
-    "- An Outputs section (table of declared outputs and what they contain) when outputs exist.\n"
-    "- Notable behavior, caveats, or side effects worth calling out.\n\n"
-    "Preserve factual content from the user's draft; improve structure, clarity, and wording. "
-    "Do not invent facts that are not supported by the draft or the request definition."
-)
+# Non-admin reads: the sidecar's improve-description feature needs the
+# configured base prompt, and the frontend fetches it here to pass along.
+user_router = APIRouter(prefix="/api/app-settings", tags=["settings"], dependencies=[Depends(get_current_user)])
 
 
 async def get_setting_value(key: str, default: str) -> str:
@@ -74,3 +64,10 @@ async def update_description_base_prompt(payload: SettingUpdate, current_user: d
     )
     doc = await col.find_one({"key": DESCRIPTION_BASE_PROMPT_KEY})
     return serialize_setting(doc, DEFAULT_DESCRIPTION_BASE_PROMPT)
+
+
+@user_router.get("/description-base-prompt")
+async def get_description_base_prompt_value():
+    """Resolved base prompt for any authenticated user (admin or member)."""
+    value = await get_setting_value(DESCRIPTION_BASE_PROMPT_KEY, DEFAULT_DESCRIPTION_BASE_PROMPT)
+    return {"value": value}

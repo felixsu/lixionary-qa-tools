@@ -31,7 +31,6 @@ services:
     environment:
       - MONGODB_URI=mongodb://mongodb:27017/lixionary
       - REDIS_URL=redis://redis:6379/0
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
       - JWT_SECRET=${JWT_SECRET:-supersecretjwttokenkey12345}
       - REFRESH_TOKEN_EXPIRY_DAYS=${REFRESH_TOKEN_EXPIRY_DAYS:-30}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}

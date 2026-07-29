@@ -610,6 +610,7 @@ export default function ApiExplorerPage() {
     setIsGeneratingAiParser,
 
     apiCall,
+    llmSettings,
     handleExecuteRequest,
     handleSaveRequest,
     handleCreateRequest,
@@ -896,7 +897,15 @@ export default function ApiExplorerPage() {
     }
   };
 
+  // Backend also 400s when unconfigured — this is just the friendlier path.
+  const ensureLlmConfigured = (): boolean => {
+    if (llmSettings?.activeProvider && llmSettings.hasKey) return true;
+    showToast("No AI provider configured — add an API key in Settings (Configuration → Settings).", { type: "error" });
+    return false;
+  };
+
   const runGenerateParser = async (promptText: string) => {
+    if (!ensureLlmConfigured()) return;
     setIsGeneratingAiParser(true);
     try {
       const responseSource = apiResponse ?? activeRequest?.lastResponse;
@@ -920,11 +929,20 @@ export default function ApiExplorerPage() {
   };
 
   const runImproveDescription = async () => {
+    if (!ensureLlmConfigured()) return;
     setIsImprovingDescription(true);
     try {
+      // Admin-configured base prompt lives in the cloud; the sidecar falls
+      // back to its built-in default when this fetch fails (e.g. offline).
+      let basePrompt: string | null = null;
+      try {
+        const setting = await apiCall("/api/app-settings/description-base-prompt");
+        basePrompt = setting?.value || null;
+      } catch { /* best-effort */ }
       const result = await apiCall("/api/ai/improve-description", {
         method: "POST",
         body: JSON.stringify({
+          basePrompt,
           draft: reqDescription,
           name: activeRequest?.name || "",
           method: reqMethod,

@@ -13,6 +13,13 @@ DB_PATH = os.path.join(BASE_DIR, "local.db")
 
 ENTITY_TYPES = {"collection", "environment", "auth_function", "browser_profile", "flow"}
 
+# Identifies the embedding model + dimensionality the request_vec table was
+# built with. Changing either requires rebuilding the vec0 table (no ALTER on
+# virtual tables) AND wiping request_index — reindex_collection's skip logic is
+# description-hash based, so rows must vanish for descriptions to re-embed.
+EMBEDDING_SCHEMA_TAG = "fastembed:BAAI/bge-small-en-v1.5:384"
+EMBEDDING_DIMENSIONS = 384
+
 # NOTE: Python's stdlib `sqlite3` module ships without extension-loading support
 # on Python.org's official macOS builds (no `enable_load_extension` at all), which
 # makes it unusable for `sqlite-vec`. We use `apsw` instead — it bundles its own
@@ -60,6 +67,7 @@ class LocalStore:
 
         cls._conn = conn
         cls._init_schema()
+        cls._migrate_embeddings()
         cls._ensure_device_id()
 
     @classmethod
@@ -112,11 +120,38 @@ class LocalStore:
             """
         )
         cls._conn.execute(
-            """
+            f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS request_vec USING vec0(
-                embedding float[768] distance_metric=cosine
+                embedding float[{EMBEDDING_DIMENSIONS}] distance_metric=cosine
             );
             """
+        )
+
+    @classmethod
+    def _migrate_embeddings(cls):
+        """Rebuilds the vector index when the embedding model/dimension changed
+        (including the one-time gemini-768 → local-fastembed-384 migration,
+        where the meta marker is absent). search_indexer's startup worker
+        re-enqueues every collection, so the index repopulates automatically."""
+        row = _dict_row(
+            cls._conn.execute("SELECT value FROM meta WHERE key = 'embedding_model'"),
+            ["value"],
+        )
+        if row and row["value"] == EMBEDDING_SCHEMA_TAG:
+            return
+        cls._conn.execute(
+            f"""
+            DROP TABLE IF EXISTS request_vec;
+            DELETE FROM request_index;
+            CREATE VIRTUAL TABLE request_vec USING vec0(
+                embedding float[{EMBEDDING_DIMENSIONS}] distance_metric=cosine
+            );
+            """
+        )
+        cls._conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('embedding_model', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (EMBEDDING_SCHEMA_TAG,),
         )
 
     @classmethod

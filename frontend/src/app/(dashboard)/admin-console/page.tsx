@@ -277,7 +277,9 @@ export default function AdminConsolePage() {
             </div>
             <div className="flex items-center gap-2.5">
               <span className="text-[11px] font-semibold text-stone uppercase tracking-wider">Model</span>
-              <span className="text-xs px-3 py-1 rounded-full bg-hover text-clay font-medium">Claude Sonnet</span>
+              <span className="text-xs px-3 py-1 rounded-full bg-hover text-clay font-medium">
+                Each user&apos;s configured AI provider (Settings)
+              </span>
             </div>
             <div className="flex items-center gap-3">
               <button

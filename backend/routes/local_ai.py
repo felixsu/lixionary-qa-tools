@@ -1,33 +1,35 @@
+"""Sidecar AI endpoints — run entirely on-device against the user's own LLM key.
+
+These were previously cloud endpoints (routes/ai.py) backed by a centralized
+Gemini key. Under bring-your-own-key they live on the sidecar so API keys never
+leave this machine. Like every other sidecar route there is no auth — the
+server binds localhost and is trusted.
+"""
+
 import asyncio
-
-from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
-from google import genai
-from google.genai import types
 
-from config import settings
-from routes.auth import get_current_user
-from routes.app_settings import get_setting_value, DESCRIPTION_BASE_PROMPT_KEY, DEFAULT_DESCRIPTION_BASE_PROMPT
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
-router = APIRouter(prefix="/api/ai", tags=["ai"])
+from services import llm_provider
+from services.ai_prompts import DEFAULT_DESCRIPTION_BASE_PROMPT
+
+router = APIRouter(prefix="/api/ai", tags=["local-ai"])
+
 
 class GenerateParserPayload(BaseModel):
     responseBodySample: Any
     prompt: str
     outputs: Optional[List[str]] = None
 
-@router.post("/generate-parser")
-async def generate_parser(payload: GenerateParserPayload, current_user: dict = Depends(get_current_user)):
-    """
-    Leverages Gemini to convert natural language instructions into JavaScript parser code blocks.
-    """
-    if not settings.GEMINI_API_KEY:
-        raise HTTPException(
-            status_code=400, 
-            detail="GEMINI_API_KEY is not configured on the server. Please set it in your environment."
-        )
 
+@router.post("/generate-parser")
+async def generate_parser(payload: GenerateParserPayload):
+    """
+    Converts natural language instructions into a JavaScript parser code block
+    using the user's active LLM provider.
+    """
     declared_outputs = [o for o in (payload.outputs or []) if o]
     outputs_section = ""
     if declared_outputs:
@@ -65,37 +67,31 @@ async def generate_parser(payload: GenerateParserPayload, current_user: dict = D
     )
 
     try:
-        # Use new Google GenAI Client
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=formatted_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.1,
-                top_p=0.95
-            )
+        raw = await llm_provider.generate(
+            system_instruction, formatted_prompt,
+            temperature=0.1, top_p=0.95, timeout=60,
         )
-        
-        # Clean up code output just in case (removing any leading/trailing backticks or markdown block indicators)
-        generated_script = response.text.strip()
-        if generated_script.startswith("```javascript"):
-            generated_script = generated_script[13:]
-        elif generated_script.startswith("```js"):
-            generated_script = generated_script[5:]
-        if generated_script.endswith("```"):
-            generated_script = generated_script[:-3]
-            
-        generated_script = generated_script.strip()
-        
-        return {"generatedScript": generated_script}
-
+    except llm_provider.LLMNotConfiguredError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="AI parser generation timed out. Please try again.")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gemini AI generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"AI generation failed: {str(e)}")
+
+    # Clean up code output just in case (removing any leading/trailing backticks or markdown block indicators)
+    generated_script = raw.strip()
+    if generated_script.startswith("```javascript"):
+        generated_script = generated_script[13:]
+    elif generated_script.startswith("```js"):
+        generated_script = generated_script[5:]
+    if generated_script.endswith("```"):
+        generated_script = generated_script[:-3]
+
+    return {"generatedScript": generated_script.strip()}
 
 
 MAX_BODY_CHARS = 4000
+
 
 class ImproveDescriptionPayload(BaseModel):
     draft: Optional[str] = ""
@@ -107,6 +103,9 @@ class ImproveDescriptionPayload(BaseModel):
     inputs: Optional[List[Dict[str, Any]]] = None
     outputs: Optional[List[str]] = None
     outputDescriptions: Optional[Dict[str, str]] = None
+    # Admin-configured base prompt fetched from the cloud by the frontend;
+    # falls back to the built-in default when absent (e.g. cloud unreachable).
+    basePrompt: Optional[str] = None
 
 
 def _strip_markdown_fence(text: str) -> str:
@@ -121,18 +120,12 @@ def _strip_markdown_fence(text: str) -> str:
 
 
 @router.post("/improve-description")
-async def improve_description(payload: ImproveDescriptionPayload, current_user: dict = Depends(get_current_user)):
+async def improve_description(payload: ImproveDescriptionPayload):
     """
     Improves a user's draft request description into polished Markdown using
     the admin-configurable base prompt plus the full request definition as context.
     """
-    if not settings.GEMINI_API_KEY:
-        raise HTTPException(
-            status_code=400,
-            detail="GEMINI_API_KEY is not configured on the server. Please set it in your environment."
-        )
-
-    base_prompt = await get_setting_value(DESCRIPTION_BASE_PROMPT_KEY, DEFAULT_DESCRIPTION_BASE_PROMPT)
+    base_prompt = (payload.basePrompt or "").strip() or DEFAULT_DESCRIPTION_BASE_PROMPT
     system_instruction = (
         base_prompt
         + "\n\nHard rules:\n"
@@ -178,28 +171,36 @@ User draft description:
 """
 
     try:
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        response = await asyncio.wait_for(
-            asyncio.to_thread(
-                lambda: client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=formatted_prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        temperature=0.4,
-                        top_p=0.95
-                    )
-                )
-            ),
-            timeout=30,
+        raw = await llm_provider.generate(
+            system_instruction, formatted_prompt,
+            temperature=0.4, top_p=0.95, timeout=60,
         )
-        improved = _strip_markdown_fence(response.text or "")
-        if not improved:
-            raise HTTPException(status_code=500, detail="AI returned an empty description.")
-        return {"improvedDescription": improved}
+    except llm_provider.LLMNotConfiguredError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="AI description generation timed out. Please try again.")
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gemini AI generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"AI generation failed: {str(e)}")
+
+    improved = _strip_markdown_fence(raw or "")
+    if not improved:
+        raise HTTPException(status_code=500, detail="AI returned an empty description.")
+    return {"improvedDescription": improved}
+
+
+class VerifyKeyPayload(BaseModel):
+    provider: str
+    key: str
+
+
+@router.post("/verify-key")
+async def verify_key(payload: VerifyKeyPayload):
+    """Makes a minimal round trip against the given provider/key pair."""
+    try:
+        ok, message = await asyncio.wait_for(
+            asyncio.to_thread(llm_provider.verify_key_sync, payload.provider, payload.key),
+            timeout=30,
+        )
+    except asyncio.TimeoutError:
+        return {"ok": False, "message": "Verification timed out. Check your network and try again."}
+    return {"ok": ok, "message": message}

@@ -4,7 +4,7 @@ import React, { useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Home, Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint, FolderOpen, Cloud, CloudOff, RefreshCw, AlertTriangle, Workflow, ExternalLink } from "lucide-react";
+import { Home, Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint, FolderOpen, Cloud, CloudOff, RefreshCw, AlertTriangle, Workflow, ExternalLink, Settings } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import Dropdown from "../components/Dropdown";
 import UpdateBanner from "../components/UpdateBanner";
@@ -35,6 +35,7 @@ const NAV: NavEntry[] = [
   { type: "item", href: "/environments", icon: Database, label: "Environments", badge: "env" },
   { type: "item", href: "/auth-functions", icon: Key, label: "Auth functions" },
   { type: "item", href: "/browser-profiles", icon: Fingerprint, label: "Browser profiles" },
+  { type: "item", href: "/settings", icon: Settings, label: "Settings" },
 ];
 
 export default function DashboardLayout({
@@ -139,6 +140,8 @@ export default function DashboardLayout({
         return "Self-refreshing auth functions";
       case "/browser-profiles":
         return "Browser session profiles";
+      case "/settings":
+        return "Settings";
       case "/admin-console":
         return "Admin console";
       case "/user-management":

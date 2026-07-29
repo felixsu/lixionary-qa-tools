@@ -105,6 +105,17 @@ export function redactBody(body: string, max: number = BODY_TRUNCATE_LENGTH): st
   }
 }
 
+// URLs whose whole request/response bodies are key material that key-name
+// matching can't reach: llm_settings pref bodies embed the user's LLM API keys
+// inside a JSON *string* value, and verify-key bodies carry a raw key under a
+// bare "key" field that REDACT_KEY_PATTERN doesn't match.
+const SENSITIVE_BODY_URL_PATTERN = /\/pref\/llm_settings|\/api\/ai\/verify-key/;
+
+export function redactBodyForUrl(url: string, body: string): string {
+  if (SENSITIVE_BODY_URL_PATTERN.test(url)) return "[REDACTED]";
+  return redactBody(body);
+}
+
 function errorDetails(triggerError?: unknown): { message: string; stack?: string } | undefined {
   if (triggerError === undefined) return undefined;
   if (triggerError instanceof Error) {

@@ -1,9 +1,8 @@
-import asyncio
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from config import settings
+from services import llm_provider
 
 # Method-name prefix per scan action; radio inputs use select_ so the name reads
 # naturally ("select_plan_basic") even though the Playwright call is still .check()
@@ -141,32 +140,19 @@ async def polish_method_names(
     items: List[Dict[str, Any]], heuristic_names: List[str]
 ) -> Tuple[List[str], str]:
     """
-    Polish heuristic method names with one batched Gemini call.
-    Fails open: any error at any layer keeps the heuristic names.
+    Polish heuristic method names with one batched LLM call on the user's
+    active provider. Fails open: any error at any layer keeps the heuristic names.
     Returns (final_names, source) where source is "llm" or "heuristic".
     """
-    if not items or not settings.GEMINI_API_KEY:
+    if not items or not llm_provider.is_configured():
         return heuristic_names, "heuristic"
 
     contents, system_instruction = _build_polish_request(items, heuristic_names)
 
-    def _call() -> str:
-        from google import genai
-        from google.genai import types
-
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.1,
-            ),
-        )
-        return response.text
-
     try:
-        raw = await asyncio.wait_for(asyncio.to_thread(_call), timeout=20)
+        raw = await llm_provider.generate(
+            system_instruction, contents, temperature=0.1, timeout=60
+        )
         parsed = json.loads(_strip_code_fences(raw))
         if not isinstance(parsed, list) or len(parsed) != len(heuristic_names):
             raise ValueError("LLM response shape mismatch")
@@ -237,34 +223,22 @@ async def propose_locator_fix(
     element: Dict[str, Any], failed_attempts: List[Dict[str, str]]
 ) -> Tuple[List[Dict[str, str]], str]:
     """
-    Asks Gemini for alternative locator candidates after every ranked candidate
-    has failed live verification. Fails open: returns ([], "heuristic") on any
-    error, timeout, or missing API key. The returned candidates are RAW and
-    UNVALIDATED — the caller must re-validate strategy/selector shape (see
-    services/browser.py's _validate_locator_fixes) before trying any of them.
+    Asks the active LLM provider for alternative locator candidates after every
+    ranked candidate has failed live verification. Fails open: returns
+    ([], "heuristic") on any error, timeout, or missing API key. The returned
+    candidates are RAW and UNVALIDATED — the caller must re-validate
+    strategy/selector shape (see services/browser.py's _validate_locator_fixes)
+    before trying any of them.
     """
-    if not failed_attempts or not settings.GEMINI_API_KEY:
+    if not failed_attempts or not llm_provider.is_configured():
         return [], "heuristic"
 
     contents, system_instruction = _build_fix_request(element, failed_attempts)
 
-    def _call() -> str:
-        from google import genai
-        from google.genai import types
-
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.1,
-            ),
-        )
-        return response.text
-
     try:
-        raw = await asyncio.wait_for(asyncio.to_thread(_call), timeout=20)
+        raw = await llm_provider.generate(
+            system_instruction, contents, temperature=0.1, timeout=60
+        )
         parsed = json.loads(_strip_code_fences(raw))
         if not isinstance(parsed, list):
             raise ValueError("LLM response shape mismatch")
@@ -335,33 +309,21 @@ async def decide_next_exploration_step(
     url: str, candidates: List[Any], history: List[Dict[str, Any]], goal_prompt: Optional[str]
 ) -> Dict[str, Any]:
     """
-    Asks Gemini which single action to take next during autonomous page
-    exploration. Fails open: any error, timeout, missing API key, or malformed/
-    out-of-range response returns an implicit {"action": "finish"} decision so
-    the exploration loop ends gracefully instead of crashing or hanging.
+    Asks the active LLM provider which single action to take next during
+    autonomous page exploration. Fails open: any error, timeout, missing API
+    key, or malformed/out-of-range response returns an implicit
+    {"action": "finish"} decision so the exploration loop ends gracefully
+    instead of crashing or hanging.
     """
-    if not candidates or not settings.GEMINI_API_KEY:
+    if not candidates or not llm_provider.is_configured():
         return dict(_FINISH_DECISION)
 
     contents, system_instruction = _build_explore_request(url, candidates, history, goal_prompt)
 
-    def _call() -> str:
-        from google import genai
-        from google.genai import types
-
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.2,
-            ),
-        )
-        return response.text
-
     try:
-        raw = await asyncio.wait_for(asyncio.to_thread(_call), timeout=20)
+        raw = await llm_provider.generate(
+            system_instruction, contents, temperature=0.2, timeout=60
+        )
         parsed = json.loads(_strip_code_fences(raw))
         if not isinstance(parsed, dict):
             raise ValueError("LLM response shape mismatch")

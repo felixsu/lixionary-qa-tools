@@ -17,7 +17,8 @@ description: Build, launch, and drive this app locally for end-to-end verificati
 ```bash
 # Cloud backend + mongo + redis (backend code is volume-mounted, --reload)
 docker-compose up -d           # backend :8480, mongo :8483, redis :8482
-                               # GEMINI_API_KEY comes from root .env
+                               # AI features are BYOK — keys are set in-app
+                               # (Configuration → Settings), no server key
 
 # Isolated local sidecar on 8485 (image lacks apsw/sqlite-vec; install at start)
 docker run --rm -d --name verify-sidecar -p 8485:8484 \

@@ -3,17 +3,19 @@ import difflib
 import hashlib
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from config import settings
 from db import search_index
 from db.local_store import LocalStore
+from local_paths import get_base_dir
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_MODEL = "gemini-embedding-001"
-EMBEDDING_DIMENSIONS = 768
+# Local ONNX sentence-embedding model — provider-independent, no API key.
+# Must stay in sync with db.local_store.EMBEDDING_SCHEMA_TAG / EMBEDDING_DIMENSIONS.
+EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 EMBED_BATCH_SIZE = 100
 
 NAME_WEIGHT = 0.45
@@ -55,23 +57,31 @@ def _flatten_requests(payload: Dict[str, Any]) -> Dict[str, Tuple[str, str, str]
     return out
 
 
-def _get_client():
-    if not settings.GEMINI_API_KEY:
-        return None
-    from google import genai
-    return genai.Client(api_key=settings.GEMINI_API_KEY)
+_model = None
+
+
+def _get_model():
+    """Lazy fastembed singleton. First call downloads the ONNX model (~34 MB)
+    into <base_dir>/models so it survives app updates; every later call —
+    including fully offline — reuses the cached files."""
+    global _model
+    if _model is None:
+        from fastembed import TextEmbedding
+
+        _model = TextEmbedding(
+            EMBEDDING_MODEL,
+            cache_dir=os.path.join(get_base_dir(), "models"),
+        )
+    return _model
 
 
 def _embed_batch_sync(texts: List[str]) -> List[List[float]]:
-    client = _get_client()
-    if client is None:
-        raise RuntimeError("GEMINI_API_KEY is not configured")
-    response = client.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=texts,
-        config={"output_dimensionality": EMBEDDING_DIMENSIONS},
-    )
-    return [list(e.values) for e in response.embeddings]
+    # passage_embed/query_embed matter for bge models (query-side instruction prefix).
+    return [list(vector) for vector in _get_model().passage_embed(texts)]
+
+
+def _embed_query_sync(text: str) -> List[float]:
+    return list(next(_get_model().query_embed(text)))
 
 
 async def _embed_texts(texts: List[str]) -> Optional[List[List[float]]]:
@@ -80,7 +90,7 @@ async def _embed_texts(texts: List[str]) -> Optional[List[List[float]]]:
     try:
         return await asyncio.to_thread(_embed_batch_sync, texts)
     except Exception:
-        logger.exception("search index: embedding call failed for %d text(s)", len(texts))
+        logger.exception("search index: embedding failed for %d text(s)", len(texts))
         return None
 
 
@@ -144,8 +154,8 @@ async def reindex_collection(collection_local_id: str, payload: Optional[Dict[st
                 if new_hash and changed_description:
                     to_embed.append((request_id, surrogate_id, description))
 
-    # Gemini calls happen outside the transaction/lock above so a slow network
-    # call never holds local.db open against other request handlers.
+    # Embedding runs outside the transaction/lock above so a slow batch (or the
+    # one-time model download) never holds local.db open against other handlers.
     for i in range(0, len(to_embed), EMBED_BATCH_SIZE):
         chunk = to_embed[i:i + EMBED_BATCH_SIZE]
         vectors = await _embed_texts([c[2] for c in chunk])
@@ -176,8 +186,19 @@ async def _worker_loop() -> None:
 
 async def start_background_worker() -> None:
     asyncio.create_task(_worker_loop())
+    # Pre-warm the embedding model (load, or first-run download) off the event
+    # loop so the first search/index batch isn't blocked by it. Failure is fine
+    # — embedding calls fall back to keyword-only search until it succeeds.
+    asyncio.create_task(asyncio.to_thread(_warm_model))
     for record in LocalStore.list("collection"):
         enqueue_reindex(record["localId"], json.loads(record["payload"]))
+
+
+def _warm_model() -> None:
+    try:
+        _get_model()
+    except Exception:
+        logger.exception("search index: embedding model warm-up failed (offline?)")
 
 
 def _name_score(query: str, name: str) -> float:
@@ -222,15 +243,18 @@ async def search(query: str, limit: int = 20) -> List[Dict[str, Any]]:
         }
 
     vector = None
-    if settings.GEMINI_API_KEY:
-        embedded = await _embed_texts([query])
-        vector = embedded[0] if embedded else None
+    try:
+        vector = await asyncio.to_thread(_embed_query_sync, query)
+    except Exception:
+        # Model unavailable (e.g. offline before the first download) — fall
+        # back to name/url matching only.
+        logger.exception("search index: query embedding failed")
 
     if vector is not None:
         vec_rows = search_index.search_vector(conn, vector, k=min(limit * 3, 100))
-        # This embedding model's cosine distances sit in a narrow, compressed
-        # band (unrelated text still often lands around 0.6-0.9 similarity),
-        # so an absolute cutoff doesn't discriminate well. Min-max normalize
+        # Sentence-embedding cosine distances sit in a fairly narrow band
+        # (unrelated text still shows moderate similarity), so an absolute
+        # cutoff doesn't discriminate well. Min-max normalize
         # distances *within this query's own candidate set* instead — the
         # closest match becomes 1.0 and the weakest of the returned
         # candidates becomes 0.0, which is what actually drives ranking.
