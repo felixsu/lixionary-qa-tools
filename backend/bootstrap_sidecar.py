@@ -44,7 +44,7 @@ def bootstrap():
             subprocess.run([pip_bin, "install", "-r", req_path], env=pip_env, check=True)
         else:
             # Fallback inline list
-            packages = ["fastapi", "uvicorn", "playwright", "httpx", "pydantic", "websockets", "quickjs", "google-genai", "jinja2", "pyjwt", "bcrypt", "python-multipart", "redis", "motor", "pymongo", "apsw", "sqlite-vec"]
+            packages = ["fastapi", "uvicorn", "playwright", "httpx", "pydantic", "websockets", "quickjs", "google-genai", "anthropic", "fastembed", "jinja2", "pyjwt", "bcrypt", "python-multipart", "redis", "motor", "pymongo", "apsw", "sqlite-vec"]
             subprocess.run([pip_bin, "install"] + packages, env=pip_env, check=True)
     except Exception as e:
         print(f"WARNING: Failed to install or verify requirements: {e}. Attempting to launch sidecar anyway...")

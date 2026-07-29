@@ -11,7 +11,7 @@ import { generateDuplicateName } from "../utils/uniqueName";
 import { useBackendStatus } from "./BackendStatusContext";
 import { useToast } from "./ToastContext";
 import { isTauri } from "../utils/tauri";
-import { copyDiagnostics, recordNetworkEntry, redactBody } from "../utils/diagnostics";
+import { copyDiagnostics, recordNetworkEntry, redactBodyForUrl } from "../utils/diagnostics";
 
 const VPS_API_URL = process.env.NEXT_PUBLIC_VPS_API_URL ||
   (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://qa-tools-api.lixionary.com');
@@ -19,6 +19,16 @@ const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost
 
 
 // Types
+export type LlmProvider = "claude" | "minimax" | "gemini";
+
+// The full device-local llm_settings pref (raw API keys included) is only
+// ever read/written by the Settings page; this summary is what the rest of
+// the app needs to gate AI features.
+export interface LlmSettingsSummary {
+  activeProvider: LlmProvider | null;
+  hasKey: boolean;
+}
+
 export interface Environment {
   id: string; // local-store localId — stable offline, before any cloud sync
   cloudId?: string | null; // Mongo _id once synced; undefined/null until then
@@ -477,6 +487,16 @@ interface AppContextType {
   handleSetAnchor: () => void;
   handleClearAnchor: () => void;
 
+  // Device-local prefs (sidecar SQLite; survive app updates, never sync to cloud)
+  getPref: (key: string) => Promise<string | null>;
+  setPref: (key: string, value: string) => Promise<void>;
+  deletePref: (key: string) => Promise<void>;
+
+  // BYOK LLM provider settings (summary for gating AI features; the Settings
+  // page reads/writes the full llm_settings pref itself)
+  llmSettings: LlmSettingsSummary | null;
+  refreshLlmSettings: () => Promise<void>;
+
   // Common operations
   apiCall: (path: string, options?: RequestInit) => Promise<any>;
   handleBrowserNavigate: () => void;
@@ -868,6 +888,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } catch { /* non-fatal */ }
   };
 
+  // BYOK LLM provider settings summary — enough to gate AI features without
+  // holding the raw keys in shared state. Refreshed after the Settings page saves.
+  const [llmSettings, setLlmSettings] = useState<LlmSettingsSummary | null>(null);
+  const refreshLlmSettings = async (): Promise<void> => {
+    const raw = await getPref("llm_settings");
+    if (raw === null) {
+      setLlmSettings({ activeProvider: null, hasKey: false });
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      const provider: LlmProvider | null =
+        parsed?.activeProvider === "claude" || parsed?.activeProvider === "minimax" || parsed?.activeProvider === "gemini"
+          ? parsed.activeProvider
+          : null;
+      const key = provider ? parsed?.keys?.[provider] : null;
+      setLlmSettings({
+        activeProvider: provider,
+        hasKey: typeof key === "string" && key.trim().length > 0,
+      });
+    } catch {
+      setLlmSettings({ activeProvider: null, hasKey: false });
+    }
+  };
+  const sidecarUp = sidecar?.status === "ok" || sidecar?.status === "degraded";
+  useEffect(() => {
+    if (sidecarUp && llmSettings === null) refreshLlmSettings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sidecarUp]);
+
   // Synchronize request inputs when selection changes
   useEffect(() => {
     if (selectedRequestId) {
@@ -979,7 +1029,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // REST API helpers
   const apiCall = async (path: string, options: RequestInit = {}) => {
     let startedAt: number | null = null;
-    const isLocal = path.startsWith("/api/browser") || path.startsWith("/api/workspace") || path.startsWith("/api/browser-helper") || path.startsWith("/api/local-store") || path.startsWith("/api/executor");
+    const isLocal = path.startsWith("/api/browser") || path.startsWith("/api/workspace") || path.startsWith("/api/browser-helper") || path.startsWith("/api/local-store") || path.startsWith("/api/executor") || path.startsWith("/api/ai");
     const baseUrl = isLocal ? LOCAL_API_URL : VPS_API_URL;
     const fullUrl = `${baseUrl}${path}`;
 
@@ -1060,8 +1110,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         url: fullUrl,
         status: response.status,
         durationMs: startedAt !== null ? Date.now() - startedAt : 0,
-        requestBody: typeof options.body === "string" ? redactBody(options.body) : undefined,
-        responseBody: redactBody(text),
+        requestBody: typeof options.body === "string" ? redactBodyForUrl(fullUrl, options.body) : undefined,
+        responseBody: redactBodyForUrl(fullUrl, text),
         timestamp: Date.now(),
       });
     }).catch(() => {});
@@ -2824,6 +2874,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         isLoadingAuth,
         handleLogin,
         handleLogout,
+
+        getPref,
+        setPref,
+        deletePref,
+        llmSettings,
+        refreshLlmSettings,
 
         environments,
         selectedEnvId,
