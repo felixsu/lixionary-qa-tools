@@ -184,15 +184,17 @@ def setup_local_venv():
             print("Creating Python virtual environment...")
             subprocess.run([sys.executable, "-m", "venv", VENV_DIR], check=True)
             
-        # Determine pip path
-        pip_path = os.path.join(VENV_DIR, "bin", "pip") if os.name != "nt" else os.path.join(VENV_DIR, "Scripts", "pip")
+        # Run pip/playwright as `python -m ...`, never via the venv's console
+        # scripts: a moved venv (migrate_legacy_data_dir) leaves script shebangs
+        # pointing at the old venv path, so venv/bin/pip fails with "bad
+        # interpreter" even though the venv python itself still works.
+        python_path = os.path.join(VENV_DIR, "bin", "python") if os.name != "nt" else os.path.join(VENV_DIR, "Scripts", "python.exe")
         print("Installing dependencies in local venv...")
-        subprocess.run([pip_path, "install", "playwright", "httpx", "pydantic"], check=True)
-        
+        subprocess.run([python_path, "-m", "pip", "install", "playwright", "httpx", "pydantic"], check=True)
+
         # Install playwright browsers in venv
-        playwright_path = os.path.join(VENV_DIR, "bin", "playwright") if os.name != "nt" else os.path.join(VENV_DIR, "Scripts", "playwright")
         print("Installing local Playwright browsers...")
-        subprocess.run([playwright_path, "install", "chromium"], check=True)
+        subprocess.run([python_path, "-m", "playwright", "install", "chromium"], check=True)
         print("Local venv setup completed successfully.")
     except Exception as e:
         print(f"WARNING: Local virtualenv setup failed: {e}. Running scripts will fallback to system python.")
