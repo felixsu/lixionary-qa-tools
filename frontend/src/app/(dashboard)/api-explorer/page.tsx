@@ -16,6 +16,7 @@ import { useToast } from "../../context/ToastContext";
 import { useSearchIndexStatus } from "../../context/SearchIndexStatusContext";
 import SearchResultsList from "./SearchResultsList";
 import Dropdown from "../../components/Dropdown";
+import SelectablePre from "../../components/SelectablePre";
 import { Modal, ModalFooter } from "../../components/Modal";
 import MarkdownContent from "../../components/guide/MarkdownContent";
 import { confirmDialog } from "../../utils/confirmDialog";
@@ -2133,13 +2134,13 @@ export default function ApiExplorerPage() {
               </div>
 
               {responseTab === "last" ? (
-                <pre className="flex-1 m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap">
+                <SelectablePre className="flex-1 m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap">
                   {activeRequest?.lastResponse
                     ? (typeof activeRequest.lastResponse.body === "object"
                         ? JSON.stringify(activeRequest.lastResponse.body, null, 2)
                         : String(activeRequest.lastResponse.body))
                     : "No successful response recorded yet."}
-                </pre>
+                </SelectablePre>
               ) : !apiResponse ? (
                 <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6">
                   <Send className="h-7 w-7 text-mute" />
@@ -2151,11 +2152,11 @@ export default function ApiExplorerPage() {
               ) : (
                 <div className="flex-1 overflow-hidden flex flex-col">
                   {responseTab === "pretty" && (
-                    <pre className="flex-1 m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap">
+                    <SelectablePre className="flex-1 m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap">
                       {typeof apiResponse.body === "object"
                         ? JSON.stringify(apiResponse.body, null, 2)
                         : apiResponse.body}
-                    </pre>
+                    </SelectablePre>
                   )}
                   {responseTab === "headers" && (
                     <div className="flex-1 overflow-y-auto p-4">
@@ -2168,9 +2169,9 @@ export default function ApiExplorerPage() {
                     </div>
                   )}
                   {responseTab === "raw" && (
-                    <pre className="flex-1 m-0 p-4 bg-ink-900 text-cream/80 font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap">
+                    <SelectablePre className="flex-1 m-0 p-4 bg-ink-900 text-cream/80 font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap">
                       {JSON.stringify(apiResponse, null, 2)}
-                    </pre>
+                    </SelectablePre>
                   )}
                   {responseTab === "extracted" && (
                     <div className="flex-1 p-4 overflow-y-auto">
@@ -2396,9 +2397,9 @@ export default function ApiExplorerPage() {
                 </div>
               )}
               <div className="relative">
-                <pre className="m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre rounded-xl max-h-[420px]">
+                <SelectablePre className="m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre rounded-xl max-h-[420px]">
                   {code}
-                </pre>
+                </SelectablePre>
                 <button
                   onClick={() => { copyToClipboard(code, setPythonCopied); showToast("Python code copied", { type: "success" }); }}
                   title="Copy code"
@@ -2435,9 +2436,9 @@ export default function ApiExplorerPage() {
               <p className="m-0 p-4 bg-ink-900 text-red-400 font-mono text-xs leading-relaxed rounded-xl">{curlError}</p>
             ) : (
               <div className="relative">
-                <pre className="m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre rounded-xl max-h-[420px]">
+                <SelectablePre className="m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre rounded-xl max-h-[420px]">
                   {resolvedCurl}
-                </pre>
+                </SelectablePre>
                 <button
                   onClick={() => copyToClipboard(resolvedCurl, setCurlCopied)}
                   title="Copy command"
