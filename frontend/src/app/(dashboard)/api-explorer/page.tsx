@@ -7,7 +7,7 @@ import {
   Send, Plus, Trash2, Share2, ChevronDown, ChevronRight,
   Sparkles, Code2, Copy, Check, X, AlignLeft, Minimize2,
   PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil, AlertCircle, Wand2,
-  Upload, Search
+  Upload, Search, Bug
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, findRequestInTree, findRequestOwnerCollection, findAncestorPathToRequest } from "../../context/AppContext";
@@ -612,6 +612,8 @@ export default function ApiExplorerPage() {
 
     apiCall,
     llmSettings,
+    fetchEnvironments,
+    triggerSync,
     handleExecuteRequest,
     handleSaveRequest,
     handleCreateRequest,
@@ -972,6 +974,42 @@ export default function ApiExplorerPage() {
     await runGenerateParser(aiPrompt);
     setShowAiModal(false);
     setAiPrompt("");
+  };
+
+  const [isDebuggingParser, setIsDebuggingParser] = useState(false);
+  const [parserDebugResult, setParserDebugResult] = useState<{
+    outputs: Record<string, any>;
+    envWrites: Record<string, any>;
+    logs: string[];
+    error: string | null;
+  } | null>(null);
+
+  const runParserDebug = async () => {
+    const responseSource = apiResponse ?? activeRequest?.lastResponse;
+    if (!responseSource || !reqParserScript.trim()) return;
+    setIsDebuggingParser(true);
+    try {
+      const result = await apiCall("/api/executor/parser-debug", {
+        method: "POST",
+        body: JSON.stringify({
+          responseBody: responseSource.body,
+          responseHeaders: responseSource.headers || {},
+          parserScript: reqParserScript,
+          environmentId: selectedEnvId || null,
+        }),
+      });
+      setParserDebugResult(result);
+      // Debug runs persist env.set() writes like a real run — refresh so the
+      // Environments screen and token menus show the new values.
+      if (result.envWrites && Object.keys(result.envWrites).length > 0) {
+        fetchEnvironments();
+        triggerSync(["environment"]);
+      }
+    } catch (e: any) {
+      showToast(`Parser debug failed: ${e.message}`, { type: "error" });
+    } finally {
+      setIsDebuggingParser(false);
+    }
   };
 
   const handleFixMissingOutputs = async () => {
@@ -1863,14 +1901,30 @@ export default function ApiExplorerPage() {
                           each declared output; <code className="font-mono">env.get(key)</code> reads and{" "}
                           <code className="font-mono">env.set(key, value)</code> writes environment variables.
                         </span>
-                        <button
-                          onClick={() => setShowAiModal(true)}
-                          disabled={!apiResponse && !activeRequest?.lastResponse}
-                          title={!apiResponse && !activeRequest?.lastResponse ? "Trigger a successful request at least once to enable the AI agent parser" : undefined}
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-cream border border-line rounded-md text-xs font-medium text-clay hover:bg-panel transition-colors disabled:opacity-50 flex-shrink-0"
-                        >
-                          <Sparkles className="h-3.5 w-3.5" /> AI agent parser
-                        </button>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <button
+                            onClick={runParserDebug}
+                            disabled={isDebuggingParser || !reqParserScript.trim() || (!apiResponse && !activeRequest?.lastResponse)}
+                            title={
+                              !apiResponse && !activeRequest?.lastResponse
+                                ? "Trigger a request at least once to debug against its response"
+                                : !reqParserScript.trim()
+                                  ? "Write a parser script first"
+                                  : "Re-run the script against the last recorded response (no request is sent); console.log output is captured"
+                            }
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors disabled:opacity-50"
+                          >
+                            <Bug className="h-3.5 w-3.5" /> {isDebuggingParser ? "Running…" : "Debug"}
+                          </button>
+                          <button
+                            onClick={() => setShowAiModal(true)}
+                            disabled={!apiResponse && !activeRequest?.lastResponse}
+                            title={!apiResponse && !activeRequest?.lastResponse ? "Trigger a successful request at least once to enable the AI agent parser" : undefined}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-cream border border-line rounded-md text-xs font-medium text-clay hover:bg-panel transition-colors disabled:opacity-50"
+                          >
+                            <Sparkles className="h-3.5 w-3.5" /> AI agent parser
+                          </button>
+                        </div>
                       </div>
                     </div>
                     <div className="flex-1 mx-4 mb-4 rounded-lg overflow-hidden border border-line">
@@ -2182,6 +2236,14 @@ export default function ApiExplorerPage() {
                           <span className="text-[12px] text-red-700 font-mono break-all">{apiResponse.parserError}</span>
                         </div>
                       )}
+                      {(apiResponse.parserLogs?.length ?? 0) > 0 && (
+                        <div className="mb-3">
+                          <div className="text-xs font-medium text-stone mb-1.5">Console</div>
+                          <SelectablePre className="m-0 p-3.5 bg-ink-900 text-cream/90 font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap rounded-xl max-h-[180px]">
+                            {apiResponse.parserLogs.join("\n")}
+                          </SelectablePre>
+                        </div>
+                      )}
                       {reqOutputs.length ? (
                         <div className="flex flex-col gap-1.5">
                           {(apiResponse.missingOutputs?.length ?? 0) > 0 && (
@@ -2453,6 +2515,55 @@ export default function ApiExplorerPage() {
             <div className="flex justify-end pt-1 border-t border-line">
               <button
                 onClick={() => setShowCurlModal(false)}
+                className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {parserDebugResult && (
+        <Modal title="Parser debug" onClose={() => setParserDebugResult(null)} width={680}>
+          <div className="flex flex-col gap-4">
+            <p className="m-0 text-[13px] text-stone leading-relaxed">
+              Script re-run against the last recorded response — no request was sent.
+              Environment writes are persisted like a real run.
+            </p>
+            {parserDebugResult.error && (
+              <div className="flex items-start gap-2.5 px-3.5 py-2.5 bg-red-50 border border-red-300 rounded-lg">
+                <AlertCircle className="h-4 w-4 text-red-600 flex-shrink-0 mt-0.5" />
+                <span className="text-[12px] text-red-700 font-mono break-all">{parserDebugResult.error}</span>
+              </div>
+            )}
+            <div>
+              <div className="text-xs font-medium text-stone mb-1.5">Console</div>
+              {parserDebugResult.logs?.length ? (
+                <SelectablePre className="m-0 p-3.5 bg-ink-900 text-cream/90 font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap rounded-xl max-h-[220px]">
+                  {parserDebugResult.logs.join("\n")}
+                </SelectablePre>
+              ) : (
+                <div className="px-3.5 py-2.5 bg-panel border border-line rounded-lg text-xs text-mute">
+                  No console output — add <code className="font-mono">console.log(...)</code> to the script.
+                </div>
+              )}
+            </div>
+            <div>
+              <div className="text-xs font-medium text-stone mb-1.5">Outputs</div>
+              <SelectablePre className="m-0 p-3.5 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap rounded-xl max-h-[160px]">
+                {JSON.stringify(parserDebugResult.outputs ?? {}, null, 2)}
+              </SelectablePre>
+            </div>
+            <div>
+              <div className="text-xs font-medium text-stone mb-1.5">Environment writes</div>
+              <SelectablePre className="m-0 p-3.5 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap rounded-xl max-h-[160px]">
+                {JSON.stringify(parserDebugResult.envWrites ?? {}, null, 2)}
+              </SelectablePre>
+            </div>
+            <div className="flex justify-end pt-1 border-t border-line">
+              <button
+                onClick={() => setParserDebugResult(null)}
                 className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
               >
                 Close

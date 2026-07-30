@@ -3,6 +3,7 @@ import hashlib
 import pytest
 import asyncio
 from services.auth_sandbox import (
+    ParserScriptError,
     run_unsafe_auth_script,
     run_unsafe_response_parser,
     run_unsafe_request_interceptor,
@@ -34,7 +35,7 @@ async def test_run_unsafe_response_parser_vars_alias():
     headers = {"Content-Type": "application/json"}
     script = "vars.set('auth_token', response.body.data.token);"
 
-    outputs, env_writes = await run_unsafe_response_parser(body, headers, script)
+    outputs, env_writes, _ = await run_unsafe_response_parser(body, headers, script)
     assert outputs == {}
     assert env_writes == {"auth_token": "abcd-999"}
 
@@ -44,7 +45,7 @@ async def test_run_unsafe_response_parser_env_set():
     headers = {"Content-Type": "application/json"}
     script = "env.set('auth_token', response.body.data.token);"
 
-    outputs, env_writes = await run_unsafe_response_parser(body, headers, script)
+    outputs, env_writes, _ = await run_unsafe_response_parser(body, headers, script)
     assert outputs == {}
     assert env_writes == {"auth_token": "abcd-999"}
 
@@ -53,7 +54,7 @@ async def test_run_unsafe_response_parser_env_get():
     body = '{"data": {"id": "X-1"}}'
     script = "output.combined = env.get('BASE_URL') + '/orders/' + response.body.data.id;"
 
-    outputs, env_writes = await run_unsafe_response_parser(
+    outputs, env_writes, _ = await run_unsafe_response_parser(
         body, {}, script, env_vars={"BASE_URL": "https://api.example.com"}
     )
     assert outputs == {"combined": "https://api.example.com/orders/X-1"}
@@ -63,7 +64,7 @@ async def test_run_unsafe_response_parser_env_get():
 async def test_run_unsafe_response_parser_env_get_missing_is_undefined():
     script = "output.missing = env.get('NOPE') === undefined;"
 
-    outputs, _ = await run_unsafe_response_parser("{}", {}, script, env_vars={})
+    outputs, _, _ = await run_unsafe_response_parser("{}", {}, script, env_vars={})
     assert outputs == {"missing": True}
 
 @pytest.mark.asyncio
@@ -71,7 +72,7 @@ async def test_run_unsafe_response_parser_env_get_without_env_vars_arg():
     # Callers that don't pass env_vars keep working; get() just finds nothing
     script = "output.missing = env.get('ANY') === undefined;"
 
-    outputs, _ = await run_unsafe_response_parser("{}", {}, script)
+    outputs, _, _ = await run_unsafe_response_parser("{}", {}, script)
     assert outputs == {"missing": True}
 
 @pytest.mark.asyncio
@@ -82,7 +83,7 @@ async def test_run_unsafe_response_parser_env_get_sees_prior_set():
     output.roundtrip = env.get('auth_token');
     """
 
-    outputs, env_writes = await run_unsafe_response_parser(body, {}, script, env_vars={})
+    outputs, env_writes, _ = await run_unsafe_response_parser(body, {}, script, env_vars={})
     assert outputs == {"roundtrip": "t-42"}
     assert env_writes == {"auth_token": "t-42"}
 
@@ -93,7 +94,7 @@ async def test_run_unsafe_response_parser_env_set_overrides_loaded_value():
     output.value = env.get('token');
     """
 
-    outputs, env_writes = await run_unsafe_response_parser(
+    outputs, env_writes, _ = await run_unsafe_response_parser(
         "{}", {}, script, env_vars={"token": "old"}
     )
     assert outputs == {"value": "new"}
@@ -105,7 +106,7 @@ async def test_run_unsafe_response_parser_output_object():
     headers = {}
     script = "output.order_id = response.body.data.order_id;"
 
-    outputs, env_writes = await run_unsafe_response_parser(body, headers, script)
+    outputs, env_writes, _ = await run_unsafe_response_parser(body, headers, script)
     assert outputs == {"order_id": "ORD-7"}
     assert env_writes == {}
 
@@ -118,13 +119,13 @@ async def test_run_unsafe_response_parser_output_and_env():
     env.set('last_token', response.body.data.token);
     """
 
-    outputs, env_writes = await run_unsafe_response_parser(body, headers, script)
+    outputs, env_writes, _ = await run_unsafe_response_parser(body, headers, script)
     assert outputs == {"order_id": "ORD-7"}
     assert env_writes == {"last_token": "t-1"}
 
 @pytest.mark.asyncio
 async def test_run_unsafe_response_parser_empty_script():
-    outputs, env_writes = await run_unsafe_response_parser('{"a": 1}', {}, "const nothing = 1;")
+    outputs, env_writes, _ = await run_unsafe_response_parser('{"a": 1}', {}, "const nothing = 1;")
     assert outputs == {}
     assert env_writes == {}
 
@@ -134,7 +135,7 @@ async def test_run_unsafe_response_parser_numeric_value():
     headers = {"Content-Type": "application/json"}
     script = "if(response && response.body && response.body.data && response.body.data.length > 0) { output.shipper_id = response.body.data[0].id; }"
 
-    outputs, _ = await run_unsafe_response_parser(body, headers, script)
+    outputs, _, _ = await run_unsafe_response_parser(body, headers, script)
     assert outputs == {"shipper_id": 5272122}
 
 @pytest.mark.asyncio
@@ -143,7 +144,7 @@ async def test_run_unsafe_response_parser_boolean_value():
     headers = {}
     script = "output.is_active = response.body.data.active; env.set('is_active', response.body.data.active);"
 
-    outputs, env_writes = await run_unsafe_response_parser(body, headers, script)
+    outputs, env_writes, _ = await run_unsafe_response_parser(body, headers, script)
     assert outputs == {"is_active": True}
     assert env_writes == {"is_active": True}
 
@@ -154,7 +155,7 @@ async def test_run_unsafe_response_parser_object_value_stringified():
     headers = {}
     script = "env.set('user', response.body.data.user); output.user = response.body.data.user;"
 
-    outputs, env_writes = await run_unsafe_response_parser(body, headers, script)
+    outputs, env_writes, _ = await run_unsafe_response_parser(body, headers, script)
     assert env_writes == {"user": '{"id":1,"name":"a"}'}
     assert outputs == {"user": {"id": 1, "name": "a"}}
 
@@ -164,7 +165,7 @@ async def test_run_unsafe_response_parser_null_value():
     headers = {}
     script = "env.set('missing', response.body.data.missing);"
 
-    _, env_writes = await run_unsafe_response_parser(body, headers, script)
+    _, env_writes, _ = await run_unsafe_response_parser(body, headers, script)
     assert env_writes == {"missing": ""}
 
 @pytest.mark.asyncio
@@ -175,6 +176,54 @@ async def test_run_unsafe_response_parser_script_error_raises():
 
     with pytest.raises(RuntimeError):
         await run_unsafe_response_parser(body, headers, script)
+
+@pytest.mark.asyncio
+async def test_run_unsafe_response_parser_console_log_captured():
+    body = '{"data": {"token": "t-1"}}'
+    script = """
+    console.log("token is", response.body.data.token);
+    console.log(response.body.data);
+    """
+
+    _, _, logs = await run_unsafe_response_parser(body, {}, script)
+    assert logs == ["token is t-1", '{"token":"t-1"}']
+
+@pytest.mark.asyncio
+async def test_run_unsafe_response_parser_console_variants_and_primitives():
+    script = """
+    console.info(1, true, null, undefined);
+    console.warn("w");
+    console.error("e");
+    """
+
+    _, _, logs = await run_unsafe_response_parser("{}", {}, script)
+    assert logs == ["1 true null undefined", "w", "e"]
+
+@pytest.mark.asyncio
+async def test_run_unsafe_response_parser_no_logs_by_default():
+    _, _, logs = await run_unsafe_response_parser("{}", {}, "output.a = 1;")
+    assert logs == []
+
+@pytest.mark.asyncio
+async def test_run_unsafe_response_parser_log_cap():
+    script = "for (let i = 0; i < 600; i++) { console.log('line', i); }"
+
+    _, _, logs = await run_unsafe_response_parser("{}", {}, script)
+    assert len(logs) == 501
+    assert logs[0] == "line 0"
+    assert logs[499] == "line 499"
+    assert "truncated" in logs[500]
+
+@pytest.mark.asyncio
+async def test_run_unsafe_response_parser_error_keeps_logs():
+    script = """
+    console.log("before the crash");
+    output.x = response.nope.deep.path;
+    """
+
+    with pytest.raises(ParserScriptError) as exc_info:
+        await run_unsafe_response_parser('{"data": {}}', {}, script)
+    assert exc_info.value.logs == ["before the crash"]
 
 @pytest.mark.asyncio
 async def test_run_unsafe_request_interceptor_mutates_headers_and_body():

@@ -135,22 +135,40 @@ async def run_unsafe_auth_script(user_script: str, context_env: Dict[str, str]):
     except Exception as e:
         return f"ERROR: Execution failed: {str(e)}"
 
-async def run_unsafe_response_parser(response_body: str, response_headers: Dict[str, str], parser_script: str, env_vars: Optional[Dict[str, str]] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+MAX_PARSER_LOGS = 500
+
+class ParserScriptError(RuntimeError):
+    """Parser script failure that keeps the console logs emitted before the throw."""
+    def __init__(self, message: str, logs: List[str]):
+        super().__init__(message)
+        self.logs = logs
+
+async def run_unsafe_response_parser(response_body: str, response_headers: Dict[str, str], parser_script: str, env_vars: Optional[Dict[str, str]] = None) -> Tuple[Dict[str, Any], Dict[str, Any], List[str]]:
     """
     Runs a response parser script on an HTTP response.
-    Injects 'response', an 'output' object for declared request outputs, and an
+    Injects 'response', an 'output' object for declared request outputs, an
     'env' storage object ('vars' kept as a deprecated alias) with get(key) over
     the active environment's variables and set(key, value) for environment
-    writes. Returns (outputs, env_writes).
+    writes, and a 'console' whose log/info/warn/error calls are captured for
+    debugging. Returns (outputs, env_writes, logs); on script failure raises
+    ParserScriptError carrying the logs emitted before the throw.
     """
     ctx = quickjs.Context()
 
     # Store set variables
     extracted_vars = {}
+    logs: List[str] = []
 
     def vars_set_handler(key: str, value: Any):
         extracted_vars[key] = value
 
+    def console_log_handler(message: str):
+        if len(logs) < MAX_PARSER_LOGS:
+            logs.append(message)
+        elif len(logs) == MAX_PARSER_LOGS:
+            logs.append(f"… console output truncated after {MAX_PARSER_LOGS} lines")
+
+    ctx.add_callable("python_console_log", console_log_handler)
     ctx.add_callable("python_vars_set", vars_set_handler)
     # Coerce values on the JS side: the quickjs->Python bridge only accepts
     # primitives, so objects/arrays are JSON-stringified and null/undefined
@@ -175,6 +193,18 @@ async def run_unsafe_response_parser(response_body: str, response_headers: Dict[
     };
     const vars = env;
     const output = {};
+    const console = (function() {
+        const log = function(...args) {
+            python_console_log(args.map(function(a) {
+                if (a === undefined) return "undefined";
+                if (typeof a === "object" && a !== null) {
+                    try { return JSON.stringify(a); } catch (e) { return String(a); }
+                }
+                return String(a);
+            }).join(" "));
+        };
+        return { log: log, info: log, warn: log, error: log };
+    })();
     """)
 
     # Try parsing response body as JSON
@@ -214,9 +244,9 @@ async def run_unsafe_response_parser(response_body: str, response_headers: Dict[
         if str(status).startswith("ERROR:"):
             raise ValueError(status)
         outputs = json.loads(ctx.eval("JSON.stringify(output)") or "{}")
-        return outputs, extracted_vars
+        return outputs, extracted_vars, logs
     except Exception as e:
-        raise RuntimeError(f"Parser execution failed: {str(e)}")
+        raise ParserScriptError(f"Parser execution failed: {str(e)}", logs)
 
 async def run_unsafe_test_script(
     request_obj: Dict[str, Any],
