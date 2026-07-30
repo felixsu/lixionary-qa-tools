@@ -18,7 +18,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   Plus, Play, Square, Save, Download, Trash2, Pencil, Copy, Send, Repeat2, Timer,
-  ShieldCheck, AlertCircle, X, RotateCcw,
+  ShieldCheck, AlertCircle, X, RotateCcw, Sparkles,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, findRequestInTree } from "../../context/AppContext";
@@ -41,8 +41,15 @@ import {
   type NodeRunStatus, type RunRecord, type FlowRunSummary, type RunHandle,
 } from "../../utils/flowRunner";
 import { buildRunCsv, downloadCsv, runCsvFilename, persistLastRun, loadLastRun } from "../../utils/flowReport";
+import {
+  uniqueCopyName, renameNodeConfig,
+  buildCatalog, toWireCatalog, buildCanvasContext, validateAndPlan,
+  loadChat, persistChat, clearChat, migrateChat, NEW_FLOW_CHAT_KEY,
+  type ChatEntry, type Proposal,
+} from "../../utils/studioAssistant";
 import { studioNodeTypes, type StudioNode, type StudioNodeData } from "./components/nodes";
 import RequestPicker from "./RequestPicker";
+import AssistantPanel from "./AssistantPanel";
 
 const PALETTE: { type: FlowNodeType; label: string; icon: typeof Send; hint: string }[] = [
   { type: "request", label: "Request", icon: Send, hint: "Run a saved API Explorer request" },
@@ -105,71 +112,6 @@ const requestInputNames = (collections: Collection[], requestId: string): string
   return names;
 };
 
-// ---- copy/paste helpers ------------------------------------------------------
-
-// Unique name for a pasted copy: keep the original shape, bump a _n suffix.
-const uniqueCopyName = (name: string, taken: Set<string>): string => {
-  if (!taken.has(name)) return name;
-  const base = name.replace(/_\d+$/, "") || name;
-  let i = 2;
-  while (taken.has(`${base}_${i}`)) i++;
-  return `${base}_${i}`;
-};
-
-// Rename the head of a "node.path" reference when it points at a copied node.
-const renameRef = (ref: string, renames: Map<string, string>): string => {
-  const segments = ref.split(".");
-  const renamed = renames.get(segments[0]?.trim());
-  return renamed ? [renamed, ...segments.slice(1)].join(".") : ref;
-};
-
-// Rename {{node.path}} tokens inside static values ({{env.X}} / {{$...}} heads
-// never appear in the rename map, so they pass through untouched).
-const renameStaticTokens = (text: string, renames: Map<string, string>): string =>
-  text.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (match, key: string) => {
-    const segments = key.split(".");
-    const renamed = renames.get(segments[0]?.trim());
-    return renamed ? `{{${[renamed, ...segments.slice(1)].join(".")}}}` : match;
-  });
-
-const renameRequestConfig = (cfg: RequestNodeConfig, renames: Map<string, string>): RequestNodeConfig => ({
-  ...cfg,
-  mappings: (cfg.mappings || []).map((m) =>
-    m.source === "reference"
-      ? { ...m, value: renameRef(m.value, renames) }
-      : { ...m, value: renameStaticTokens(m.value, renames) }
-  ),
-});
-
-// Rewrite references inside a pasted node's config so links between copied
-// nodes follow the copies; references to non-copied nodes stay as they are.
-const renameNodeConfig = (node: FlowNode, renames: Map<string, string>): FlowNode["config"] => {
-  switch (node.type) {
-    case "request":
-      return renameRequestConfig(node.config as RequestNodeConfig, renames);
-    case "looper": {
-      const cfg = node.config as LooperNodeConfig;
-      return {
-        ...cfg,
-        itemsValue: cfg.itemsSource === "reference" ? renameRef(cfg.itemsValue, renames) : cfg.itemsValue,
-        request: renameRequestConfig(cfg.request, renames),
-      };
-    }
-    case "verifier": {
-      const cfg = node.config as VerifierNodeConfig;
-      return {
-        ...cfg,
-        request: renameRequestConfig(cfg.request, renames),
-        comparisons: (cfg.comparisons || []).map((c) =>
-          c.expectedSource === "reference" ? { ...c, expected: renameRef(c.expected, renames) } : c
-        ),
-      };
-    }
-    case "delay":
-      return node.config;
-  }
-};
-
 // ---- page -------------------------------------------------------------------
 
 export default function ApiStudioPage() {
@@ -186,6 +128,7 @@ function StudioEditor() {
     collections,
     apiCall,
     environments, selectedEnvId,
+    llmSettings,
   } = useAppContext();
 
   const [selectedFlowId, setSelectedFlowId] = useState<string>("");
@@ -206,6 +149,14 @@ function StudioEditor() {
   // this ref every render instead of reordering the file.
   const onSaveRef = useRef<() => void>(() => {});
 
+  // ---- AI assistant state ----
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [chatEntries, setChatEntries] = useState<ChatEntry[]>([]);
+  const [assistantBusy, setAssistantBusy] = useState(false);
+  const [assistantError, setAssistantError] = useState<string | null>(null);
+  // Current transcript key; also used to drop in-flight replies after a flow switch.
+  const chatKeyRef = useRef<string>(NEW_FLOW_CHAT_KEY);
+
   const [showNewFlowModal, setShowNewFlowModal] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [flowNameDraft, setFlowNameDraft] = useState("");
@@ -214,6 +165,15 @@ function StudioEditor() {
   const { screenToFlowPosition } = useReactFlow();
 
   const selectedFlow = flows.find((f) => f.id === selectedFlowId) || null;
+
+  // Per-flow chat transcript (device-local). "__new__" holds the conversation
+  // started before any flow exists; it moves onto the flow created by Apply.
+  const chatKey = selectedFlowId || NEW_FLOW_CHAT_KEY;
+  useEffect(() => {
+    chatKeyRef.current = chatKey;
+    setChatEntries(loadChat(chatKey));
+    setAssistantError(null);
+  }, [chatKey]);
 
   const dirty = useMemo(() => {
     if (!selectedFlow) return false;
@@ -550,6 +510,14 @@ function StudioEditor() {
     return null;
   }, [lastSummary, nodes, edges, validationError]);
 
+  // Memoized so the assistant panel's per-render proposal re-validation only
+  // recomputes when the canvas or collections actually change.
+  const assistantCanvas = useMemo(
+    () => ({ nodes: serializeNodes(nodes), edges: serializeEdges(edges) }),
+    [nodes, edges]
+  );
+  const assistantCatalog = useMemo(() => buildCatalog(collections).rows, [collections]);
+
   // ---- toolbar actions ----
 
   const onSave = async () => {
@@ -683,6 +651,137 @@ function StudioEditor() {
     downloadCsv(buildRunCsv(records), runCsvFilename(selectedFlow.name));
   };
 
+  // ---- AI assistant handlers ----
+
+  // Backend also 400s when unconfigured — this is just the friendlier path.
+  const ensureLlmConfigured = (): boolean => {
+    if (llmSettings?.activeProvider && llmSettings.hasKey) return true;
+    showToast("No AI provider configured — add an API key in Settings (Configuration → Settings).", { type: "error" });
+    return false;
+  };
+
+  const updateChat = (key: string, entries: ChatEntry[]) => {
+    setChatEntries(entries);
+    persistChat(key, entries);
+  };
+
+  // Core send. `entries` must already end with the newest user turn; the
+  // request catalog and live canvas ride along as context on every call
+  // (stateless backend).
+  const sendAssistantTranscript = async (entries: ChatEntry[]) => {
+    const keyAtSend = chatKeyRef.current;
+    setAssistantBusy(true);
+    setAssistantError(null);
+    try {
+      const catalog = buildCatalog(collections);
+      const context = {
+        catalog: toWireCatalog(catalog.rows),
+        catalogTruncated: catalog.truncated,
+        canvas: buildCanvasContext(
+          selectedFlow?.name || "(no flow yet)",
+          serializeNodes(nodes),
+          serializeEdges(edges),
+          collections
+        ),
+      };
+      const res = await apiCall("/api/ai/studio-assistant", {
+        method: "POST",
+        body: JSON.stringify({
+          messages: entries.slice(-16).map(({ role, content }) => ({ role, content })),
+          context,
+        }),
+      });
+      if (keyAtSend !== chatKeyRef.current) return; // flow switched mid-flight — drop the reply
+      const proposal: Proposal = {
+        message: typeof res?.message === "string" ? res.message : "",
+        actions: Array.isArray(res?.actions) ? res.actions : [],
+        parseError: !!res?.parseError,
+      };
+      const assistantEntry: ChatEntry = {
+        role: "assistant",
+        // Raw JSON string — the model sees its own prior proposals verbatim.
+        content: JSON.stringify({ message: proposal.message, actions: proposal.actions }),
+        proposal,
+        proposalState: proposal.actions.length ? "pending" : undefined,
+      };
+      updateChat(keyAtSend, [...entries, assistantEntry]);
+    } catch (e: any) {
+      if (keyAtSend === chatKeyRef.current) setAssistantError(e.message || "Assistant request failed");
+    } finally {
+      setAssistantBusy(false);
+    }
+  };
+
+  const onAssistantSend = (text: string) => {
+    if (assistantBusy || !ensureLlmConfigured()) return;
+    const next: ChatEntry[] = [...chatEntries, { role: "user", content: text }];
+    updateChat(chatKeyRef.current, next);
+    void sendAssistantTranscript(next);
+  };
+
+  // The failed turn's user message is already in the transcript — resend as-is.
+  const onAssistantRetry = () => {
+    if (assistantBusy || !ensureLlmConfigured()) return;
+    if (!chatEntries.length || chatEntries[chatEntries.length - 1].role !== "user") return;
+    void sendAssistantTranscript(chatEntries);
+  };
+
+  const onDismissProposal = (index: number) => {
+    updateChat(
+      chatKeyRef.current,
+      chatEntries.map((e, i) => (i === index ? { ...e, proposalState: "dismissed" as const } : e))
+    );
+  };
+
+  const onApplyProposal = async (index: number) => {
+    const entry = chatEntries[index];
+    const proposal = entry?.proposal;
+    if (!proposal || entry.proposalState !== "pending" || isRunning || assistantBusy) return;
+    // Re-validate at click time — the canvas may have changed since the
+    // proposal was made. Atomic: any error applies nothing.
+    const plan = validateAndPlan(
+      proposal.actions,
+      { nodes: serializeNodes(nodes), edges: serializeEdges(edges) },
+      buildCatalog(collections).rows
+    );
+    if (!plan.ok || !plan.result) {
+      showToast("This proposal can't be applied — see the errors on its card.", { type: "error" });
+      return;
+    }
+    const appliedCount = plan.steps.length;
+    const updated: ChatEntry[] = [
+      ...chatEntries.map((e, i) => (i === index ? { ...e, proposalState: "applied" as const } : e)),
+      { role: "user", content: `[Applied all ${appliedCount} proposed actions to the canvas.]`, synthetic: true },
+    ];
+
+    if (plan.createFlowName) {
+      if (dirty) {
+        const ok = await confirmDialog("You have unsaved changes on this flow. Discard them and create the new flow?");
+        if (!ok) return;
+      }
+      let created: Flow;
+      try {
+        created = await createFlow(plan.createFlowName);
+      } catch (e: any) {
+        showToast(e.message, { type: "error" });
+        return;
+      }
+      // Move the transcript (with its applied marker) onto the new flow BEFORE
+      // selecting it, so the chatKey effect reloads the right history.
+      persistChat(created.id, updated);
+      clearChat(chatKeyRef.current);
+      setSelectedFlowId(created.id);
+      loadFlow(created);
+    } else {
+      updateChat(chatKeyRef.current, updated);
+    }
+    // The canvas becomes dirty/unsaved deliberately — the user reviews the
+    // result, then Saves and Runs themself.
+    setNodes(plan.result.nodes.map((fn) => toStudioNode(fn, "idle", collections)));
+    setEdges(plan.result.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })));
+    showToast(`Applied ${appliedCount} actions — review the canvas, then Save`, { type: "success" });
+  };
+
   const onCreateFlow = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!flowNameDraft.trim()) return;
@@ -806,6 +905,20 @@ function StudioEditor() {
             <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" /> {envWarning}
           </span>
         ) : null}
+        <button
+          onClick={() => {
+            setSelectedNodeId(null);
+            setAssistantOpen((v) => !v);
+          }}
+          title="AI assistant — build this flow by chatting"
+          className={`h-8 px-3 flex items-center gap-1.5 border rounded-md text-xs font-medium transition-colors ${
+            assistantOpen
+              ? "bg-clay/10 border-clay text-clay"
+              : "bg-cream border-line text-graphite hover:bg-panel"
+          }`}
+        >
+          <Sparkles className="h-3.5 w-3.5" /> Assistant
+        </button>
         <button
           onClick={onDownloadReport}
           disabled={!records.length}
@@ -941,6 +1054,27 @@ function StudioEditor() {
               setEdges((prev) => prev.filter((e) => e.source !== selectedNode.id && e.target !== selectedNode.id));
               setSelectedNodeId(null);
             }}
+          />
+        )}
+
+        {/* AI assistant — shares the right-panel slot with the inspector; the
+            inspector wins while a node is selected. */}
+        {assistantOpen && !(selectedFlow && selectedNode) && (
+          <AssistantPanel
+            entries={chatEntries}
+            busy={assistantBusy}
+            error={assistantError}
+            canvas={assistantCanvas}
+            catalog={assistantCatalog}
+            onSend={onAssistantSend}
+            onRetrySend={onAssistantRetry}
+            onApply={(i) => void onApplyProposal(i)}
+            onDismiss={onDismissProposal}
+            onClear={() => {
+              clearChat(chatKeyRef.current);
+              setChatEntries([]);
+            }}
+            onClose={() => setAssistantOpen(false)}
           />
         )}
       </div>

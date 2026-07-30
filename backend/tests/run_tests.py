@@ -19,6 +19,7 @@ from tests.test_admin import test_serialize_user, test_serialize_collection
 from tests.test_flows import test_serialize_flow_doc
 from tests.test_auth import test_expired_token_reports_expiry_not_bad_signature, test_refresh_token_rotates_and_rejects_replay, test_refresh_token_rejected_when_expired_or_user_disabled, test_revoke_is_idempotent
 from tests.test_user_guides import test_serialize_guide_hierarchy_fields, test_normalize_slug, test_compute_depth_and_height, test_is_descendant_cycle_detection, test_move_depth_rule
+from tests.test_local_ai import test_validate_assistant_response_shapes, test_normalize_messages_merges_roles
 
 def run():
     print("Running tests...")
@@ -104,6 +105,12 @@ def run():
 
         test_move_depth_rule()
         print("✓ test_move_depth_rule passed")
+
+        test_validate_assistant_response_shapes()
+        print("✓ test_validate_assistant_response_shapes passed")
+
+        test_normalize_messages_merges_roles()
+        print("✓ test_normalize_messages_merges_roles passed")
 
         print("\nAll tests passed successfully!")
     except AssertionError as e:
