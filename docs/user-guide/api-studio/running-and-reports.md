@@ -12,6 +12,20 @@
 
 > **Note**: Run executes the **live canvas state**, including unsaved edits. Pressing Run also clears the previous run's results immediately.
 
+## **Retrying a Failed Run**
+
+After a failed or cancelled run, a **Retry** button appears next to Run:
+
+* Retry re-executes **only the nodes that did not succeed** — failed nodes and their skipped downstream. Successful nodes (including entire successful parallel branches) are **not** re-executed; their published outputs are reused, so Reference mappings on retried nodes resolve to **exactly the same values** as in the original run.
+* Retry is node-level: a Looper that failed partway restarts from iteration 0.
+* When the retry finishes, the run results **merge** into one complete record set — the original run's records for successful nodes plus the new records for retried nodes — shown in the inspector, downloadable as one CSV, and persisted as the last run. If the retry fails again, it can itself be retried.
+* Retry works after an app reload too (the run and its outputs persist per flow on this device). It is disabled — hover the button for the reason — when:
+  * the flow was **edited since the run** (structure: nodes, names, configs, or connections — moving nodes around is fine),
+  * the stored run predates the Retry feature, or
+  * a successful node's outputs were **too large to persist** (over 20,000 characters) — retrying in the same session still works; only after a reload is the stored context unusable.
+* Retry uses the **currently selected environment** and the **current request definitions** from your collections — edits to those are picked up, just like a normal run.
+* Stopping mid-retry behaves like stopping a run; the flow stays retryable.
+
 ## **Inspecting Results (Last run)**
 
 Click a node after (or during) a run to open the inspector. The **Last run** section shows one card per record — each Looper iteration and each Verifier attempt gets its own card — with:
@@ -51,7 +65,7 @@ Click **Report** (enabled once a run has records) to download `<flowName>-run-<t
 * The **last run persists per flow** on this device (browser/app local storage) — after a reload, node badges, the inspector's Last run cards, and the **Report** button are all restored. Only the most recent run is kept, and it is overwritten by the next run.
 * Run results are **not synced** to the cloud, and there is no run history, scheduling, or headless/CLI execution — flows run entirely in the app.
 
-> **Caveat**: When persisting, very large payloads/response bodies are truncated at 20,000 characters. A CSV downloaded **after a reload** may therefore contain truncated data; download the report in the same session for the complete record.
+> **Caveat**: When persisting, very large payloads/response bodies are truncated at 20,000 characters. A CSV downloaded **after a reload** may therefore contain truncated data; download the report in the same session for the complete record. If a successful node's outputs exceed the limit, the run's resume data is dropped entirely (rather than stored corrupted) and **Retry becomes unavailable after a reload** for that run.
 
 ## **Example: Chained Smoke Flow**
 
