@@ -1860,7 +1860,8 @@ export default function ApiExplorerPage() {
                       <div className="flex items-center justify-between">
                         <span className="text-[11px] text-mute">
                           Parser script runs after the response — assign <code className="font-mono">output.&lt;name&gt;</code> for
-                          each declared output; <code className="font-mono">env.set(key, value)</code> writes environment variables.
+                          each declared output; <code className="font-mono">env.get(key)</code> reads and{" "}
+                          <code className="font-mono">env.set(key, value)</code> writes environment variables.
                         </span>
                         <button
                           onClick={() => setShowAiModal(true)}

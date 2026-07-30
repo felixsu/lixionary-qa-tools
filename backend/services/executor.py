@@ -420,7 +420,8 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
             outputs_result, parsed_variables = await run_unsafe_response_parser(
                 response_body=response_body,
                 response_headers=response_headers,
-                parser_script=parser_script
+                parser_script=parser_script,
+                env_vars=load_env_vars(environment_id)
             )
 
             # If env writes were made, save them back to the active environment

@@ -135,12 +135,13 @@ async def run_unsafe_auth_script(user_script: str, context_env: Dict[str, str]):
     except Exception as e:
         return f"ERROR: Execution failed: {str(e)}"
 
-async def run_unsafe_response_parser(response_body: str, response_headers: Dict[str, str], parser_script: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+async def run_unsafe_response_parser(response_body: str, response_headers: Dict[str, str], parser_script: str, env_vars: Optional[Dict[str, str]] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Runs a response parser script on an HTTP response.
     Injects 'response', an 'output' object for declared request outputs, and an
-    'env' storage object ('vars' kept as a deprecated alias) for environment writes.
-    Returns (outputs, env_writes).
+    'env' storage object ('vars' kept as a deprecated alias) with get(key) over
+    the active environment's variables and set(key, value) for environment
+    writes. Returns (outputs, env_writes).
     """
     ctx = quickjs.Context()
 
@@ -154,14 +155,22 @@ async def run_unsafe_response_parser(response_body: str, response_headers: Dict[
     # Coerce values on the JS side: the quickjs->Python bridge only accepts
     # primitives, so objects/arrays are JSON-stringified and null/undefined
     # become empty strings instead of raising a conversion error.
+    # set() mirrors into __env_vars so get() sees writes made earlier in the
+    # same script, coerced exactly as they will be persisted.
+    ctx.eval(f"const __env_vars = {json.dumps(env_vars or {})};")
     ctx.eval("""
     const env = {
+        get: function(key) {
+            key = String(key);
+            return Object.prototype.hasOwnProperty.call(__env_vars, key) ? __env_vars[key] : undefined;
+        },
         set: function(key, val) {
-            if (val === null || val === undefined) {
-                python_vars_set(String(key), "");
-                return;
-            }
-            python_vars_set(String(key), typeof val === "object" ? JSON.stringify(val) : val);
+            key = String(key);
+            const coerced = (val === null || val === undefined)
+                ? ""
+                : (typeof val === "object" ? JSON.stringify(val) : val);
+            __env_vars[key] = coerced;
+            python_vars_set(key, coerced);
         }
     };
     const vars = env;
