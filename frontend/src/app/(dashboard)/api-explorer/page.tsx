@@ -15,6 +15,7 @@ import type { InputBinding } from "../../context/AppContext";
 import { useToast } from "../../context/ToastContext";
 import { useSearchIndexStatus } from "../../context/SearchIndexStatusContext";
 import SearchResultsList from "./SearchResultsList";
+import OutputsDialog from "./OutputsDialog";
 import Dropdown from "../../components/Dropdown";
 import SelectablePre from "../../components/SelectablePre";
 import { Modal, ModalFooter } from "../../components/Modal";
@@ -656,7 +657,7 @@ export default function ApiExplorerPage() {
   const [isBuildingCurl, setIsBuildingCurl] = useState(false);
   const [resolvedCurl, setResolvedCurl] = useState("");
   const [curlError, setCurlError] = useState<string | null>(null);
-  const [newOutputName, setNewOutputName] = useState("");
+  const [outputsDialog, setOutputsDialog] = useState<{ open: boolean; selected?: string } | null>(null);
   const [descMode, setDescMode] = useState<"write" | "preview">("write");
   const [showImproveModal, setShowImproveModal] = useState(false);
   const [improvedDraft, setImprovedDraft] = useState("");
@@ -702,28 +703,6 @@ export default function ApiExplorerPage() {
       next[idx] = { ...next[idx], ...patch };
       return next;
     });
-
-  const renameOutputAt = (index: number, newName: string) => {
-    const oldName = reqOutputs[index];
-    setReqOutputs((prev) => prev.map((o, i) => (i === index ? newName : o)));
-    if (oldName === newName) return;
-    setReqOutputDescriptions((prev) => {
-      const { [oldName]: desc, ...rest } = prev;
-      return newName ? { ...rest, [newName]: desc ?? "" } : rest;
-    });
-  };
-
-  const removeOutputAt = (index: number) => {
-    const name = reqOutputs[index];
-    setReqOutputs((prev) => prev.filter((_, i) => i !== index));
-    setReqOutputDescriptions((prev) => {
-      const { [name]: _removed, ...rest } = prev;
-      return rest;
-    });
-  };
-
-  const setOutputDescription = (name: string, description: string) =>
-    setReqOutputDescriptions((prev) => ({ ...prev, [name]: description }));
 
   const pathname = usePathname();
   const router = useRouter();
@@ -1853,47 +1832,28 @@ export default function ApiExplorerPage() {
                 {configTab === "output" && (
                   <div className="flex flex-col h-full">
                     <div className="px-4 pt-3 pb-2 flex flex-col gap-2 flex-shrink-0">
-                      <div className="flex flex-col gap-2">
-                        <span className="text-xs font-medium text-stone">Declared outputs</span>
-                        <div className="flex flex-col gap-1.5">
-                          {reqOutputs.map((name, index) => (
-                            <div key={index} className="flex flex-col gap-1 p-2 bg-panel border border-line rounded-md">
-                              <div className="flex items-center gap-2">
-                                <input
-                                  value={name}
-                                  placeholder="output name"
-                                  onChange={(e) => renameOutputAt(index, e.target.value)}
-                                  className={`${inputCls} flex-1 font-mono`}
-                                />
-                                <button
-                                  onClick={() => removeOutputAt(index)}
-                                  className="h-7 w-7 rounded-md border border-line flex items-center justify-center text-stone hover:bg-danger-soft hover:text-danger transition-colors flex-shrink-0"
-                                >
-                                  <X className="h-3.5 w-3.5" />
-                                </button>
-                              </div>
-                              <input
-                                value={reqOutputDescriptions[name] || ""}
-                                placeholder="description (optional)"
-                                onChange={(e) => setOutputDescription(name, e.target.value)}
-                                className={`${inputCls} text-[11px]`}
-                              />
-                            </div>
-                          ))}
-                          <input
-                            value={newOutputName}
-                            placeholder="add output…"
-                            onChange={(e) => setNewOutputName(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key !== "Enter") return;
-                              e.preventDefault();
-                              const name = newOutputName.trim();
-                              if (name && !reqOutputs.includes(name)) setReqOutputs([...reqOutputs, name]);
-                              setNewOutputName("");
-                            }}
-                            className={`${inputCls} w-full`}
-                          />
-                        </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-medium text-stone flex-shrink-0">Declared outputs</span>
+                        {reqOutputs.length ? (
+                          reqOutputs.map((name) => (
+                            <button
+                              key={name}
+                              onClick={() => setOutputsDialog({ open: true, selected: name })}
+                              title={reqOutputDescriptions[name] || "Edit output"}
+                              className="px-2.5 py-1 bg-panel border border-line rounded-full font-mono text-xs text-ink hover:border-clay transition-colors"
+                            >
+                              {name}
+                            </button>
+                          ))
+                        ) : (
+                          <span className="text-[11px] text-mute">none</span>
+                        )}
+                        <button
+                          onClick={() => setOutputsDialog({ open: true })}
+                          className="flex items-center gap-1.5 px-2.5 py-1 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors flex-shrink-0"
+                        >
+                          <Pencil className="h-3 w-3" /> {reqOutputs.length ? "Manage" : "Add"}
+                        </button>
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-[11px] text-mute">
@@ -2571,6 +2531,19 @@ export default function ApiExplorerPage() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {outputsDialog?.open && (
+        <OutputsDialog
+          outputs={reqOutputs}
+          descriptions={reqOutputDescriptions}
+          initialSelected={outputsDialog.selected}
+          onSave={(names, descs) => {
+            setReqOutputs(names);
+            setReqOutputDescriptions(descs);
+          }}
+          onClose={() => setOutputsDialog(null)}
+        />
       )}
 
       {showAiModal && (
