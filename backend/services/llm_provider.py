@@ -18,7 +18,7 @@ point-read), so a Settings save takes effect immediately.
 import asyncio
 import json
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from db.local_store import LocalStore
 
@@ -87,11 +87,36 @@ def model_for(provider: str) -> str:
     return DEFAULT_MODELS[provider]
 
 
-def _generate_claude(
+# Conversation turn: {"role": "user" | "assistant", "content": str}.
+ChatMessage = Dict[str, str]
+
+
+def normalize_messages(messages: List[ChatMessage]) -> List[ChatMessage]:
+    """Drop empty turns and merge consecutive same-role turns.
+
+    Callers may append synthetic user-role entries (e.g. "[Applied N actions]")
+    right after a prior user turn; some providers reject or mishandle
+    consecutive same-role messages, so the transcript is made provider-safe
+    here once instead of in each branch.
+    """
+    merged: List[ChatMessage] = []
+    for m in messages:
+        role = m.get("role")
+        content = (m.get("content") or "").strip()
+        if role not in ("user", "assistant") or not content:
+            continue
+        if merged and merged[-1]["role"] == role:
+            merged[-1] = {"role": role, "content": merged[-1]["content"] + "\n\n" + content}
+        else:
+            merged.append({"role": role, "content": content})
+    return merged
+
+
+def _chat_claude(
     key: str,
     model: str,
     system_instruction: str,
-    prompt: str,
+    messages: List[ChatMessage],
     max_output_tokens: int,
 ) -> str:
     import anthropic
@@ -105,7 +130,7 @@ def _generate_claude(
         model=model,
         max_tokens=max_output_tokens,
         system=system_instruction,
-        messages=[{"role": "user", "content": prompt}],
+        messages=messages,
         **kwargs,
     )
     if response.stop_reason == "refusal":
@@ -113,11 +138,11 @@ def _generate_claude(
     return "".join(block.text for block in response.content if block.type == "text")
 
 
-def _generate_gemini(
+def _chat_gemini(
     key: str,
     model: str,
     system_instruction: str,
-    prompt: str,
+    messages: List[ChatMessage],
     temperature: Optional[float],
     top_p: Optional[float],
     max_output_tokens: int,
@@ -134,19 +159,23 @@ def _generate_gemini(
         config_kwargs["temperature"] = temperature
     if top_p is not None:
         config_kwargs["top_p"] = top_p
+    contents = [
+        {"role": "user" if m["role"] == "user" else "model", "parts": [{"text": m["content"]}]}
+        for m in messages
+    ]
     response = client.models.generate_content(
         model=model,
-        contents=prompt,
+        contents=contents,
         config=types.GenerateContentConfig(**config_kwargs),
     )
     return response.text or ""
 
 
-def _generate_minimax(
+def _chat_minimax(
     key: str,
     model: str,
     system_instruction: str,
-    prompt: str,
+    messages: List[ChatMessage],
     temperature: Optional[float],
     top_p: Optional[float],
     max_output_tokens: int,
@@ -157,10 +186,7 @@ def _generate_minimax(
     body: Dict[str, Any] = {
         "model": model,
         "max_tokens": max_output_tokens,
-        "messages": [
-            {"role": "system", "content": system_instruction},
-            {"role": "user", "content": prompt},
-        ],
+        "messages": [{"role": "system", "content": system_instruction}, *messages],
     }
     if temperature is not None:
         body["temperature"] = temperature
@@ -182,6 +208,38 @@ def _generate_minimax(
         raise RuntimeError(f"MiniMax returned no completion: {detail}")
     content = (choices[0].get("message") or {}).get("content") or ""
     return _THINK_TAG_RE.sub("", content).strip()
+
+
+def _generate_claude(key: str, model: str, system_instruction: str, prompt: str, max_output_tokens: int) -> str:
+    return _chat_claude(key, model, system_instruction, [{"role": "user", "content": prompt}], max_output_tokens)
+
+
+def _generate_gemini(
+    key: str,
+    model: str,
+    system_instruction: str,
+    prompt: str,
+    temperature: Optional[float],
+    top_p: Optional[float],
+    max_output_tokens: int,
+) -> str:
+    return _chat_gemini(
+        key, model, system_instruction, [{"role": "user", "content": prompt}], temperature, top_p, max_output_tokens
+    )
+
+
+def _generate_minimax(
+    key: str,
+    model: str,
+    system_instruction: str,
+    prompt: str,
+    temperature: Optional[float],
+    top_p: Optional[float],
+    max_output_tokens: int,
+) -> str:
+    return _chat_minimax(
+        key, model, system_instruction, [{"role": "user", "content": prompt}], temperature, top_p, max_output_tokens
+    )
 
 
 def generate_sync(
@@ -223,6 +281,57 @@ async def generate(
             generate_sync,
             system_instruction,
             prompt,
+            temperature=temperature,
+            top_p=top_p,
+            max_output_tokens=max_output_tokens,
+        ),
+        timeout=timeout,
+    )
+
+
+def chat_sync(
+    system_instruction: str,
+    messages: List[ChatMessage],
+    *,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    max_output_tokens: int = 4096,
+) -> str:
+    """Blocking multi-turn generation on the active provider.
+
+    Same contract as generate_sync but carrying a user/assistant transcript.
+    Raises LLMNotConfiguredError when no provider is set up, ValueError when
+    the normalized transcript is empty.
+    """
+    active = active_provider_key()
+    if active is None:
+        raise LLMNotConfiguredError()
+    normalized = normalize_messages(messages)
+    if not normalized:
+        raise ValueError("chat requires at least one non-empty message")
+    provider, key = active
+    model = model_for(provider)
+    if provider == "claude":
+        return _chat_claude(key, model, system_instruction, normalized, max_output_tokens)
+    if provider == "minimax":
+        return _chat_minimax(key, model, system_instruction, normalized, temperature, top_p, max_output_tokens)
+    return _chat_gemini(key, model, system_instruction, normalized, temperature, top_p, max_output_tokens)
+
+
+async def chat(
+    system_instruction: str,
+    messages: List[ChatMessage],
+    *,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    max_output_tokens: int = 4096,
+    timeout: float = 60.0,
+) -> str:
+    return await asyncio.wait_for(
+        asyncio.to_thread(
+            chat_sync,
+            system_instruction,
+            messages,
             temperature=temperature,
             top_p=top_p,
             max_output_tokens=max_output_tokens,
