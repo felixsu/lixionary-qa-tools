@@ -343,6 +343,33 @@ async def resolve_request(request_data: Dict[str, Any], environment_id: str = No
 
     return {"url": url, "headers": headers, "params": params, "body": body_content}
 
+def persist_env_writes(parsed_variables: Dict[str, Any], environment_id: Optional[str]) -> None:
+    """
+    Saves parser env.set() writes back to the active environment in the local
+    store. LocalStore.update bumps the record's version, marking it dirty so
+    the sync engine pushes the change to the cloud on the next pass — the
+    local-first equivalent of the old versioned cloud write.
+    """
+    if not parsed_variables or not environment_id:
+        return
+    env_record = LocalStore.get_by_local_or_cloud_id("environment", environment_id)
+    if not env_record:
+        return
+    env_payload = json.loads(env_record["payload"])
+    updated_vars = {v["key"]: v for v in env_payload.get("variables", [])}
+
+    # Update or append parsed variables
+    for key, val in parsed_variables.items():
+        updated_vars[key] = {
+            "key": key,
+            "value": str(val),
+            "isSecret": False
+        }
+
+    env_payload["variables"] = list(updated_vars.values())
+    LocalStore.update("environment", env_record["localId"], json.dumps(env_payload))
+
+
 async def execute_request(request_data: Dict[str, Any], environment_id: str = None) -> Dict[str, Any]:
     """
     Runs the full Request Execution Loop:
@@ -401,6 +428,7 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
                 "executionTimeMs": duration_ms,
                 "parsedVariables": {},
                 "parserError": None,
+                "parserLogs": [],
                 "outputs": {},
                 "missingOutputs": [],
                 "testResults": None,
@@ -412,41 +440,22 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
     outputs_result = {}
     parsed_variables = {}
     parser_error = None
+    parser_logs = []
     parser_script = request_data.get("responseParserScript")
     if parser_script and response.status_code >= 400:
         parser_error = f"Parser skipped: response status {response.status_code}"
     elif parser_script:
         try:
-            outputs_result, parsed_variables = await run_unsafe_response_parser(
+            outputs_result, parsed_variables, parser_logs = await run_unsafe_response_parser(
                 response_body=response_body,
                 response_headers=response_headers,
                 parser_script=parser_script,
                 env_vars=load_env_vars(environment_id)
             )
-
-            # If env writes were made, save them back to the active environment
-            # in the local store. LocalStore.update bumps the record's version,
-            # marking it dirty so the sync engine pushes the change to the cloud
-            # on the next pass — the local-first equivalent of the old versioned
-            # cloud write.
-            if parsed_variables and environment_id:
-                env_record = LocalStore.get_by_local_or_cloud_id("environment", environment_id)
-                if env_record:
-                    env_payload = json.loads(env_record["payload"])
-                    updated_vars = {v["key"]: v for v in env_payload.get("variables", [])}
-
-                    # Update or append parsed variables
-                    for key, val in parsed_variables.items():
-                        updated_vars[key] = {
-                            "key": key,
-                            "value": str(val),
-                            "isSecret": False
-                        }
-
-                    env_payload["variables"] = list(updated_vars.values())
-                    LocalStore.update("environment", env_record["localId"], json.dumps(env_payload))
+            persist_env_writes(parsed_variables, environment_id)
         except Exception as e:
             parser_error = str(e)
+            parser_logs = getattr(e, "logs", [])
             print(f"Response parser script run failed: {str(e)}")
 
     missing_outputs = [name for name in declared_outputs if name not in outputs_result]
@@ -510,6 +519,7 @@ async def execute_request(request_data: Dict[str, Any], environment_id: str = No
         "executionTimeMs": duration_ms,
         "parsedVariables": parsed_variables,
         "parserError": parser_error,
+        "parserLogs": parser_logs,
         "outputs": outputs_result,
         "missingOutputs": missing_outputs,
         "testResults": test_results,

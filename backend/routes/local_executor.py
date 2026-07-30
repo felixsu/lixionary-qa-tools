@@ -6,7 +6,7 @@ sidecar's trusted-localhost convention."""
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -17,9 +17,10 @@ from services.executor import (
     execute_request,
     get_valid_auth_token,
     load_env_vars,
+    persist_env_writes,
     resolve_request,
 )
-from services.auth_sandbox import run_unsafe_auth_script
+from services.auth_sandbox import ParserScriptError, run_unsafe_auth_script, run_unsafe_response_parser
 
 router = APIRouter(prefix="/api/executor", tags=["local-executor"])
 
@@ -55,6 +56,35 @@ async def run_request(payload: ExecutorPayload):
         return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Request execution failed: {str(e)}")
+
+class ParserDebugPayload(BaseModel):
+    responseBody: Any = ""
+    responseHeaders: Optional[Dict[str, str]] = None
+    parserScript: str
+    environmentId: Optional[str] = None
+
+@router.post("/parser-debug")
+async def debug_parser_script(payload: ParserDebugPayload):
+    """
+    Re-runs a response parser script against a previously recorded response —
+    no HTTP request is dispatched. Captured console output is returned so the
+    script can be debugged iteratively. env.set() writes persist to the active
+    environment exactly like a real run. Script errors come back as a 200 with
+    the error message and the logs emitted before the throw.
+    """
+    body = payload.responseBody
+    body_str = body if isinstance(body, str) else json.dumps(body)
+    try:
+        outputs, env_writes, logs = await run_unsafe_response_parser(
+            response_body=body_str,
+            response_headers=payload.responseHeaders or {},
+            parser_script=payload.parserScript,
+            env_vars=load_env_vars(payload.environmentId),
+        )
+    except ParserScriptError as e:
+        return {"outputs": {}, "envWrites": {}, "logs": e.logs, "error": str(e)}
+    persist_env_writes(env_writes, payload.environmentId)
+    return {"outputs": outputs, "envWrites": env_writes, "logs": logs, "error": None}
 
 @router.post("/preview")
 async def preview_request(payload: ExecutorPayload):
