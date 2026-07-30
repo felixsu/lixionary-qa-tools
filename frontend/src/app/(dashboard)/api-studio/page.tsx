@@ -61,6 +61,10 @@ const PALETTE: { type: FlowNodeType; label: string; icon: typeof Send; hint: str
 const inputCls =
   "h-[30px] bg-cream border border-line rounded-md px-2.5 font-mono text-xs text-graphite outline-none focus:border-clay";
 
+// Persisted so leaving the page (or restarting the app) doesn't snap the
+// editor back to the first flow.
+const SELECTED_FLOW_KEY = "lixionary_selected_flow";
+
 // ---- helpers ----------------------------------------------------------------
 
 const requestNodeConfigOf = (node: FlowNode): RequestNodeConfig | null => {
@@ -208,10 +212,21 @@ function StudioEditor() {
       return;
     }
     if (!selectedFlowId || !flows.some((f) => f.id === selectedFlowId)) {
-      setSelectedFlowId(flows[0].id);
-      loadFlow(flows[0]);
+      let target = flows[0];
+      try {
+        const persistedId = localStorage.getItem(SELECTED_FLOW_KEY);
+        const persisted = persistedId ? flows.find((f) => f.id === persistedId) : undefined;
+        if (persisted) target = persisted;
+      } catch { /* non-fatal */ }
+      setSelectedFlowId(target.id);
+      loadFlow(target);
     }
   }, [flows]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!selectedFlowId) return;
+    try { localStorage.setItem(SELECTED_FLOW_KEY, selectedFlowId); } catch { /* non-fatal */ }
+  }, [selectedFlowId]);
 
   // Refresh request labels when collections change (e.g. a request was renamed).
   useEffect(() => {
