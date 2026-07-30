@@ -4,7 +4,15 @@
 // completion order so concurrency is asserted deterministically.
 
 import { describe, expect, it, vi } from "vitest";
-import { runFlow, type FlowRunDeps, type NodeRunStatus, type RunRecord } from "./flowRunner";
+import {
+  runFlow,
+  mergeRetrySummary,
+  structuralSignature,
+  type FlowRunDeps,
+  type FlowRunSummary,
+  type NodeRunStatus,
+  type RunRecord,
+} from "./flowRunner";
 import { buildRunCsv } from "./flowReport";
 import type { Flow, FlowNode, FlowEdge } from "./flowTypes";
 
@@ -285,6 +293,200 @@ describe("runFlow scheduling", () => {
     const summary = await handle.done;
     expect(summary.status).toBe("success");
     expect(h.records.filter((r) => r.nodeName === "L").map((r) => r.iteration)).toEqual([0, 1]);
+  });
+});
+
+describe("runFlow resume", () => {
+  const completedOf = (summary: FlowRunSummary) =>
+    Object.entries(summary.nodeStatuses!)
+      .filter(([, status]) => status === "success")
+      .map(([nodeId]) => nodeId);
+
+  it("re-runs only failed and skipped nodes; successful branches stay untouched", async () => {
+    let bFails = true;
+    const h = makeHarness({
+      A: () => ok({ val: "a" }),
+      B: () => (bFails ? httpError() : ok()),
+      C: () => ok(),
+      D: () => ok(),
+      E: () => ok(),
+    });
+    const f = makeFlow(
+      [reqNode("A"), reqNode("B"), reqNode("C"), reqNode("D"), reqNode("E")],
+      [edge("A", "B"), edge("A", "C"), edge("B", "D"), edge("C", "E")]
+    );
+    const first = await runFlow(f, h.deps, h.cb).done;
+    expect(first.status).toBe("failed");
+    expect(first.nodeStatuses).toEqual({ A: "success", B: "failed", C: "success", D: "skipped", E: "success" });
+
+    bFails = false;
+    const second = await runFlow(f, h.deps, h.cb, { context: first.context!, completedNodeIds: completedOf(first) }).done;
+    expect(second.status).toBe("success");
+    expect(h.payloads.get("A")).toHaveLength(1);
+    expect(h.payloads.get("C")).toHaveLength(1);
+    expect(h.payloads.get("E")).toHaveLength(1);
+    expect(h.payloads.get("B")).toHaveLength(2);
+    expect(h.payloads.get("D")).toHaveLength(1);
+    expect(second.records.map((r) => r.nodeName).sort()).toEqual(["B", "D"]);
+    expect(second.nodeStatuses).toEqual({ A: "success", B: "success", C: "success", D: "success", E: "success" });
+  });
+
+  it("seeds context so retried nodes see the original upstream outputs", async () => {
+    let bFails = true;
+    const h = makeHarness({
+      A: () => ok({ val: "from-a" }),
+      B: () => (bFails ? httpError() : ok()),
+    });
+    const f = makeFlow(
+      [reqNode("A"), reqNode("B", [{ inputName: "x", source: "reference", value: "A.val" }])],
+      [edge("A", "B")]
+    );
+    const first = await runFlow(f, h.deps, h.cb).done;
+    expect(first.status).toBe("failed");
+    bFails = false;
+    const second = await runFlow(f, h.deps, h.cb, { context: first.context!, completedNodeIds: ["A"] }).done;
+    expect(second.status).toBe("success");
+    expect(h.payloads.get("A")).toHaveLength(1); // A never re-ran
+    expect(h.payloads.get("B")![1].inputs).toContainEqual({ name: "x", source: "literal", value: "from-a" });
+  });
+
+  it("completed nodes are seeded success with no records emitted", async () => {
+    let bFails = true;
+    const handlers = {
+      A: () => ok({ val: "a" }),
+      B: () => (bFails ? httpError() : ok()),
+    };
+    const h1 = makeHarness(handlers);
+    const f = makeFlow([reqNode("A"), reqNode("B")], [edge("A", "B")]);
+    const first = await runFlow(f, h1.deps, h1.cb).done;
+    bFails = false;
+    const h2 = makeHarness(handlers); // fresh harness: per-run statuses/payloads
+    const second = await runFlow(f, h2.deps, h2.cb, { context: first.context!, completedNodeIds: ["A"] }).done;
+    expect(second.status).toBe("success");
+    expect(h2.statuses.get("A")).toEqual(["success"]); // no pending/running for completed
+    expect(h2.payloads.has("A")).toBe(false);
+    expect(second.records.map((r) => r.nodeName)).toEqual(["B"]);
+  });
+
+  it("a partially-failed retry is itself retryable via the merged summary", async () => {
+    let bFails = true;
+    let dFails = true;
+    const h = makeHarness({
+      A: () => ok({ val: "a" }),
+      B: () => (bFails ? httpError() : ok({ val: "b" })),
+      D: () => (dFails ? httpError() : ok()),
+    });
+    const f = makeFlow([reqNode("A"), reqNode("B"), reqNode("D")], [edge("A", "B"), edge("B", "D")]);
+    const first = await runFlow(f, h.deps, h.cb).done;
+    expect(first.status).toBe("failed");
+
+    bFails = false;
+    const retry1 = await runFlow(f, h.deps, h.cb, { context: first.context!, completedNodeIds: completedOf(first) }).done;
+    const merged1 = mergeRetrySummary(first, retry1);
+    expect(merged1.status).toBe("failed");
+    expect(merged1.nodeStatuses).toEqual({ A: "success", B: "success", D: "failed" });
+
+    dFails = false;
+    const retry2 = await runFlow(f, h.deps, h.cb, { context: merged1.context!, completedNodeIds: completedOf(merged1) }).done;
+    const merged2 = mergeRetrySummary(merged1, retry2);
+    expect(merged2.status).toBe("success");
+    expect(h.payloads.get("A")).toHaveLength(1);
+    expect(h.payloads.get("B")).toHaveLength(2);
+    expect(h.payloads.get("D")).toHaveLength(2);
+    expect(merged2.records.map((r) => r.nodeName)).toEqual(["A", "B", "D"]);
+    expect(merged2.records.every((r) => r.status === "success")).toBe(true);
+  });
+
+  it("a cancelled run can be resumed from its successes", async () => {
+    const b = deferred<ExecutorResult>();
+    let bDeferred = true;
+    const h = makeHarness({
+      A: () => ok({ val: "a" }),
+      B: () => (bDeferred ? b.promise : ok()),
+      C: () => ok(),
+    });
+    const f = makeFlow([reqNode("A"), reqNode("B"), reqNode("C")], [edge("A", "B"), edge("B", "C")]);
+    const handle = runFlow(f, h.deps, h.cb);
+    await flush();
+    handle.cancel();
+    b.resolve(ok());
+    const first = await handle.done;
+    expect(first.status).toBe("cancelled");
+    expect(first.nodeStatuses).toEqual({ A: "success", B: "failed", C: "skipped" });
+
+    bDeferred = false;
+    const second = await runFlow(f, h.deps, h.cb, { context: first.context!, completedNodeIds: completedOf(first) }).done;
+    const merged = mergeRetrySummary(first, second);
+    expect(merged.status).toBe("success");
+    expect(h.payloads.get("A")).toHaveLength(1);
+    expect(merged.records.map((r) => r.nodeName)).toEqual(["A", "B", "C"]);
+  });
+});
+
+describe("mergeRetrySummary", () => {
+  const rec = (nodeId: string, status: RunRecord["status"], extra: Partial<RunRecord> = {}): RunRecord => ({
+    nodeId,
+    nodeName: nodeId,
+    nodeType: "request",
+    status,
+    resolvedInputs: {},
+    outputs: null,
+    requestPayload: null,
+    response: null,
+    startedAt: "2026-01-01T00:00:00.000Z",
+    durationMs: 1,
+    ...extra,
+  });
+
+  it("keeps successful nodes' full record sets and replaces retried nodes' records", () => {
+    const prior: FlowRunSummary = {
+      status: "failed",
+      records: [
+        rec("L", "success", { iteration: 0 }),
+        rec("L", "success", { iteration: 1 }),
+        rec("B", "failed"),
+        rec("D", "skipped"),
+      ],
+      startedAt: "2026-01-01T00:00:00.000Z",
+      durationMs: 100,
+      context: { L: { results: [], count: 0 } },
+      nodeStatuses: { L: "success", B: "failed", D: "skipped" },
+      runSignature: "sig",
+    };
+    const next: FlowRunSummary = {
+      status: "success",
+      records: [rec("B", "success"), rec("D", "success")],
+      startedAt: "2026-01-01T00:01:00.000Z",
+      durationMs: 50,
+      context: { L: { results: [], count: 0 }, B: { val: "b" } },
+      nodeStatuses: { L: "success", B: "success", D: "success" },
+      runSignature: "sig",
+    };
+    const merged = mergeRetrySummary(prior, next);
+    expect(merged.records.map((r) => [r.nodeId, r.status])).toEqual([
+      ["L", "success"],
+      ["L", "success"],
+      ["B", "success"],
+      ["D", "success"],
+    ]);
+    expect(merged.status).toBe("success");
+    expect(merged.startedAt).toBe(prior.startedAt);
+    expect(merged.durationMs).toBe(150);
+    expect(merged.context).toBe(next.context);
+    expect(merged.nodeStatuses).toBe(next.nodeStatuses);
+    expect(merged.runSignature).toBe(next.runSignature);
+  });
+});
+
+describe("structuralSignature", () => {
+  it("ignores positions and ordering but detects structural edits", () => {
+    const a = reqNode("A");
+    const b = reqNode("B");
+    const movedA = { ...a, position: { x: 100, y: 200 } };
+    expect(structuralSignature([a, b], [edge("A", "B")])).toBe(structuralSignature([b, movedA], [edge("A", "B")]));
+    expect(structuralSignature([a, b], [edge("A", "B")])).not.toBe(structuralSignature([a, b], []));
+    const renamed = { ...b, name: "B2" };
+    expect(structuralSignature([a, b], [])).not.toBe(structuralSignature([a, renamed], []));
   });
 });
 

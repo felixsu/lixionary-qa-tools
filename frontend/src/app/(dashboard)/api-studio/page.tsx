@@ -18,7 +18,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   Plus, Play, Square, Save, Download, Trash2, Pencil, Copy, Send, Repeat2, Timer,
-  ShieldCheck, AlertCircle, X,
+  ShieldCheck, AlertCircle, X, RotateCcw,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, findRequestInTree } from "../../context/AppContext";
@@ -37,6 +37,7 @@ import {
 } from "../../utils/flowTypes";
 import {
   runFlow, topoSort, publishedOutputs, ancestorNodeIds, lookupRequest,
+  structuralSignature, mergeRetrySummary,
   type NodeRunStatus, type RunRecord, type FlowRunSummary, type RunHandle,
 } from "../../utils/flowRunner";
 import { buildRunCsv, downloadCsv, runCsvFilename, persistLastRun, loadLastRun } from "../../utils/flowReport";
@@ -223,7 +224,10 @@ function StudioEditor() {
   const loadFlow = useCallback((flow: Flow) => {
     const lastRun = loadLastRun(flow.id);
     const statusByNode = new Map<string, NodeRunStatus>();
-    if (lastRun) {
+    if (lastRun?.nodeStatuses) {
+      for (const [nodeId, status] of Object.entries(lastRun.nodeStatuses)) statusByNode.set(nodeId, status);
+    } else if (lastRun) {
+      // Pre-Retry blobs: derive per-node status from records, last one wins.
       for (const r of lastRun.records) statusByNode.set(r.nodeId, r.status);
     }
     setNodes(flow.nodes.map((fn) => toStudioNode(fn, statusByNode.get(fn.id) || "idle", collections)));
@@ -528,6 +532,24 @@ function StudioEditor() {
       : `No active environment — {{env.*}} vars unresolved: ${list}`;
   }, [nodes, collections, environments, selectedEnvId]);
 
+  // Retry is offered after a failed or cancelled run; whether it can actually
+  // start is a separate check so the button can explain why it's disabled.
+  const retryable =
+    !isRunning && !!lastSummary && (lastSummary.status === "failed" || lastSummary.status === "cancelled");
+
+  const retryBlockedReason = useMemo((): string | null => {
+    if (!lastSummary) return null;
+    // contextTruncated blobs also lack context — check the flag first for the
+    // more specific message. A legitimately empty context is {} (truthy).
+    if (lastSummary.contextTruncated) return "Run data was truncated when saved — run the full flow again";
+    if (!lastSummary.context || !lastSummary.nodeStatuses || !lastSummary.runSignature)
+      return "This run was saved before Retry existed — run the flow again";
+    if (lastSummary.runSignature !== structuralSignature(serializeNodes(nodes), serializeEdges(edges)))
+      return "Flow changed since the last run";
+    if (validationError) return validationError;
+    return null;
+  }, [lastSummary, nodes, edges, validationError]);
+
   // ---- toolbar actions ----
 
   const onSave = async () => {
@@ -599,6 +621,62 @@ function StudioEditor() {
   };
 
   const onStop = () => runHandleRef.current?.cancel();
+
+  // Re-run only the failed/skipped nodes of the last run, reusing successful
+  // nodes' outputs, then persist one merged summary for the whole flow.
+  const onRetry = async () => {
+    if (!selectedFlow || !retryable) return;
+    if (retryBlockedReason) {
+      showToast(`Cannot retry: ${retryBlockedReason}`, { type: "error" });
+      return;
+    }
+    const prior = lastSummary!;
+    const completedNodeIds = Object.entries(prior.nodeStatuses!)
+      .filter(([, status]) => status === "success")
+      .map(([nodeId]) => nodeId);
+    const completedSet = new Set(completedNodeIds);
+    const flow: Flow = {
+      ...selectedFlow,
+      nodes: serializeNodes(nodes),
+      edges: serializeEdges(edges),
+    };
+    setIsRunning(true);
+    // No resetStatuses(): the runner immediately re-emits "success" for
+    // completed nodes and "pending" for everything that will re-run. Seed the
+    // record list with the retained prior records so the inspector and Report
+    // show the merged view while the retry is in flight.
+    setRecords(prior.records.filter((r) => completedSet.has(r.nodeId)));
+
+    const handle = runFlow(
+      flow,
+      { apiCall, collections, environmentId: selectedEnvId || null },
+      {
+        onNodeStatus: setNodeStatus,
+        onRecord: (record) => setRecords((prev) => [...prev, record]),
+      },
+      { context: prior.context!, completedNodeIds }
+    );
+    runHandleRef.current = handle;
+    try {
+      const next = await handle.done;
+      const merged = mergeRetrySummary(prior, next);
+      setLastSummary(merged);
+      persistLastRun(flow.id, merged);
+      showToast(
+        next.status === "success"
+          ? `Retry finished — ${next.records.length} steps re-run in ${next.durationMs} ms`
+          : next.status === "cancelled"
+            ? "Retry cancelled"
+            : "Retry failed — see node statuses",
+        { type: next.status === "success" ? "success" : next.status === "cancelled" ? "info" : "error" }
+      );
+    } catch (e: any) {
+      showToast(`Retry error: ${e.message}`, { type: "error" });
+    } finally {
+      setIsRunning(false);
+      runHandleRef.current = null;
+    }
+  };
 
   const onDownloadReport = () => {
     if (!records.length || !selectedFlow) return;
@@ -742,6 +820,16 @@ function StudioEditor() {
         >
           <Save className="h-3.5 w-3.5" /> {isSaving ? "Saving…" : "Save"}
         </button>
+        {retryable && (
+          <button
+            onClick={onRetry}
+            disabled={!!retryBlockedReason}
+            title={retryBlockedReason || "Re-run only the failed and skipped nodes, reusing successful outputs"}
+            className="h-8 px-3 flex items-center gap-1.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors disabled:opacity-50"
+          >
+            <RotateCcw className="h-3.5 w-3.5" /> Retry
+          </button>
+        )}
         {isRunning ? (
           <button
             onClick={onStop}

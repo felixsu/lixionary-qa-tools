@@ -141,6 +141,24 @@ const shrinkValue = (value: any): any => {
 export function persistLastRun(flowId: string, summary: FlowRunSummary): void {
   try {
     const slim: FlowRunSummary = { ...summary, records: summary.records.map(shrinkRecord) };
+    // The resume context must be stored intact or not at all — a truncated
+    // context would seed a retry with corrupted parameters. If any node's
+    // entry is oversized, drop the whole context and flag it so Retry is
+    // disabled after a reload (in-session retry uses the in-memory summary
+    // and is unaffected).
+    if (slim.context) {
+      const lossy = Object.values(slim.context).some((value) => {
+        try {
+          return JSON.stringify(value).length > MAX_FIELD_CHARS;
+        } catch {
+          return true;
+        }
+      });
+      if (lossy) {
+        delete slim.context;
+        slim.contextTruncated = true;
+      }
+    }
     localStorage.setItem(STORAGE_PREFIX + flowId, JSON.stringify(slim));
   } catch {
     // storage full/unavailable — the run stays available in memory only
