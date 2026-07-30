@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Send, Plus, Trash2, Share2, ChevronDown, ChevronRight,
-  Sparkles, Code2, Copy, Check, X, AlignLeft, Minimize2,
+  Sparkles, Code2, Copy, Check, X, AlignLeft, Minimize2, Maximize2,
   PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil, AlertCircle, Wand2,
   Upload, Search, Bug
 } from "lucide-react";
@@ -658,6 +658,8 @@ export default function ApiExplorerPage() {
   const [resolvedCurl, setResolvedCurl] = useState("");
   const [curlError, setCurlError] = useState<string | null>(null);
   const [outputsDialog, setOutputsDialog] = useState<{ open: boolean; selected?: string } | null>(null);
+  const [outputValueDialog, setOutputValueDialog] = useState<{ name: string; value: string } | null>(null);
+  const [outputValueCopied, setOutputValueCopied] = useState(false);
   const [descMode, setDescMode] = useState<"write" | "preview">("write");
   const [showImproveModal, setShowImproveModal] = useState(false);
   const [improvedDraft, setImprovedDraft] = useState("");
@@ -2238,6 +2240,19 @@ export default function ApiExplorerPage() {
                                     <span className="font-mono text-[11px] text-graphite flex-1 truncate">
                                       {typeof v === "object" ? JSON.stringify(v) : String(v)}
                                     </span>
+                                    <button
+                                      onClick={() => {
+                                        setOutputValueCopied(false);
+                                        setOutputValueDialog({
+                                          name,
+                                          value: typeof v === "object" ? JSON.stringify(v, null, 2) : String(v),
+                                        });
+                                      }}
+                                      title="View full value"
+                                      className="h-6 w-6 rounded flex items-center justify-center text-stone hover:bg-cream hover:text-ink transition-colors flex-shrink-0"
+                                    >
+                                      <Maximize2 className="h-3 w-3" />
+                                    </button>
                                   </div>
                                   {!inEnv && (
                                     <span className="text-[11px] text-amber-700 pl-[132px]">not written to an env var</span>
@@ -2525,6 +2540,35 @@ export default function ApiExplorerPage() {
               <button
                 onClick={() => setParserDebugResult(null)}
                 className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {outputValueDialog && (
+        <Modal
+          title={`Extracted value — ${outputValueDialog.name}`}
+          onClose={() => setOutputValueDialog(null)}
+          width={640}
+        >
+          <div className="flex flex-col gap-4">
+            <SelectablePre className="m-0 p-3.5 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap rounded-xl max-h-[400px]">
+              {outputValueDialog.value}
+            </SelectablePre>
+            <div className="flex justify-end gap-2 pt-1 border-t border-line">
+              <button
+                onClick={() => copyToClipboard(outputValueDialog.value, setOutputValueCopied)}
+                className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors flex items-center gap-1.5"
+              >
+                {outputValueCopied ? <Check className="h-3.5 w-3.5 text-sage" /> : <Copy className="h-3.5 w-3.5" />}
+                {outputValueCopied ? "Copied" : "Copy"}
+              </button>
+              <button
+                onClick={() => setOutputValueDialog(null)}
+                className="h-10 px-4 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors"
               >
                 Close
               </button>
