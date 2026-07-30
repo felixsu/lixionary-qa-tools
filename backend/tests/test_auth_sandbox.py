@@ -49,6 +49,57 @@ async def test_run_unsafe_response_parser_env_set():
     assert env_writes == {"auth_token": "abcd-999"}
 
 @pytest.mark.asyncio
+async def test_run_unsafe_response_parser_env_get():
+    body = '{"data": {"id": "X-1"}}'
+    script = "output.combined = env.get('BASE_URL') + '/orders/' + response.body.data.id;"
+
+    outputs, env_writes = await run_unsafe_response_parser(
+        body, {}, script, env_vars={"BASE_URL": "https://api.example.com"}
+    )
+    assert outputs == {"combined": "https://api.example.com/orders/X-1"}
+    assert env_writes == {}
+
+@pytest.mark.asyncio
+async def test_run_unsafe_response_parser_env_get_missing_is_undefined():
+    script = "output.missing = env.get('NOPE') === undefined;"
+
+    outputs, _ = await run_unsafe_response_parser("{}", {}, script, env_vars={})
+    assert outputs == {"missing": True}
+
+@pytest.mark.asyncio
+async def test_run_unsafe_response_parser_env_get_without_env_vars_arg():
+    # Callers that don't pass env_vars keep working; get() just finds nothing
+    script = "output.missing = env.get('ANY') === undefined;"
+
+    outputs, _ = await run_unsafe_response_parser("{}", {}, script)
+    assert outputs == {"missing": True}
+
+@pytest.mark.asyncio
+async def test_run_unsafe_response_parser_env_get_sees_prior_set():
+    body = '{"data": {"token": "t-42"}}'
+    script = """
+    env.set('auth_token', response.body.data.token);
+    output.roundtrip = env.get('auth_token');
+    """
+
+    outputs, env_writes = await run_unsafe_response_parser(body, {}, script, env_vars={})
+    assert outputs == {"roundtrip": "t-42"}
+    assert env_writes == {"auth_token": "t-42"}
+
+@pytest.mark.asyncio
+async def test_run_unsafe_response_parser_env_set_overrides_loaded_value():
+    script = """
+    env.set('token', 'new');
+    output.value = env.get('token');
+    """
+
+    outputs, env_writes = await run_unsafe_response_parser(
+        "{}", {}, script, env_vars={"token": "old"}
+    )
+    assert outputs == {"value": "new"}
+    assert env_writes == {"token": "new"}
+
+@pytest.mark.asyncio
 async def test_run_unsafe_response_parser_output_object():
     body = '{"data": {"order_id": "ORD-7"}}'
     headers = {}
