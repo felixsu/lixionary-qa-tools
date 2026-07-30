@@ -190,6 +190,32 @@ pub fn run() {
     .plugin(tauri_plugin_process::init())
     .plugin(tauri_plugin_dialog::init())
     .setup(move |app| {
+      // macOS: the default Edit menu's "Select All" item is a native Cmd+A
+      // accelerator that fires selectAll: on the whole webview before the DOM
+      // ever sees a keydown — so Cmd+A selects the entire page even inside
+      // Monaco editors or scoped JSON panes. Rebuild the default menu without
+      // that item so Cmd+A reaches the page; Cut/Copy/Paste stay, since
+      // WKWebView needs those menu items for clipboard shortcuts.
+      #[cfg(target_os = "macos")]
+      {
+        use tauri::menu::{Menu, MenuItemKind};
+        let menu = Menu::default(app.handle())?;
+        for item in menu.items()? {
+          if let MenuItemKind::Submenu(submenu) = item {
+            for sub_item in submenu.items()? {
+              let is_select_all = sub_item
+                .as_predefined_menuitem()
+                .and_then(|p| p.text().ok())
+                .is_some_and(|t| t == "Select All");
+              if is_select_all {
+                submenu.remove(&sub_item)?;
+              }
+            }
+          }
+        }
+        app.set_menu(menu)?;
+      }
+
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
