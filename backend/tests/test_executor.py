@@ -80,6 +80,36 @@ def test_interpolate_variables_date_math():
     # A malformed offset-looking arg falls back to being treated as a literal format string.
     assert interpolate_variables("{{$date:+bogus}}", {}) == "+bogus"
 
+def test_interpolate_variables_epoch():
+    now = datetime.now(timezone.utc).timestamp()
+
+    epoch_s = int(interpolate_variables("{{$date:epoch}}", {}))
+    assert abs(epoch_s - now) < 5
+
+    epoch_ms = int(interpolate_variables("{{$date:epochms}}", {}))
+    assert abs(epoch_ms - now * 1000) < 5000
+
+    tomorrow_s = int(interpolate_variables("{{$date:+1d:epoch}}", {}))
+    assert abs(tomorrow_s - (now + 86400)) < 5
+
+def test_interpolate_variables_geo_point(monkeypatch):
+    from db.local_store import LocalStore
+
+    # No point picked yet — tokens stay literal
+    monkeypatch.setattr(LocalStore, "get_pref", classmethod(lambda cls, key: None))
+    assert interpolate_variables("{{$latitude}},{{$longitude}}", {}) == "{{$latitude}},{{$longitude}}"
+
+    monkeypatch.setattr(
+        LocalStore,
+        "get_pref",
+        classmethod(lambda cls, key: '{"lat": -6.2088, "lng": 106.8456}' if key == "geo_point" else None),
+    )
+    assert interpolate_variables("{{$latitude}},{{$longitude}}", {}) == "-6.2088,106.8456"
+
+    # Malformed pref — tokens stay literal
+    monkeypatch.setattr(LocalStore, "get_pref", classmethod(lambda cls, key: "not-json"))
+    assert interpolate_variables("{{$latitude}}", {}) == "{{$latitude}}"
+
 async def test_resolve_request():
     result = await resolve_request({
         "url": "{{env.BASE_URL}}/orders",
