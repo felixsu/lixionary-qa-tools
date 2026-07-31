@@ -331,7 +331,7 @@ pub fn run() {
         _ => {}
       }
     })
-    .invoke_handler(tauri::generate_handler![select_directory, open_external, sidecar_process_alive])
+    .invoke_handler(tauri::generate_handler![open_external, sidecar_process_alive])
     .build(context)
     .expect("error while building tauri application")
     .run(|app_handle, event| {
@@ -357,14 +357,6 @@ fn sidecar_process_alive(state: tauri::State<SidecarState>) -> bool {
     Some(child) => matches!(child.try_wait(), Ok(None)),
     None => false,
   }
-}
-
-#[tauri::command]
-fn select_directory() -> Option<String> {
-  let folder = rfd::FileDialog::new()
-    .set_title("Select Root Directory")
-    .pick_folder();
-  folder.map(|p| p.to_string_lossy().into_owned())
 }
 
 #[tauri::command]

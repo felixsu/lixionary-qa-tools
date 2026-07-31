@@ -4,7 +4,7 @@ import React, { useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Home, Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint, FolderOpen, Cloud, CloudOff, RefreshCw, AlertTriangle, Workflow, ExternalLink, Settings } from "lucide-react";
+import { Home, Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint, Cloud, CloudOff, RefreshCw, AlertTriangle, Workflow, ExternalLink, Settings } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import Dropdown from "../components/Dropdown";
 import UpdateBanner from "../components/UpdateBanner";
@@ -30,7 +30,6 @@ const NAV: NavEntry[] = [
   { type: "item", href: "/api-explorer", icon: Send, label: "API explorer" },
   { type: "item", href: "/api-studio", icon: Workflow, label: "API Studio" },
   { type: "item", href: "/web-explorer", icon: Globe, label: "Web explorer" },
-  { type: "item", href: "/nv-common-lib-explorer", icon: FolderOpen, label: "NV Common Lib Explorer" },
   { type: "section", label: "Configuration" },
   { type: "item", href: "/environments", icon: Database, label: "Environments", badge: "env" },
   { type: "item", href: "/auth-functions", icon: Key, label: "Auth functions" },
@@ -132,8 +131,6 @@ export default function DashboardLayout({
         return "API Studio";
       case "/web-explorer":
         return "Web automation & POM generator";
-      case "/nv-common-lib-explorer":
-        return "NV Common Lib Explorer";
       case "/environments":
         return "Variable environments";
       case "/auth-functions":
