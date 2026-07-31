@@ -7,7 +7,7 @@ import {
   Send, Plus, Trash2, Share2, ChevronDown, ChevronRight,
   Sparkles, Code2, Copy, Check, X, AlignLeft, Minimize2, Maximize2,
   PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil, AlertCircle, Wand2,
-  Upload, Search, Bug
+  Upload, Search, Bug, MapPin
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, findRequestInTree, findRequestOwnerCollection, findAncestorPathToRequest } from "../../context/AppContext";
@@ -16,6 +16,7 @@ import { useToast } from "../../context/ToastContext";
 import { useSearchIndexStatus } from "../../context/SearchIndexStatusContext";
 import SearchResultsList from "./SearchResultsList";
 import OutputsDialog from "./OutputsDialog";
+import MapPickerDialog from "./MapPickerDialog";
 import Dropdown from "../../components/Dropdown";
 import SelectablePre from "../../components/SelectablePre";
 import { Modal, ModalFooter } from "../../components/Modal";
@@ -2709,11 +2710,22 @@ const INSERT_VALUE_ROWS = [
 
 // Shared generator picker panel — emits brace-less token bodies like
 // "$date:+1d:YYYY-MM-DD" or "$randomInt:4" via onPick.
-function GeneratorMenuPanel({ onPick }: { onPick: (tokenBody: string) => void }) {
+function GeneratorMenuPanel({ onPick, onOpenMap }: { onPick: (tokenBody: string) => void; onOpenMap: () => void }) {
+  const { apiCall } = useAppContext();
   const [dateOffset, setDateOffset] = useState("0");
   const [dateUnit, setDateUnit] = useState("d");
   const [dateFormat, setDateFormat] = useState("YYYY-MM-DD");
   const [digits, setDigits] = useState("4");
+  const [geoPoint, setGeoPoint] = useState<{ lat: number; lng: number } | null>(null);
+
+  useEffect(() => {
+    apiCall("/api/local-store/pref/geo_point")
+      .then((res: any) => {
+        const parsed = JSON.parse(res?.value ?? "");
+        if (typeof parsed?.lat === "number" && typeof parsed?.lng === "number") setGeoPoint(parsed);
+      })
+      .catch(() => { /* no point picked yet */ });
+  }, [apiCall]);
 
   const handleUnitChange = (unit: string) => {
     setDateUnit(unit);
@@ -2723,10 +2735,17 @@ function GeneratorMenuPanel({ onPick }: { onPick: (tokenBody: string) => void })
     });
   };
 
-  const pickDate = () => {
+  const dateOffsetPart = () => {
     const n = parseInt(dateOffset, 10) || 0;
-    const offsetPart = n !== 0 ? `${n > 0 ? "+" : ""}${n}${dateUnit}:` : "";
-    onPick(`$date:${offsetPart}${dateFormat || "YYYY-MM-DD"}`);
+    return n !== 0 ? `${n > 0 ? "+" : ""}${n}${dateUnit}:` : "";
+  };
+
+  const pickDate = () => {
+    onPick(`$date:${dateOffsetPart()}${dateFormat || "YYYY-MM-DD"}`);
+  };
+
+  const pickEpoch = (ms: boolean) => {
+    onPick(`$date:${dateOffsetPart()}${ms ? "epochms" : "epoch"}`);
   };
 
   const pickRandomInt = () => {
@@ -2766,6 +2785,22 @@ function GeneratorMenuPanel({ onPick }: { onPick: (tokenBody: string) => void })
         >
           Use date
         </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => pickEpoch(false)}
+            title="Epoch time in seconds (offset applies)"
+            className="h-8 flex-1 bg-panel border border-line rounded-md text-xs font-medium text-graphite hover:bg-hover transition-colors"
+          >
+            Epoch (s)
+          </button>
+          <button
+            onClick={() => pickEpoch(true)}
+            title="Epoch time in milliseconds (offset applies)"
+            className="h-8 flex-1 bg-panel border border-line rounded-md text-xs font-medium text-graphite hover:bg-hover transition-colors"
+          >
+            Epoch (ms)
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-col gap-1.5 pt-2 border-t border-line">
@@ -2784,6 +2819,33 @@ function GeneratorMenuPanel({ onPick }: { onPick: (tokenBody: string) => void })
             className="ml-auto h-8 px-3 bg-clay hover:bg-clay-dark rounded-md text-xs font-medium text-white transition-colors"
           >
             Use
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-1.5 pt-2 border-t border-line">
+        <span className="text-[11px] font-medium text-stone uppercase tracking-wide">Location</span>
+        <button
+          onClick={onOpenMap}
+          className="h-8 px-2 flex items-center gap-1.5 bg-panel border border-line rounded-md text-xs text-graphite hover:bg-hover transition-colors"
+        >
+          <MapPin className="h-3.5 w-3.5 flex-shrink-0 text-clay" />
+          <span className="truncate font-mono text-[11px]">
+            {geoPoint ? `${geoPoint.lat.toFixed(4)}, ${geoPoint.lng.toFixed(4)}` : "Pick on map…"}
+          </span>
+        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => onPick("$latitude")}
+            className="h-8 flex-1 bg-clay hover:bg-clay-dark rounded-md text-xs font-medium text-white transition-colors"
+          >
+            Latitude
+          </button>
+          <button
+            onClick={() => onPick("$longitude")}
+            className="h-8 flex-1 bg-clay hover:bg-clay-dark rounded-md text-xs font-medium text-white transition-colors"
+          >
+            Longitude
           </button>
         </div>
       </div>
@@ -2814,6 +2876,7 @@ function GeneratorMenuButton({
   onPick: (tokenBody: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [showMapPicker, setShowMapPicker] = useState(false);
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -2871,10 +2934,16 @@ function GeneratorMenuButton({
                 onPick(tokenBody);
                 setOpen(false);
               }}
+              onOpenMap={() => {
+                setOpen(false);
+                setShowMapPicker(true);
+              }}
             />
           </div>,
           document.body
         )}
+
+      {showMapPicker && <MapPickerDialog onClose={() => setShowMapPicker(false)} />}
     </>
   );
 }

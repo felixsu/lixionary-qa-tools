@@ -56,10 +56,18 @@ def _format_date(arg: Optional[str]) -> str:
         else:
             fmt = arg
 
+    dt = datetime.now(timezone.utc) + timedelta(**offset_kwargs)
+
+    # Plain epoch output instead of a formatted date string
+    fmt_key = fmt.strip().lower()
+    if fmt_key == "epoch":
+        return str(int(dt.timestamp()))
+    if fmt_key == "epochms":
+        return str(int(dt.timestamp() * 1000))
+
     pattern = fmt
     for token, directive in _DATE_FORMAT_TOKENS:
         pattern = pattern.replace(token, directive)
-    dt = datetime.now(timezone.utc) + timedelta(**offset_kwargs)
     return dt.strftime(pattern)
 
 def _random_int(arg: Optional[str]) -> Optional[str]:
@@ -87,6 +95,24 @@ def _random_email(domain: Optional[str]) -> str:
     local = f"{random.choice(_RANDOM_FIRST_NAMES).lower()}.{random.choice(_RANDOM_LAST_NAMES).lower()}{random.randint(1, 999)}"
     return f"{local}@{domain or 'example.com'}"
 
+def _geo_coord(axis: str) -> Optional[str]:
+    """
+    Resolves $latitude / $longitude from the device-wide "geo_point" pref
+    (set by the API Explorer's map picker). None when no point was ever
+    picked or the pref is malformed — the token is then left untouched.
+    """
+    raw = LocalStore.get_pref("geo_point")
+    if not raw:
+        return None
+    try:
+        point = json.loads(raw)
+        value = point[axis]
+    except Exception:
+        return None
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    return str(value)
+
 _DYNAMIC_TOKEN_HANDLERS = {
     "date": lambda arg: _format_date(arg),
     "randomint": lambda arg: _random_int(arg),
@@ -94,6 +120,8 @@ _DYNAMIC_TOKEN_HANDLERS = {
     "randomfirstname": lambda arg: random.choice(_RANDOM_FIRST_NAMES),
     "randomlastname": lambda arg: random.choice(_RANDOM_LAST_NAMES),
     "randomfullname": lambda arg: f"{random.choice(_RANDOM_FIRST_NAMES)} {random.choice(_RANDOM_LAST_NAMES)}",
+    "latitude": lambda arg: _geo_coord("lat"),
+    "longitude": lambda arg: _geo_coord("lng"),
 }
 
 def _resolve_dynamic_token(key: str) -> Optional[str]:
