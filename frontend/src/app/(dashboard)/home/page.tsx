@@ -2,7 +2,7 @@
 
 import React from "react";
 import Link from "next/link";
-import { Send, Workflow, Globe, FolderOpen, Inbox } from "lucide-react";
+import { Send, Workflow, Globe, Inbox } from "lucide-react";
 import { useAppContext, type Collection, type RequestItem } from "../../context/AppContext";
 import { useNowTick } from "../../utils/useNowTick";
 import { formatRelativeTime } from "../../utils/formatRelativeTime";
@@ -12,7 +12,6 @@ const TOOLS = [
   { href: "/api-explorer", icon: Send, name: "API explorer", desc: "Build and run REST requests" },
   { href: "/api-studio", icon: Workflow, name: "API Studio", desc: "Design multi-step API flows" },
   { href: "/web-explorer", icon: Globe, name: "Web explorer", desc: "Automate browser flows" },
-  { href: "/nv-common-lib-explorer", icon: FolderOpen, name: "NV Common Lib Explorer", desc: "Browse shared test utilities" },
 ];
 
 interface RecentRequest {
