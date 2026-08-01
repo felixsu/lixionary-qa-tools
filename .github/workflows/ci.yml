@@ -1,0 +1,65 @@
+name: CI
+
+# Pre-merge checks. The release workflow (release.yml) only builds AFTER a
+# merge to main, so without this the first clean-checkout build of a branch
+# happens post-merge — which is how a missing (gitignored) source file once
+# shipped as a broken release. Every PR now gets: typecheck, unit tests, and
+# a full Next.js production build on a fresh checkout, plus the backend suite.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/sidecar_requirements.txt
+
+      # The sidecar requirement set covers everything the test suite imports.
+      # Do NOT also install requirements.txt: its playwright==1.45.0 pin
+      # conflicts with the sidecar's >=1.49 and the resolve fails outright.
+      - name: Install dependencies
+        run: pip install -r sidecar_requirements.txt
+
+      - name: Run tests
+        run: python tests/run_tests.py
