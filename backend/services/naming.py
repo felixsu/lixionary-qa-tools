@@ -227,8 +227,7 @@ async def propose_locator_fix(
     ranked candidate has failed live verification. Fails open: returns
     ([], "heuristic") on any error, timeout, or missing API key. The returned
     candidates are RAW and UNVALIDATED — the caller must re-validate
-    strategy/selector shape (see services/browser.py's _validate_locator_fixes)
-    before trying any of them.
+    strategy/selector shape before trying any of them.
     """
     if not failed_attempts or not llm_provider.is_configured():
         return [], "heuristic"
