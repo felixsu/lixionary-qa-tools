@@ -3,8 +3,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
   Globe, Eye, Crosshair, FileCode, Play,
-  Save, Rows, Lock, X, Code2, Activity,
-  ChevronDown, RotateCcw, Copy, Check, Mail, Anchor, Loader2, ScanSearch,
+  Save, Rows, Lock, X, Activity,
+  ChevronDown, Copy, Mail, Anchor, Loader2, ScanSearch,
   Sparkles, StopCircle, AppWindow, Braces,
 } from "lucide-react";
 import { useAppContext } from "../../context/AppContext";
@@ -13,20 +13,18 @@ import type { NetworkLog, NetworkDetails } from "../../context/WebExplorerContex
 import { useToast } from "../../context/ToastContext";
 import Dropdown from "../../components/Dropdown";
 import { Modal, ModalFooter } from "../../components/Modal";
-import { methodStyle, statusStyle } from "../../utils/methodStyle";
 import { MY_PAGE_FILE } from "./lib/workspaceFiles";
 import BrowserPreview from "./components/BrowserPreview";
 import WorkspacePanel from "./components/WorkspacePanel";
+import NetworkPanel from "./components/NetworkPanel";
+import SaveToCollectionModal from "./components/modals/SaveToCollectionModal";
+import PythonClientModal from "./components/modals/PythonClientModal";
 import { useWorkspaceFiles } from "./hooks/useWorkspaceFiles";
 import { useScriptRunner } from "./hooks/useScriptRunner";
 import { usePythonAutocomplete } from "./hooks/usePythonAutocomplete";
-import { sectionLabel } from "./lib/styles";
 
 export default function WebExplorerPage() {
   const {
-    collections,
-    handleSaveNetworkRequestToCollection,
-    handleSaveNetworkRequestToNewCollection,
     profiles,
     selectedProfileId,
     setSelectedProfileId,
@@ -38,14 +36,6 @@ export default function WebExplorerPage() {
     isBrowserConnected,
     inspectMode,
     sessionId,
-    networkLogs,
-    networkFilter,
-    setNetworkFilter,
-    networkPillFilter,
-    setNetworkPillFilter,
-    handleClearNetworkLogs,
-    logDetails,
-    setLogDetails,
     selectedElement,
     setSelectedElement,
     selectedElementLocators,
@@ -91,7 +81,6 @@ export default function WebExplorerPage() {
     handleClearAnchor,
     handleStartBrowser,
     handleDisconnectBrowser,
-    handleLogClick,
     userSessions,
     fetchUserSessions,
     handleCloseSession,
@@ -152,18 +141,11 @@ export default function WebExplorerPage() {
   const [showSaveToCollectionModal, setShowSaveToCollectionModal] = useState(false);
   const [pendingSaveLog, setPendingSaveLog] = useState<NetworkLog | null>(null);
   const [pendingSaveDetails, setPendingSaveDetails] = useState<NetworkDetails | null>(null);
-  const [saveCollectionId, setSaveCollectionId] = useState("");
-  const [saveRequestName, setSaveRequestName] = useState("");
-  const [newCollectionName, setNewCollectionName] = useState("");
-  const [saveDuplicates, setSaveDuplicates] = useState<{ collectionName: string; requestName: string }[]>([]);
-  const [saveShowDuplicateWarning, setSaveShowDuplicateWarning] = useState(false);
 
   // Show Python client code for a network log
   const [showPythonModal, setShowPythonModal] = useState(false);
-  const [pythonCopied, setPythonCopied] = useState(false);
   const [pendingPythonLog, setPendingPythonLog] = useState<NetworkLog | null>(null);
   const [pendingPythonDetails, setPendingPythonDetails] = useState<NetworkDetails | null>(null);
-  const [isSavingToCollection, setIsSavingToCollection] = useState(false);
 
   const { showToast } = useToast();
 
@@ -469,51 +451,10 @@ export default function WebExplorerPage() {
     }
   };
 
-  const filteredLogs = networkLogs.filter((log) => {
-    const matchesText =
-      networkFilter === "" ||
-      log.url.toLowerCase().includes(networkFilter.toLowerCase()) ||
-      log.method.toLowerCase().includes(networkFilter.toLowerCase());
-    const matchesPill =
-      networkPillFilter === "all" ||
-      (networkPillFilter === "api" && log.url.toLowerCase().includes("api"));
-    return matchesText && matchesPill;
-  });
-
-  // Save network log to collection helpers
-  const logBaseUrl = (url: string) => url.split("?")[0];
-
-  const parseLogQueryParams = (url: string): { key: string; value: string }[] => {
-    try {
-      return Array.from(new URL(url).searchParams.entries()).map(([key, value]) => ({ key, value }));
-    } catch { return []; }
-  };
-
-  const suggestRequestName = (url: string): string => {
-    try {
-      const segments = new URL(url).pathname.split("/").filter(Boolean);
-      return segments[segments.length - 1] || "API Request";
-    } catch { return "API Request"; }
-  };
-
-  const findCollectionDuplicates = (method: string, url: string): { collectionName: string; requestName: string }[] => {
-    const base = logBaseUrl(url);
-    return collections.flatMap(col =>
-      col.requests
-        .filter(req => req.method === method && logBaseUrl(req.url) === base)
-        .map(req => ({ collectionName: col.name, requestName: req.name }))
-    );
-  };
-
   const handleOpenSaveModal = async (log: NetworkLog, e: React.MouseEvent) => {
     e.stopPropagation();
     setPendingSaveLog(log);
     setPendingSaveDetails(null);
-    setSaveRequestName(suggestRequestName(log.url));
-    setSaveCollectionId(collections.length ? collections[0].id : "__new__");
-    setNewCollectionName("");
-    setSaveDuplicates([]);
-    setSaveShowDuplicateWarning(false);
     setShowSaveToCollectionModal(true);
     try {
       const data = await apiCall(`/api/browser/network/${sessionId}/details/${log.id}`);
@@ -525,421 +466,11 @@ export default function WebExplorerPage() {
     e.stopPropagation();
     setPendingPythonLog(log);
     setPendingPythonDetails(null);
-    setPythonCopied(false);
     setShowPythonModal(true);
     try {
       const data = await apiCall(`/api/browser/network/${sessionId}/details/${log.id}`);
       setPendingPythonDetails(data);
     } catch { /* non-fatal — generate from basic NetworkLog info */ }
-  };
-
-  const buildPythonFromNetworkLog = (log: NetworkLog, details: NetworkDetails | null): string => {
-    const extraModels: string[] = [];
-
-    const toClassName = (name: string) =>
-      name.replace(/[^a-zA-Z0-9]/g, "_").replace(/^[0-9]/, "_$&")
-          .split("_").filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join("");
-
-    const pyType = (v: any, nameHint: string): string => {
-      if (v === null) return "Optional[Any]";
-      if (typeof v === "boolean") return "bool";
-      if (typeof v === "number") return Number.isInteger(v) ? "int" : "float";
-      if (typeof v === "string") return "str";
-      if (Array.isArray(v)) {
-        if (v.length > 0 && v[0] !== null && typeof v[0] === "object" && !Array.isArray(v[0])) {
-          const modelName = toClassName(nameHint) + "Item";
-          extraModels.push(`class ${modelName}(BaseModel):\n${modelFields(v[0], modelName)}`);
-          return `List[${modelName}]`;
-        }
-        return "List[Any]";
-      }
-      if (typeof v === "object") {
-        const modelName = toClassName(nameHint);
-        extraModels.push(`class ${modelName}(BaseModel):\n${modelFields(v, modelName)}`);
-        return modelName;
-      }
-      return "Any";
-    };
-
-    const modelFields = (obj: Record<string, any>, parentName: string): string =>
-      Object.entries(obj)
-        .map(([k, v]) => `    ${k}: ${pyType(v, parentName + "_" + k)}`)
-        .join("\n") || "    pass";
-
-    const url = details?.request.url ?? log.url;
-    const method = (details?.request.method ?? log.method).toLowerCase();
-    const headers = details?.request.headers ?? log.headers ?? {};
-
-    const postData = details?.request.postData;
-    let requestBodyObj: Record<string, any> | null = null;
-    if (postData) {
-      try {
-        const parsed = JSON.parse(postData);
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) requestBodyObj = parsed;
-      } catch { /* not JSON — sent as raw body below */ }
-    }
-    const hasRequestModel = !!requestBodyObj;
-
-    const rawResponseBody = details?.response?.body;
-    let responseBodyObj: any = null;
-    if (rawResponseBody !== undefined && rawResponseBody !== null) {
-      if (typeof rawResponseBody === "string") {
-        try { responseBodyObj = JSON.parse(rawResponseBody); } catch { responseBodyObj = null; }
-      } else {
-        responseBodyObj = rawResponseBody;
-      }
-    }
-
-    let responseModelName = "";
-    let responseModelBlock = "";
-    if (responseBodyObj !== null) {
-      if (Array.isArray(responseBodyObj) && responseBodyObj.length > 0 &&
-          typeof responseBodyObj[0] === "object" && responseBodyObj[0] !== null && !Array.isArray(responseBodyObj[0])) {
-        responseModelName = "List[ResponseItem]";
-        responseModelBlock = `class ResponseItem(BaseModel):\n${modelFields(responseBodyObj[0], "ResponseItem")}`;
-      } else if (typeof responseBodyObj === "object" && !Array.isArray(responseBodyObj)) {
-        responseModelName = "ResponseBody";
-        responseModelBlock = `class ResponseBody(BaseModel):\n${modelFields(responseBodyObj, "ResponseBody")}`;
-      }
-    }
-
-    const requestModelBlock = hasRequestModel
-      ? `class RequestBody(BaseModel):\n${modelFields(requestBodyObj!, "RequestBody")}`
-      : "";
-
-    const lines: string[] = [];
-    lines.push("from __future__ import annotations");
-    lines.push("import requests");
-    lines.push("from pydantic import BaseModel");
-    lines.push("from typing import Any, Dict, List, Optional");
-
-    for (const m of extraModels) {
-      lines.push("");
-      lines.push(m);
-    }
-
-    if (requestModelBlock) {
-      lines.push("");
-      lines.push(requestModelBlock);
-    }
-
-    if (responseModelBlock) {
-      lines.push("");
-      lines.push(responseModelBlock);
-    }
-
-    const returnType = responseModelName || "dict";
-    lines.push("");
-    lines.push("");
-    lines.push(`def call_api() -> ${returnType}:`);
-    lines.push(`    url = "${url}"`);
-
-    const headerEntries = Object.entries(headers).filter(([k]) => k !== "");
-    if (headerEntries.length) {
-      lines.push("    headers = {");
-      headerEntries.forEach(([k, v]) => {
-        lines.push(`        "${k}": "${v}",`);
-      });
-      lines.push("    }");
-    } else {
-      lines.push("    headers = {}");
-    }
-
-    if (hasRequestModel) {
-      const fieldInits = Object.entries(requestBodyObj!).map(([k, v]) => {
-        const val = typeof v === "string" ? `"${v}"` : JSON.stringify(v);
-        return `        ${k}=${val},`;
-      }).join("\n");
-      lines.push("    payload = RequestBody(");
-      lines.push(fieldInits);
-      lines.push("    )");
-    }
-
-    const hasBody = !!postData;
-    if (hasBody) {
-      lines.push(`    response = requests.${method}(`);
-      lines.push("        url,");
-      lines.push("        headers=headers,");
-      if (hasRequestModel) {
-        lines.push("        json=payload.model_dump(),");
-      } else {
-        lines.push(`        data=${JSON.stringify(postData)},`);
-      }
-      lines.push("    )");
-    } else {
-      lines.push(`    response = requests.${method}(url, headers=headers)`);
-    }
-
-    lines.push("    response.raise_for_status()");
-    if (responseModelName === "ResponseBody") {
-      lines.push("    return ResponseBody(**response.json())");
-    } else if (responseModelName) {
-      lines.push("    return response.json()  # List[ResponseItem]");
-    } else {
-      lines.push("    return response.json()");
-    }
-
-    return lines.join("\n");
-  };
-
-  const copyPythonToClipboard = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setPythonCopied(true);
-      showToast("Python code copied", { type: "success" });
-      setTimeout(() => setPythonCopied(false), 1500);
-    } catch {
-      showToast("Failed to copy", { type: "error" });
-    }
-  };
-
-  const handleConfirmSaveToCollection = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const isNewCollection = saveCollectionId === "__new__";
-    if (!pendingSaveLog || !saveCollectionId || !saveRequestName) return;
-    if (isNewCollection && !newCollectionName.trim()) return;
-
-    if (!saveShowDuplicateWarning) {
-      const dupes = findCollectionDuplicates(pendingSaveLog.method, pendingSaveLog.url);
-      if (dupes.length) {
-        setSaveDuplicates(dupes);
-        setSaveShowDuplicateWarning(true);
-        return;
-      }
-    }
-
-    const req = pendingSaveDetails?.request;
-    const rawHeaders = req?.headers ?? pendingSaveLog.headers;
-    const headers = Object.entries(rawHeaders || {}).map(([key, value]) => ({ key, value }));
-    const postData = req?.postData || "";
-    let bodyType = "NONE";
-    let body = "";
-    if (postData) {
-      try { JSON.parse(postData); bodyType = "JSON"; } catch { bodyType = "TEXT"; }
-      body = postData;
-    }
-    const fullUrl = req?.url ?? pendingSaveLog.url;
-    const queryParams = parseLogQueryParams(fullUrl);
-    const urlWithoutQuery = logBaseUrl(fullUrl);
-
-    setIsSavingToCollection(true);
-    try {
-      if (isNewCollection) {
-        await handleSaveNetworkRequestToNewCollection(newCollectionName.trim(), saveRequestName, {
-          method: pendingSaveLog.method,
-          url: urlWithoutQuery,
-          headers,
-          queryParams,
-          bodyType,
-          body,
-        });
-      } else {
-        await handleSaveNetworkRequestToCollection(saveCollectionId, saveCollectionId, saveRequestName, {
-          method: pendingSaveLog.method,
-          url: urlWithoutQuery,
-          headers,
-          queryParams,
-          bodyType,
-          body,
-        });
-      }
-      setShowSaveToCollectionModal(false);
-    } catch (err: any) {
-      showToast(err.message, { type: "error" });
-    } finally {
-      setIsSavingToCollection(false);
-    }
-  };
-
-  const renderNetworkPanel = () => {
-    return (
-      <div className="w-full h-full flex overflow-hidden bg-cream font-sans">
-        {/* Left pane: Requests list */}
-        <div className="w-1/2 h-full border-r border-line flex flex-col overflow-hidden bg-panel">
-          <div className="px-4 py-3 border-b border-line flex items-center justify-between flex-shrink-0">
-            <span className={sectionLabel}>
-              <Activity className="h-3.5 w-3.5 text-stone" /> Network requests
-            </span>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5">
-                <div className="h-1.5 w-1.5 rounded-full bg-danger animate-pulse" />
-                <span className="text-[10px] font-semibold uppercase tracking-[0.05em] text-danger">Recording</span>
-              </div>
-              <button
-                onClick={handleClearNetworkLogs}
-                title="Clear network log"
-                className="h-[22px] px-2 rounded-md border border-line text-[10px] font-medium text-mute hover:text-ink hover:border-clay transition-colors flex items-center gap-1"
-              >
-                <RotateCcw className="h-3 w-3" /> Reset
-              </button>
-            </div>
-          </div>
-          <div className="px-3 pt-2.5 pb-0 flex gap-1.5 flex-shrink-0">
-            {(["all", "api"] as const).map((pill) => (
-              <button
-                key={pill}
-                onClick={() => setNetworkPillFilter(pill)}
-                className={`h-[22px] px-2.5 rounded-full text-[10px] font-semibold transition-colors ${
-                  networkPillFilter === pill
-                    ? "bg-clay text-white"
-                    : "bg-line text-mute hover:text-ink"
-                }`}
-              >
-                {pill === "all" ? "Show all" : "API"}
-              </button>
-            ))}
-          </div>
-          <div className="p-3 pb-3 pt-2 border-b border-line flex-shrink-0">
-            <input
-              type="text"
-              placeholder="Filter by URL or method…"
-              value={networkFilter}
-              onChange={(e) => setNetworkFilter(e.target.value)}
-              className="w-full h-[32px] bg-cream border border-line rounded-lg px-3 text-xs text-graphite outline-none focus:border-clay transition-colors"
-            />
-          </div>
-          <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1">
-            {filteredLogs.map((log) => {
-              const isActive = logDetails?.request.url === log.url && logDetails?.request.method === log.method;
-              return (
-                <div
-                  key={log.id}
-                  onClick={() => handleLogClick(log.id)}
-                  className={`flex flex-col gap-1.5 p-2.5 rounded-lg border cursor-pointer transition-colors ${
-                    isActive ? "bg-cream border-clay" : "bg-cream/40 border-line hover:bg-cream"
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded flex-shrink-0" style={methodStyle(log.method)}>
-                      {log.method}
-                    </span>
-                    <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded flex-shrink-0" style={statusStyle(log.status)}>
-                      {log.status === null ? "Pending" : log.status}
-                    </span>
-                    <span className="font-mono text-[11px] text-graphite flex-1 truncate">{log.url}</span>
-                    <button
-                      onClick={(e) => handleOpenPythonModal(log, e)}
-                      title="Show Python client code"
-                      className="h-5 w-5 rounded flex items-center justify-center text-stone hover:text-clay hover:bg-line transition-colors flex-shrink-0"
-                    >
-                      <Code2 className="h-3 w-3" />
-                    </button>
-                    <button
-                      onClick={(e) => handleOpenSaveModal(log, e)}
-                      title="Save to API Explorer collection"
-                      className="h-5 w-5 rounded flex items-center justify-center text-stone hover:text-clay hover:bg-line transition-colors flex-shrink-0"
-                    >
-                      <Save className="h-3 w-3" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-            {filteredLogs.length === 0 && (
-              <div className="flex-1 flex flex-col items-center justify-center text-mute py-12 gap-2">
-                <Activity className="h-8 w-8 text-mute/50" />
-                <p className="text-xs">No network activity captured yet.</p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Right pane: Selected Request details */}
-        <div className="w-1/2 h-full flex flex-col overflow-hidden bg-cream">
-          {logDetails ? (
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <div className="px-4 py-3 border-b border-line flex items-center justify-between flex-shrink-0 bg-panel">
-                <span className="text-xs font-semibold text-graphite font-mono truncate max-w-[80%]">
-                  {logDetails.request.method} {logDetails.request.url}
-                </span>
-                <button
-                  onClick={() => setLogDetails(null)}
-                  className="h-6 w-6 rounded-md hover:bg-line flex items-center justify-center transition-colors"
-                >
-                  <X className="h-4 w-4 text-mute hover:text-graphite" />
-                </button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 font-mono text-[11px] leading-normal select-text">
-                <Field label="Request URL">
-                  <span className="text-graphite break-all">{logDetails.request.url}</span>
-                </Field>
-                <div className="flex gap-4">
-                  <Field label="Method" className="w-1/2">
-                    <span className="text-clay font-semibold">{logDetails.request.method}</span>
-                  </Field>
-                  <Field label="Status" className="w-1/2">
-                    <span className="font-semibold" style={{ color: (logDetails.response?.status ?? 0) < 400 ? "var(--color-clay)" : "var(--color-danger)" }}>
-                      {logDetails.response ? `${logDetails.response.status} ${logDetails.response.statusText}` : "Pending"}
-                    </span>
-                  </Field>
-                </div>
-                
-                {logDetails.request.postData && (() => {
-                  let requestPayloadText: string;
-                  try {
-                    requestPayloadText = JSON.stringify(JSON.parse(logDetails.request.postData), null, 2);
-                  } catch {
-                    requestPayloadText = logDetails.request.postData;
-                  }
-                  return (
-                    <Field label="Request Payload" copyText={requestPayloadText}>
-                      <pre className="mt-1 p-2 bg-panel rounded border border-line overflow-auto max-h-40 whitespace-pre-wrap font-mono text-[10px]">
-                        {requestPayloadText}
-                      </pre>
-                    </Field>
-                  );
-                })()}
-
-                {logDetails.response?.body && (() => {
-                  let responsePayloadText: string;
-                  try {
-                    responsePayloadText = JSON.stringify(JSON.parse(logDetails.response.body), null, 2);
-                  } catch {
-                    responsePayloadText = logDetails.response.body;
-                  }
-                  return (
-                    <Field label="Response Payload" copyText={responsePayloadText}>
-                      <pre className="mt-1 p-2 bg-panel rounded border border-line overflow-auto max-h-64 whitespace-pre-wrap font-mono text-[10px]">
-                        {responsePayloadText}
-                      </pre>
-                    </Field>
-                  );
-                })()}
-
-                <Field label="Request Headers">
-                  <div className="mt-1 p-2 bg-panel rounded border border-line flex flex-col gap-1 overflow-auto max-h-40 text-[10px] font-mono">
-                    {Object.entries(logDetails.request.headers || {}).map(([k, v]) => (
-                      <div key={k} className="flex gap-2">
-                        <span className="text-mute flex-shrink-0 font-semibold">{k}:</span>
-                        <span className="text-graphite break-all">{v as string}</span>
-                      </div>
-                    ))}
-                  </div>
-                </Field>
-
-                {logDetails.response?.headers && (
-                  <Field label="Response Headers">
-                    <div className="mt-1 p-2 bg-panel rounded border border-line flex flex-col gap-1 overflow-auto max-h-40 text-[10px] font-mono">
-                      {Object.entries(logDetails.response.headers || {}).map(([k, v]) => (
-                        <div key={k} className="flex gap-2">
-                          <span className="text-mute flex-shrink-0 font-semibold">{k}:</span>
-                          <span className="text-graphite break-all">{v as string}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </Field>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-mute gap-2">
-              <Activity className="h-8 w-8 text-mute/30" />
-              <p className="text-xs">Select a request to inspect details.</p>
-            </div>
-          )}
-        </div>
-      </div>
-    );
   };
 
   const viewModes: { id: "browser" | "split" | "workspace" | "network"; label: string; icon: any }[] = [
@@ -1317,7 +848,7 @@ export default function WebExplorerPage() {
 
               {viewMode === "network" && (
                 <div className="w-full h-full flex flex-col overflow-hidden bg-cream">
-                  {renderNetworkPanel()}
+                  <NetworkPanel onOpenPythonModal={handleOpenPythonModal} onOpenSaveModal={handleOpenSaveModal} />
                 </div>
               )}
 
@@ -1879,127 +1410,20 @@ export default function WebExplorerPage() {
 
       {/* Save network log to collection modal */}
       {showSaveToCollectionModal && pendingSaveLog && (
-        <Modal
-          title="Save to collection"
+        <SaveToCollectionModal
+          log={pendingSaveLog}
+          details={pendingSaveDetails}
           onClose={() => setShowSaveToCollectionModal(false)}
-          width={460}
-        >
-          <form onSubmit={handleConfirmSaveToCollection} className="flex flex-col gap-5">
-            {saveShowDuplicateWarning && saveDuplicates.length > 0 && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 flex flex-col gap-1">
-                <span className="text-[12px] font-semibold text-amber-800">Duplicate request detected</span>
-                <ul className="text-[12px] text-amber-700 list-disc pl-4">
-                  {saveDuplicates.map((d, i) => (
-                    <li key={i}>
-                      <span className="font-mono">{d.requestName}</span>{" "}
-                      in <span className="font-medium">{d.collectionName}</span>
-                    </li>
-                  ))}
-                </ul>
-                <span className="text-[12px] text-amber-700 mt-0.5">Submit again to save anyway.</span>
-              </div>
-            )}
-
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[13px] font-medium text-graphite">Collection</label>
-              {saveCollectionId === "__new__" ? (
-                <>
-                  <input
-                    type="text"
-                    placeholder="e.g. Authentication Suite"
-                    value={newCollectionName}
-                    onChange={(e) => setNewCollectionName(e.target.value)}
-                    autoFocus
-                    required
-                    className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
-                  />
-                  {collections.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => { setSaveCollectionId(collections[0].id); setNewCollectionName(""); }}
-                      className="self-start text-[12px] text-clay hover:underline"
-                    >
-                      ← Choose existing collection
-                    </button>
-                  )}
-                </>
-              ) : (
-                <select
-                  value={saveCollectionId}
-                  onChange={(e) => setSaveCollectionId(e.target.value)}
-                  required
-                  className="h-10 bg-cream border border-line rounded-lg px-3 text-sm text-ink outline-none focus:border-clay"
-                >
-                  {collections.map(col => (
-                    <option key={col.id} value={col.id}>{col.name}</option>
-                  ))}
-                  <option value="__new__">+ Create new collection…</option>
-                </select>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[13px] font-medium text-graphite">Request name</label>
-              <input
-                type="text"
-                value={saveRequestName}
-                onChange={(e) => setSaveRequestName(e.target.value)}
-                autoFocus={saveCollectionId !== "__new__"}
-                required
-                className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
-              />
-            </div>
-
-            <div className="flex items-center gap-2 px-3 py-2 bg-panel rounded-lg border border-line">
-              <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded flex-shrink-0" style={methodStyle(pendingSaveLog.method)}>
-                {pendingSaveLog.method}
-              </span>
-              <span className="font-mono text-[11px] text-graphite truncate">{logBaseUrl(pendingSaveLog.url)}</span>
-            </div>
-
-            <ModalFooter
-              onCancel={() => setShowSaveToCollectionModal(false)}
-              submitLabel={isSavingToCollection ? "Saving…" : saveShowDuplicateWarning ? "Save anyway" : "Save"}
-            />
-          </form>
-        </Modal>
+        />
       )}
 
-      {showPythonModal && pendingPythonLog && (() => {
-        const code = buildPythonFromNetworkLog(pendingPythonLog, pendingPythonDetails);
-        return (
-          <Modal title="Python client" onClose={() => { setShowPythonModal(false); setPythonCopied(false); }} width={680}>
-            <div className="flex flex-col gap-4">
-              <p className="text-[13px] text-stone leading-relaxed">
-                Generated from the captured request and response. Uses{" "}
-                <code className="font-mono text-[12px] bg-panel px-1 py-0.5 rounded">requests</code> and{" "}
-                <code className="font-mono text-[12px] bg-panel px-1 py-0.5 rounded">pydantic</code>.
-              </p>
-              <div className="relative">
-                <pre className="m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre rounded-xl max-h-[420px]">
-                  {code}
-                </pre>
-                <button
-                  onClick={() => copyPythonToClipboard(code)}
-                  title="Copy code"
-                  className="absolute top-3 right-3 h-7 px-2.5 flex items-center gap-1.5 bg-ink-800/80 border border-white/10 rounded-md text-xs font-medium text-cream/70 hover:text-cream hover:bg-ink-700 transition-colors"
-                >
-                  {pythonCopied ? <Check className="h-3.5 w-3.5 text-sage" /> : <Copy className="h-3.5 w-3.5" />}
-                  {pythonCopied ? "Copied" : "Copy"}
-                </button>
-              </div>
-              <div className="flex justify-end pt-1 border-t border-line">
-                <button
-                  onClick={() => { setShowPythonModal(false); setPythonCopied(false); }}
-                  className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </Modal>
-        );
-      })()}
+      {showPythonModal && pendingPythonLog && (
+        <PythonClientModal
+          log={pendingPythonLog}
+          details={pendingPythonDetails}
+          onClose={() => setShowPythonModal(false)}
+        />
+      )}
 
       {/* New file modal */}
       {showNewFileModal && (
@@ -2114,56 +1538,3 @@ export default function WebExplorerPage() {
     </div>
   );
 }
-
-function Field({ label, children, className = "", copyText }: { label: string; children: React.ReactNode; className?: string; copyText?: string }) {
-  const contentRef = useRef<HTMLDivElement>(null);
-  const [copied, setCopied] = useState(false);
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
-      const el = contentRef.current;
-      if (!el) return;
-      e.preventDefault();
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      const selection = window.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-    }
-  };
-
-  const handleCopy = async () => {
-    if (!copyText) return;
-    try {
-      await navigator.clipboard.writeText(copyText);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {}
-  };
-
-  return (
-    <div className={className}>
-      <div className="flex items-center justify-between mb-1.5">
-        <h4 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-mute">{label}</h4>
-        {copyText !== undefined && (
-          <button
-            onClick={handleCopy}
-            title="Copy to clipboard"
-            className="h-5 w-5 rounded flex items-center justify-center text-stone hover:text-clay hover:bg-line transition-colors"
-          >
-            {copied ? <Check className="h-3 w-3 text-sage" /> : <Copy className="h-3 w-3" />}
-          </button>
-        )}
-      </div>
-      <div
-        ref={contentRef}
-        tabIndex={0}
-        onKeyDown={handleKeyDown}
-        className="bg-panel p-2.5 rounded-lg border border-line outline-none focus:ring-1 focus:ring-clay/40"
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
