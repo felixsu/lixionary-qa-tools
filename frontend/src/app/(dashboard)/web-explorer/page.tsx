@@ -2,12 +2,11 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import {
-  Globe, Terminal, Eye, Crosshair, Trash2, Plus, FileCode, Play,
-  Save, File, Folder, XCircle, Rows, Lock, X, Code2, Activity,
-  ChevronDown, ChevronUp, RotateCcw, Copy, Check, Mail, Anchor, Loader2, ScanSearch,
+  Globe, Eye, Crosshair, FileCode, Play,
+  Save, Rows, Lock, X, Code2, Activity,
+  ChevronDown, RotateCcw, Copy, Check, Mail, Anchor, Loader2, ScanSearch,
   Sparkles, StopCircle, AppWindow, Braces,
 } from "lucide-react";
-import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
 import { useWebExplorer } from "../../context/WebExplorerContext";
 import type { NetworkLog, NetworkDetails } from "../../context/WebExplorerContext";
@@ -15,14 +14,13 @@ import { useToast } from "../../context/ToastContext";
 import Dropdown from "../../components/Dropdown";
 import { Modal, ModalFooter } from "../../components/Modal";
 import { methodStyle, statusStyle } from "../../utils/methodStyle";
-import { confirmDialog } from "../../utils/confirmDialog";
-import {
-  MAIN_FILE, PLAYGROUND_FILE, RECORDING_FILE, MY_PAGE_FILE, MY_CLIENT_FILE,
-  isReadOnlyFile, isProtectedFile,
-} from "./lib/workspaceFiles";
+import { MY_PAGE_FILE } from "./lib/workspaceFiles";
 import BrowserPreview from "./components/BrowserPreview";
-
-const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8484';
+import WorkspacePanel from "./components/WorkspacePanel";
+import { useWorkspaceFiles } from "./hooks/useWorkspaceFiles";
+import { useScriptRunner } from "./hooks/useScriptRunner";
+import { usePythonAutocomplete } from "./hooks/usePythonAutocomplete";
+import { sectionLabel } from "./lib/styles";
 
 export default function WebExplorerPage() {
   const {
@@ -32,7 +30,6 @@ export default function WebExplorerPage() {
     profiles,
     selectedProfileId,
     setSelectedProfileId,
-    token,
     apiCall,
   } = useAppContext();
   const {
@@ -87,8 +84,6 @@ export default function WebExplorerPage() {
     handleStartExplore,
     handleStopExplore,
     isRecording,
-    handleStartRecording,
-    handleStopRecording,
     handleBrowserNavigate,
     handleToggleInspect,
     anchorElement,
@@ -103,7 +98,6 @@ export default function WebExplorerPage() {
     handleReconnectSession,
   } = useWebExplorer();
 
-  const [workspaceFiles, setWorkspaceFiles] = useState<{ name: string; size: number; updatedAt: string }[]>([]);
   const [limitExceededModalOpen, setLimitExceededModalOpen] = useState(false);
   const [activeSessions, setActiveSessions] = useState<any[]>([]);
   const [isStartingSession, setIsStartingSession] = useState(false);
@@ -149,11 +143,6 @@ export default function WebExplorerPage() {
   const [isDraggingSidebar, setIsDraggingSidebar] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const [selectedWorkspaceFile, setSelectedWorkspaceFile] = useState<string>("");
-  const [workspaceFileContent, setWorkspaceFileContent] = useState<string>("");
-  const [isWorkspaceLoading, setIsWorkspaceLoading] = useState<boolean>(false);
-  const [workspaceLogs, setWorkspaceLogs] = useState<string>("");
-  const [isScriptRunning, setIsScriptRunning] = useState<boolean>(false);
   const [newFileName, setNewFileName] = useState<string>("");
   const [showNewFileModal, setShowNewFileModal] = useState<boolean>(false);
   const [showSessionsDropdown, setShowSessionsDropdown] = useState<boolean>(false);
@@ -176,25 +165,34 @@ export default function WebExplorerPage() {
   const [pendingPythonDetails, setPendingPythonDetails] = useState<NetworkDetails | null>(null);
   const [isSavingToCollection, setIsSavingToCollection] = useState(false);
 
-  const pageMethodsRef = useRef<{ name: string; args: string; doc: string }[]>([]);
-  const clientMethodsRef = useRef<{ name: string; args: string; doc: string }[]>([]);
-  const completionProviderRef = useRef<any>(null);
-  const activeReaderRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
-
-  // Auto-save machinery: refs so the debounced callback and flush-on-switch
-  // never act on stale state captured in an earlier render's closure.
-  const contentRef = useRef<string>("");
-  const dirtyFileRef = useRef<string>("");
-  const dirtyRef = useRef<boolean>(false);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
-  const sessionIdRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    sessionIdRef.current = sessionId;
-  }, [sessionId]);
-
   const { showToast } = useToast();
+
+  const autocomplete = usePythonAutocomplete();
+  const workspace = useWorkspaceFiles({ onFilesRefreshed: autocomplete.updateMethodsCache });
+  const {
+    selectedWorkspaceFile,
+    fetchWorkspaceFiles,
+    fetchFileContent,
+    cancelPendingSave,
+    handleToggleRecord,
+  } = workspace;
+  const runner = useScriptRunner({
+    selectedWorkspaceFile,
+    workspaceFileContent: workspace.workspaceFileContent,
+    cancelPendingSave,
+  });
+
+  const handleCreateFile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newFileName || !sessionId) return;
+    try {
+      await workspace.createFile(newFileName);
+      setShowNewFileModal(false);
+      setNewFileName("");
+    } catch (err: any) {
+      showToast(`Failed to create file: ${err.message}`, { type: "error" });
+    }
+  };
 
   // Surface element-inspection failures (e.g. a click inside an iframe that
   // threw while resolving the frame chain) instead of leaving the click
@@ -206,17 +204,6 @@ export default function WebExplorerPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inspectError]);
-
-  useEffect(() => {
-    return () => {
-      if (completionProviderRef.current) {
-        completionProviderRef.current.dispose();
-        completionProviderRef.current = null;
-      }
-      flushPendingSave();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // Restore persisted layout sizes on mount
   useEffect(() => {
@@ -277,340 +264,6 @@ export default function WebExplorerPage() {
     document.addEventListener("mouseup", handleMouseUp);
   };
 
-  const parsePythonMethods = (content: string) => {
-    const methods: { name: string; args: string; doc: string }[] = [];
-    const regex = /def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\):(?:\s*\n\s*"""([^"]*)""")?/g;
-    let match;
-    while ((match = regex.exec(content)) !== null) {
-      const name = match[1];
-      if (name === "__init__") continue;
-      const args = match[2].trim();
-      const doc = match[3] ? match[3].trim() : "";
-      methods.push({ name, args, doc });
-    }
-    return methods;
-  };
-
-  const updateMethodsCache = async () => {
-    if (!sessionId) return;
-    let myPageMethods: { name: string; args: string; doc: string }[] = [];
-    let playgroundMethods: { name: string; args: string; doc: string }[] = [];
-    try {
-      const pageData = await apiCall(`/api/workspace/files/${MY_PAGE_FILE}?session_id=${sessionId}`);
-      if (pageData && pageData.content) {
-        myPageMethods = parsePythonMethods(pageData.content);
-      }
-    } catch (e) {
-      console.error("Failed to parse my_page.py", e);
-    }
-    try {
-      const pgData = await apiCall(`/api/workspace/files/${PLAYGROUND_FILE}?session_id=${sessionId}`);
-      if (pgData && pgData.content) {
-        playgroundMethods = parsePythonMethods(pgData.content);
-      }
-    } catch (e) {
-      console.error("Failed to parse playground.py", e);
-    }
-    // PlaygroundPage extends MyPage: suggest the union, overrides win
-    const seen = new Set(playgroundMethods.map((m) => m.name));
-    pageMethodsRef.current = [...playgroundMethods, ...myPageMethods.filter((m) => !seen.has(m.name))];
-    try {
-      const clientData = await apiCall(`/api/workspace/files/${MY_CLIENT_FILE}?session_id=${sessionId}`);
-      if (clientData && clientData.content) {
-        clientMethodsRef.current = parsePythonMethods(clientData.content);
-      }
-    } catch (e) {
-      console.error("Failed to parse my_client.py", e);
-    }
-  };
-
-  const handleEditorDidMount = (editor: any, monaco: any) => {
-    if (!completionProviderRef.current) {
-      completionProviderRef.current = monaco.languages.registerCompletionItemProvider("python", {
-        triggerCharacters: [".", "p", "m"],
-        provideCompletionItems: (model: any, position: any) => {
-          const lineContent = model.getLineContent(position.lineNumber);
-          const textBeforeCursor = lineContent.substring(0, position.column - 1);
-          
-          // mPage is the current template variable; playground_page kept for
-          // workspaces scaffolded before the rename
-          if (/(^|[^\w])(mPage|playground_page)\.$/.test(textBeforeCursor)) {
-            return {
-              suggestions: pageMethodsRef.current.map((m) => ({
-                label: m.name,
-                kind: monaco.languages.CompletionItemKind.Method,
-                insertText: m.name + "(" + (m.args.includes("value") ? '"${1:value}"' : "") + ")",
-                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-                detail: `(method) ${m.name}(${m.args})`,
-                documentation: m.doc,
-                range: {
-                  startLineNumber: position.lineNumber,
-                  endLineNumber: position.lineNumber,
-                  startColumn: position.column,
-                  endColumn: position.column
-                }
-              }))
-            };
-          }
-          
-          if (textBeforeCursor.endsWith("playground_client.")) {
-            return {
-              suggestions: clientMethodsRef.current.map((m) => ({
-                label: m.name,
-                kind: monaco.languages.CompletionItemKind.Method,
-                insertText: m.name + "(" + (m.args.includes("payload") ? "payload=${1:payload_obj}" : "") + ")",
-                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-                detail: `(method) ${m.name}(${m.args})`,
-                documentation: m.doc,
-                range: {
-                  startLineNumber: position.lineNumber,
-                  endLineNumber: position.lineNumber,
-                  startColumn: position.column,
-                  endColumn: position.column
-                }
-              }))
-            };
-          }
-
-          const word = model.getWordUntilPosition(position);
-          if (!textBeforeCursor.includes(".")) {
-            const vars = [
-              { label: "mPage", detail: "PlaygroundPage instance" },
-              { label: "playground_client", detail: "PlaygroundClient instance" }
-            ];
-            return {
-              suggestions: vars.map((v) => ({
-                label: v.label,
-                kind: monaco.languages.CompletionItemKind.Variable,
-                insertText: v.label,
-                detail: v.detail,
-                range: {
-                  startLineNumber: position.lineNumber,
-                  endLineNumber: position.lineNumber,
-                  startColumn: word.startColumn,
-                  endColumn: word.endColumn
-                }
-              }))
-            };
-          }
-
-          return { suggestions: [] };
-        }
-      });
-    }
-  };
-
-  const fetchWorkspaceFiles = async () => {
-    if (!sessionId) return;
-    try {
-      const data = await apiCall(`/api/workspace/files?session_id=${sessionId}`);
-      setWorkspaceFiles(data);
-      if (data.length > 0 && !selectedWorkspaceFile) setSelectedWorkspaceFile(data[0].name);
-      updateMethodsCache();
-    } catch (e) {
-      console.error("Failed to fetch workspace files", e);
-    }
-  };
-
-  const fetchFileContent = async (filename: string) => {
-    if (!filename || !sessionId) return;
-    try {
-      setIsWorkspaceLoading(true);
-      const res = await apiCall(`/api/workspace/files/${filename}?session_id=${sessionId}`);
-      setWorkspaceFileContent(res.content);
-    } catch (e) {
-      console.error("Failed to fetch file content", e);
-    } finally {
-      setIsWorkspaceLoading(false);
-    }
-  };
-
-  const saveFile = (filename: string, content: string): Promise<void> => {
-    const sid = sessionIdRef.current;
-    if (!filename || !sid || isReadOnlyFile(filename)) return Promise.resolve();
-    const run = async () => {
-      try {
-        await apiCall(`/api/workspace/files/${filename}?session_id=${sid}`, {
-          method: "POST",
-          body: JSON.stringify({ content }),
-        });
-        fetchWorkspaceFiles();
-      } catch (e: any) {
-        showToast(`Failed to save ${filename}: ${e.message}`, { type: "error" });
-      }
-    };
-    // Chain saves so POSTs never land out of order (e.g. a debounced save
-    // in flight when a flush-on-switch fires)
-    saveChainRef.current = saveChainRef.current.then(run, run);
-    return saveChainRef.current;
-  };
-
-  const flushPendingSave = (): Promise<void> => {
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-    if (!dirtyRef.current) return Promise.resolve();
-    // Clear before awaiting so a concurrent flush can't double-fire. On save
-    // failure we stay non-dirty: the next keystroke re-arms with full content,
-    // and retry loops against a dead session are worse than one clear toast.
-    dirtyRef.current = false;
-    return saveFile(dirtyFileRef.current, contentRef.current);
-  };
-
-  const cancelPendingSave = () => {
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-    dirtyRef.current = false;
-  };
-
-  const handleEditorChange = (val: string | undefined) => {
-    const v = val || "";
-    setWorkspaceFileContent(v);
-    if (!selectedWorkspaceFile || isReadOnlyFile(selectedWorkspaceFile)) return;
-    contentRef.current = v;
-    dirtyFileRef.current = selectedWorkspaceFile;
-    dirtyRef.current = true;
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => { flushPendingSave(); }, 1000);
-  };
-
-  const handleSaveWorkspaceFile = async () => {
-    if (!selectedWorkspaceFile || !sessionId) return;
-    cancelPendingSave();
-    await saveFile(selectedWorkspaceFile, workspaceFileContent);
-  };
-
-  const handleResetWorkspaceFile = async () => {
-    if (!selectedWorkspaceFile || !sessionId) return;
-    if (!(await confirmDialog(`Are you sure you want to reset ${selectedWorkspaceFile} to its default boilerplate? This will overwrite all your current modifications.`))) {
-      return;
-    }
-    // A pending debounced save firing after the reset would clobber the boilerplate
-    cancelPendingSave();
-    setIsWorkspaceLoading(true);
-    try {
-      const data = await apiCall(`/api/workspace/reset`, {
-        method: "POST",
-        body: JSON.stringify({ sessionId, filename: selectedWorkspaceFile }),
-      });
-      setWorkspaceFileContent(data.content || "");
-      showToast("File reset to default boilerplate", { type: "success" });
-    } catch (e: any) {
-      showToast(`Failed to reset file: ${e.message}`, { type: "error" });
-    } finally {
-      setIsWorkspaceLoading(false);
-    }
-  };
-
-  const handleCreateFile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newFileName || !sessionId) return;
-    let name = newFileName.trim();
-    if (!name.endsWith(".py")) name += ".py";
-    try {
-      await apiCall(`/api/workspace/files/${name}?session_id=${sessionId}`, {
-        method: "POST",
-        body: JSON.stringify({ content: "# New workspace module\n" }),
-      });
-      setShowNewFileModal(false);
-      setNewFileName("");
-      await fetchWorkspaceFiles();
-      setSelectedWorkspaceFile(name);
-    } catch (e: any) {
-      showToast(`Failed to create file: ${e.message}`, { type: "error" });
-    }
-  };
-
-  const handleDeleteFile = async (filename: string) => {
-    if (filename === MAIN_FILE) { showToast("main.py cannot be deleted.", { type: "error" }); return; }
-    if (!(await confirmDialog(`Are you sure you want to delete ${filename}?`))) return;
-    if (!sessionId) return;
-    // A pending flush after the DELETE would re-create the file (POST creates)
-    if (filename === dirtyFileRef.current) cancelPendingSave();
-    try {
-      await apiCall(`/api/workspace/files/${filename}?session_id=${sessionId}`, { method: "DELETE" });
-      if (selectedWorkspaceFile === filename) setSelectedWorkspaceFile(MAIN_FILE);
-      await fetchWorkspaceFiles();
-    } catch (e: any) {
-      showToast(`Failed to delete file: ${e.message}`, { type: "error" });
-    }
-  };
-
-  const handleRunScript = async () => {
-    if (!selectedWorkspaceFile || !sessionId) return;
-    
-    // Automatically turn off inspect mode if active
-    if (inspectMode) {
-      handleToggleInspect();
-    }
-
-    setIsScriptRunning(true);
-    setWorkspaceLogs("");
-    cancelPendingSave(); // run saves the file itself below
-    try {
-      await apiCall(`/api/workspace/files/${selectedWorkspaceFile}?session_id=${sessionId}`, {
-        method: "POST",
-        body: JSON.stringify({ content: workspaceFileContent }),
-      });
-    } catch (e) {
-      console.warn("Failed to auto-save file before running", e);
-    }
-    try {
-      const response = await fetch(`${LOCAL_API_URL}/api/workspace/run`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ filename: selectedWorkspaceFile, session_id: sessionId }),
-      });
-      if (!response.body) throw new Error("No response body available");
-      const reader = response.body.getReader();
-      activeReaderRef.current = reader;
-      const decoder = new TextDecoder();
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        setWorkspaceLogs((prev) => prev + decoder.decode(value, { stream: true }));
-      }
-    } catch (err: any) {
-      setWorkspaceLogs((prev) => prev + `\nExecution Error: ${err.message}\n`);
-    } finally {
-      activeReaderRef.current = null;
-      setIsScriptRunning(false);
-    }
-  };
-
-  const handleStopScript = async () => {
-    if (activeReaderRef.current) {
-      try {
-        await activeReaderRef.current.cancel();
-      } catch (err) {
-        console.warn("Failed to cancel active reader", err);
-      }
-      activeReaderRef.current = null;
-    }
-    if (!sessionId) return;
-    try {
-      await apiCall(`/api/workspace/stop?session_id=${sessionId}`, { method: "POST" });
-    } catch (e: any) {
-      showToast(`Failed to stop script: ${e.message}`, { type: "error" });
-    }
-  };
-
-  const handleToggleRecord = async () => {
-    if (isRecording) {
-      handleStopRecording();
-    } else {
-      handleStartRecording();
-      setSelectedWorkspaceFile(RECORDING_FILE);
-      setTimeout(async () => {
-        await fetchWorkspaceFiles();
-        await fetchFileContent(RECORDING_FILE);
-      }, 500);
-    }
-  };
-
   // Recording and inspecting shouldn't run at once — auto turn off inspect mode
   // whenever recording starts, whether triggered by the button above or a
   // server-pushed "recording_started" WS message.
@@ -620,39 +273,6 @@ export default function WebExplorerPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isRecording]);
-
-  useEffect(() => {
-    const handleStepAdded = async () => {
-      if (selectedWorkspaceFile === RECORDING_FILE) {
-        await fetchFileContent(RECORDING_FILE);
-      }
-    };
-    window.addEventListener("recording-step-added", handleStepAdded);
-    return () => {
-      window.removeEventListener("recording-step-added", handleStepAdded);
-    };
-  }, [selectedWorkspaceFile]);
-
-  useEffect(() => {
-    if (sessionId) {
-      cancelPendingSave(); // the previous session's workspace may be gone
-      fetchWorkspaceFiles();
-      setSelectedWorkspaceFile("");
-      setWorkspaceFileContent("");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
-
-  useEffect(() => {
-    const load = async () => {
-      // Flush the previous file's pending edits (via refs) before fetching the
-      // new one, so a rapid A→edit→B→A switch can't read stale content
-      await flushPendingSave();
-      if (selectedWorkspaceFile) fetchFileContent(selectedWorkspaceFile);
-    };
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedWorkspaceFile]);
 
   // Page-scan review drawer: per-element checkbox + editable method name
   const [scanSelections, setScanSelections] = useState<Record<number, { checked: boolean; name: string }>>({});
@@ -1129,163 +749,6 @@ export default function WebExplorerPage() {
     } finally {
       setIsSavingToCollection(false);
     }
-  };
-
-  const sectionLabel = "text-[11px] font-semibold uppercase tracking-[0.08em] text-stone flex items-center gap-2";
-  const fieldCls = "h-[34px] bg-cream border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay";
-  const iconBtn = "h-6 w-6 rounded-md border border-line flex items-center justify-center hover:bg-panel transition-colors";
-
-  const renderWorkspacePanel = ({ fileListOnRight = false }: { fileListOnRight?: boolean } = {}) => {
-    const fileList = (
-      <div style={{ width: `${explorerWidth}px` }} className="flex-shrink-0 bg-panel flex flex-col overflow-hidden">
-        <div className="px-3 py-2.5 border-b border-line flex items-center justify-between flex-shrink-0">
-          <span className={sectionLabel}>
-            <Folder className="h-3.5 w-3.5 text-clay" /> Files
-          </span>
-          <button onClick={() => setShowNewFileModal(true)} className={iconBtn} title="Create Python module">
-            <Plus className="h-3 w-3 text-graphite" />
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-0.5">
-          {workspaceFiles.map((file) => {
-            const active = selectedWorkspaceFile === file.name;
-            return (
-              <div
-                key={file.name}
-                className="group flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs transition-colors hover:bg-cream"
-                style={{ background: active ? "var(--color-cream)" : "transparent" }}
-              >
-                <button
-                  onClick={() => setSelectedWorkspaceFile(file.name)}
-                  className="flex items-center gap-2 text-left truncate flex-1"
-                >
-                  <File className={`h-3.5 w-3.5 ${active ? "text-clay" : "text-mute"}`} />
-                  <span className={`truncate ${active ? "text-clay font-medium" : "text-graphite"}`}>{file.name}</span>
-                </button>
-                {!isProtectedFile(file.name) && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleDeleteFile(file.name); }}
-                    className="opacity-0 group-hover:opacity-100 text-mute hover:text-danger transition"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-    );
-    const resizer = (
-      <div onMouseDown={handleSidebarDragStart} className="w-1 bg-line hover:bg-clay cursor-col-resize transition-colors flex-shrink-0 self-stretch z-10 select-none" />
-    );
-    const editor = (
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="h-11 border-b border-line px-4 bg-cream flex items-center justify-between flex-shrink-0">
-          <span className="text-xs font-medium text-graphite font-mono flex items-center gap-1.5">
-            <FileCode className="h-4 w-4 text-mute" />
-            {selectedWorkspaceFile || "No active file"}
-          </span>
-          <div className="flex items-center gap-2">
-            {isReadOnlyFile(selectedWorkspaceFile) && (
-              <span className="h-[30px] px-3 bg-panel border border-line rounded-md text-xs font-medium text-mute flex items-center gap-1.5 select-none">
-                <Lock className="h-3.5 w-3.5" /> Read-only
-              </span>
-            )}
-            {!isReadOnlyFile(selectedWorkspaceFile) && (
-              <button
-                onClick={handleSaveWorkspaceFile}
-                disabled={!selectedWorkspaceFile || isWorkspaceLoading}
-                className="h-[30px] px-3 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors flex items-center gap-1.5 disabled:opacity-50"
-              >
-                <Save className="h-3.5 w-3.5" /> Save
-              </button>
-            )}
-            {(selectedWorkspaceFile === MAIN_FILE || isReadOnlyFile(selectedWorkspaceFile)) && (
-              <button
-                onClick={handleResetWorkspaceFile}
-                disabled={!selectedWorkspaceFile || isWorkspaceLoading}
-                className="h-[30px] px-3 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                title="Reset file content to default boilerplate"
-              >
-                <RotateCcw className="h-3.5 w-3.5" /> Reset
-              </button>
-            )}
-            {isScriptRunning ? (
-              <button
-                onClick={handleStopScript}
-                className="h-[30px] px-3 bg-danger rounded-md text-xs font-medium text-white flex items-center gap-1.5 transition-colors"
-              >
-                <XCircle className="h-3.5 w-3.5" /> Stop
-              </button>
-            ) : (
-              <button
-                onClick={handleRunScript}
-                disabled={!selectedWorkspaceFile}
-                className="h-[30px] px-3 bg-clay hover:bg-clay-dark rounded-md text-xs font-medium text-white flex items-center gap-1.5 transition-colors disabled:opacity-50"
-              >
-                <Play className="h-3.5 w-3.5" /> Run
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div className="flex-1 relative overflow-hidden">
-          {isWorkspaceLoading ? (
-            <div className="absolute inset-0 flex items-center justify-center text-xs text-mute bg-cream/80">
-              Loading module content…
-            </div>
-          ) : (
-            <Editor
-              key={selectedWorkspaceFile}
-              height="100%"
-              language="python"
-              theme="vs-dark"
-              value={workspaceFileContent}
-              onChange={handleEditorChange}
-              onMount={handleEditorDidMount}
-              options={{
-                minimap: { enabled: false },
-                fontSize: 12,
-                lineNumbers: "on",
-                automaticLayout: true,
-                readOnly: isReadOnlyFile(selectedWorkspaceFile),
-              }}
-            />
-          )}
-        </div>
-
-        <div className={`border-t border-line flex flex-col flex-shrink-0 transition-all duration-300 ${isConsoleMinimized ? "h-9" : "h-44"}`}>
-          <div className="h-9 px-4 border-b border-line flex items-center justify-between bg-cream flex-shrink-0">
-            <button
-              onClick={() => setIsConsoleMinimized(!isConsoleMinimized)}
-              className="flex items-center gap-2 hover:opacity-80 transition-opacity"
-            >
-              <Terminal className="h-3.5 w-3.5 text-mute" />
-              <span className={sectionLabel}>Execution console</span>
-              {isConsoleMinimized ? <ChevronUp className="h-3.5 w-3.5 text-mute" /> : <ChevronDown className="h-3.5 w-3.5 text-mute" />}
-            </button>
-            {!isConsoleMinimized && (
-              <button onClick={() => setWorkspaceLogs("")} className="text-[11px] text-mute hover:text-graphite">
-                Clear
-              </button>
-            )}
-          </div>
-          {!isConsoleMinimized && (
-            <pre className="flex-1 m-0 p-3 bg-ink-900 font-mono text-[11px] text-sage overflow-y-auto whitespace-pre-wrap select-text">
-              {workspaceLogs || "Console output is empty. Run main.py or another script to execute."}
-            </pre>
-          )}
-        </div>
-      </div>
-    );
-
-    return (
-      <div className="h-full w-full flex overflow-hidden bg-cream">
-        {fileListOnRight ? <>{editor}{resizer}{fileList}</> : <>{fileList}{resizer}{editor}</>}
-      </div>
-    );
   };
 
   const renderNetworkPanel = () => {
@@ -1815,7 +1278,20 @@ export default function WebExplorerPage() {
                 <BrowserPreview dragOverlayActive={isDraggingSplit || isDraggingSidebar} />
               )}
 
-              {viewMode === "workspace" && <div className="w-full h-full flex flex-col overflow-hidden">{renderWorkspacePanel()}</div>}
+              {viewMode === "workspace" && (
+                <div className="w-full h-full flex flex-col overflow-hidden">
+                  <WorkspacePanel
+                    explorerWidth={explorerWidth}
+                    onSidebarDragStart={handleSidebarDragStart}
+                    workspace={workspace}
+                    runner={runner}
+                    onEditorMount={autocomplete.handleEditorDidMount}
+                    isConsoleMinimized={isConsoleMinimized}
+                    setIsConsoleMinimized={setIsConsoleMinimized}
+                    onNewFile={() => setShowNewFileModal(true)}
+                  />
+                </div>
+              )}
 
               {viewMode === "split" && (
                 <div className="w-full h-full flex flex-row overflow-hidden">
@@ -1824,7 +1300,17 @@ export default function WebExplorerPage() {
                   </div>
                   <div onMouseDown={handleSplitDragStart} className="w-1 bg-line hover:bg-clay cursor-col-resize transition-colors flex-shrink-0 h-full z-10 select-none" />
                   <div style={{ width: `${workspaceSplitPercent}%` }} className="h-full flex flex-col overflow-hidden flex-shrink-0">
-                    {renderWorkspacePanel({ fileListOnRight: true })}
+                    <WorkspacePanel
+                      fileListOnRight
+                      explorerWidth={explorerWidth}
+                      onSidebarDragStart={handleSidebarDragStart}
+                      workspace={workspace}
+                      runner={runner}
+                      onEditorMount={autocomplete.handleEditorDidMount}
+                      isConsoleMinimized={isConsoleMinimized}
+                      setIsConsoleMinimized={setIsConsoleMinimized}
+                      onNewFile={() => setShowNewFileModal(true)}
+                    />
                   </div>
                 </div>
               )}
