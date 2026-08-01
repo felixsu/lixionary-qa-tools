@@ -21,6 +21,9 @@ bin/
 include/
 lib/
 share/
+# The Python-venv lib/ rule above must not swallow frontend source directories
+!frontend/src/**/lib/
+!frontend/src/**/lib/**
 pyvenv.cfg
 pip-selfcheck.json
 
@@ -54,7 +57,7 @@ backend/.pytest_cache/
 .DS_Store
 .DS_Store?
 EHthumbs.db
-Icon
+Icon
 Thumbs.db
 
 # Logs and Debug
