@@ -9,7 +9,6 @@
 
 import type { Collection, RequestItem, InputBinding } from "../context/AppContext";
 import { findRequestInTree } from "../context/AppContext";
-import { scanInputNames } from "./requestTokens";
 import type {
   Flow,
   FlowNode,

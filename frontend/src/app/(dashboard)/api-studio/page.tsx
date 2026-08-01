@@ -21,7 +21,7 @@ import {
   ShieldCheck, AlertCircle, X, RotateCcw, Sparkles,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
-import { useAppContext, findRequestInTree } from "../../context/AppContext";
+import { useAppContext } from "../../context/AppContext";
 import type { Collection } from "../../context/AppContext";
 import { useToast } from "../../context/ToastContext";
 import Dropdown from "../../components/Dropdown";
@@ -44,7 +44,7 @@ import { buildRunCsv, downloadCsv, runCsvFilename, persistLastRun, loadLastRun }
 import {
   uniqueCopyName, renameNodeConfig,
   buildCatalog, toWireCatalog, buildCanvasContext, validateAndPlan,
-  loadChat, persistChat, clearChat, migrateChat, NEW_FLOW_CHAT_KEY,
+  loadChat, persistChat, clearChat, NEW_FLOW_CHAT_KEY,
   type ChatEntry, type Proposal,
 } from "../../utils/studioAssistant";
 import { studioNodeTypes, type StudioNode, type StudioNodeData } from "./components/nodes";

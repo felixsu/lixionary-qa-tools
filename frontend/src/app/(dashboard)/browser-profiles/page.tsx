@@ -127,7 +127,7 @@ export default function BrowserProfilesPage() {
       try {
         const res = await apiCall("/api/browser-helper/status");
         setHelperConnected(res?.connected || false);
-      } catch (err) {
+      } catch {
         setHelperConnected(false);
       }
     };
@@ -136,13 +136,6 @@ export default function BrowserProfilesPage() {
     const interval = setInterval(checkHelperStatus, 2000);
     return () => clearInterval(interval);
   }, [showModal, apiCall]);
-
-  // Fetch tabs when extension or helper becomes active, or modal is shown
-  useEffect(() => {
-    if ((extensionReady || helperConnected) && showModal) {
-      handleFetchTabs();
-    }
-  }, [extensionReady, helperConnected, showModal]);
 
   const handleFetchTabs = async () => {
     setIsFetchingTabs(true);
@@ -165,6 +158,14 @@ export default function BrowserProfilesPage() {
       setIsFetchingTabs(false);
     }
   };
+
+  // Fetch tabs when extension or helper becomes active, or modal is shown
+  useEffect(() => {
+    if ((extensionReady || helperConnected) && showModal) {
+      handleFetchTabs();
+    }
+  }, [extensionReady, helperConnected, showModal]);
+
 
   const handleFetchTabData = async () => {
     if (!selectedTabId) return;
@@ -206,7 +207,7 @@ export default function BrowserProfilesPage() {
     try {
       const u = new URL(fetchedData.url);
       origin = u.origin;
-    } catch (e) {
+    } catch {
       showToast("Invalid tab URL: " + fetchedData.url, { type: "error" });
       return;
     }
@@ -234,7 +235,7 @@ export default function BrowserProfilesPage() {
       try {
         currentCookies = JSON.parse(profileCookies);
         if (!Array.isArray(currentCookies)) currentCookies = [];
-      } catch (e) {
+      } catch {
         // ignore invalid JSON
       }
     }
@@ -263,7 +264,7 @@ export default function BrowserProfilesPage() {
         if (parsed && typeof parsed === "object" && Array.isArray(parsed.origins)) {
           currentLs = parsed;
         }
-      } catch (e) {
+      } catch {
         // ignore
       }
     }
@@ -802,7 +803,7 @@ export default function BrowserProfilesPage() {
                           try {
                             const res = await apiCall("/api/browser-helper/status");
                             setHelperConnected(res?.connected || false);
-                          } catch (e) {
+                          } catch {
                             setHelperConnected(false);
                           }
                         }}

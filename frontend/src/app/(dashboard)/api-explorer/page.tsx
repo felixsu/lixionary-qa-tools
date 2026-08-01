@@ -5,8 +5,8 @@ import { createPortal } from "react-dom";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Send, Plus, Trash2, ChevronDown, ChevronRight,
-  Sparkles, Code2, Copy, Check, X, AlignLeft, Minimize2, Maximize2,
-  PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil, AlertCircle, Wand2,
+  Sparkles, Code2, Copy, Check, AlignLeft, Minimize2, Maximize2,
+  PanelLeftClose, PanelLeftOpen, Folder, Pencil, AlertCircle, Wand2,
   Upload, Search, Bug, MapPin, MoreVertical
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
