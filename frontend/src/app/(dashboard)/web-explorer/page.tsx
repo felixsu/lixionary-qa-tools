@@ -12,28 +12,17 @@ import { useAppContext } from "../../context/AppContext";
 import type { NetworkLog, NetworkDetails } from "../../context/AppContext";
 import { useToast } from "../../context/ToastContext";
 import Dropdown from "../../components/Dropdown";
+import { Modal, ModalFooter } from "../../components/Modal";
+import { methodStyle, statusStyle } from "../../utils/methodStyle";
 import { confirmDialog } from "../../utils/confirmDialog";
 import { useScreencastFrame } from "../../utils/screencastFrameStore";
+import {
+  MAIN_FILE, PLAYGROUND_FILE, RECORDING_FILE, MY_PAGE_FILE, MY_CLIENT_FILE,
+  isReadOnlyFile, isProtectedFile,
+} from "./lib/workspaceFiles";
 
 const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8484';
 
-const methodStyle = (m: string): React.CSSProperties => {
-  const map: Record<string, { bg: string; c: string }> = {
-    GET: { bg: "#e3f5e9", c: "#276749" },
-    POST: { bg: "#e3ecff", c: "#1a4db5" },
-    PUT: { bg: "#fff3e0", c: "#9a5c00" },
-    DELETE: { bg: "#fde8e8", c: "#c64545" },
-    PATCH: { bg: "#f3e8ff", c: "#6d28d9" },
-  };
-  const s = map[m] || { bg: "#f0f0ee", c: "#6c6a64" };
-  return { background: s.bg, color: s.c };
-};
-
-const statusStyle = (status: number | null): React.CSSProperties => {
-  if (status === null) return { background: "#fff3e0", color: "#9a5c00" };
-  if (status < 400) return { background: "#e3f5e9", color: "#276749" };
-  return { background: "#fde8e8", color: "#c64545" };
-};
 export default function WebExplorerPage() {
   const {
     browserUrl,
@@ -373,7 +362,7 @@ export default function WebExplorerPage() {
     let myPageMethods: { name: string; args: string; doc: string }[] = [];
     let playgroundMethods: { name: string; args: string; doc: string }[] = [];
     try {
-      const pageData = await apiCall(`/api/workspace/files/inspection_code/my_page.py?session_id=${sessionId}`);
+      const pageData = await apiCall(`/api/workspace/files/${MY_PAGE_FILE}?session_id=${sessionId}`);
       if (pageData && pageData.content) {
         myPageMethods = parsePythonMethods(pageData.content);
       }
@@ -381,7 +370,7 @@ export default function WebExplorerPage() {
       console.error("Failed to parse my_page.py", e);
     }
     try {
-      const pgData = await apiCall(`/api/workspace/files/playground.py?session_id=${sessionId}`);
+      const pgData = await apiCall(`/api/workspace/files/${PLAYGROUND_FILE}?session_id=${sessionId}`);
       if (pgData && pgData.content) {
         playgroundMethods = parsePythonMethods(pgData.content);
       }
@@ -392,7 +381,7 @@ export default function WebExplorerPage() {
     const seen = new Set(playgroundMethods.map((m) => m.name));
     pageMethodsRef.current = [...playgroundMethods, ...myPageMethods.filter((m) => !seen.has(m.name))];
     try {
-      const clientData = await apiCall(`/api/workspace/files/inspection_code/my_client.py?session_id=${sessionId}`);
+      const clientData = await apiCall(`/api/workspace/files/${MY_CLIENT_FILE}?session_id=${sessionId}`);
       if (clientData && clientData.content) {
         clientMethodsRef.current = parsePythonMethods(clientData.content);
       }
@@ -504,7 +493,7 @@ export default function WebExplorerPage() {
 
   const saveFile = (filename: string, content: string): Promise<void> => {
     const sid = sessionIdRef.current;
-    if (!filename || !sid || filename.startsWith("inspection_code/")) return Promise.resolve();
+    if (!filename || !sid || isReadOnlyFile(filename)) return Promise.resolve();
     const run = async () => {
       try {
         await apiCall(`/api/workspace/files/${filename}?session_id=${sid}`, {
@@ -546,7 +535,7 @@ export default function WebExplorerPage() {
   const handleEditorChange = (val: string | undefined) => {
     const v = val || "";
     setWorkspaceFileContent(v);
-    if (!selectedWorkspaceFile || selectedWorkspaceFile.startsWith("inspection_code/")) return;
+    if (!selectedWorkspaceFile || isReadOnlyFile(selectedWorkspaceFile)) return;
     contentRef.current = v;
     dirtyFileRef.current = selectedWorkspaceFile;
     dirtyRef.current = true;
@@ -602,14 +591,14 @@ export default function WebExplorerPage() {
   };
 
   const handleDeleteFile = async (filename: string) => {
-    if (filename === "main.py") { showToast("main.py cannot be deleted.", { type: "error" }); return; }
+    if (filename === MAIN_FILE) { showToast("main.py cannot be deleted.", { type: "error" }); return; }
     if (!(await confirmDialog(`Are you sure you want to delete ${filename}?`))) return;
     if (!sessionId) return;
     // A pending flush after the DELETE would re-create the file (POST creates)
     if (filename === dirtyFileRef.current) cancelPendingSave();
     try {
       await apiCall(`/api/workspace/files/${filename}?session_id=${sessionId}`, { method: "DELETE" });
-      if (selectedWorkspaceFile === filename) setSelectedWorkspaceFile("main.py");
+      if (selectedWorkspaceFile === filename) setSelectedWorkspaceFile(MAIN_FILE);
       await fetchWorkspaceFiles();
     } catch (e: any) {
       showToast(`Failed to delete file: ${e.message}`, { type: "error" });
@@ -680,10 +669,10 @@ export default function WebExplorerPage() {
       handleStopRecording();
     } else {
       handleStartRecording();
-      setSelectedWorkspaceFile("my_recording.py");
+      setSelectedWorkspaceFile(RECORDING_FILE);
       setTimeout(async () => {
         await fetchWorkspaceFiles();
-        await fetchFileContent("my_recording.py");
+        await fetchFileContent(RECORDING_FILE);
       }, 500);
     }
   };
@@ -700,8 +689,8 @@ export default function WebExplorerPage() {
 
   useEffect(() => {
     const handleStepAdded = async () => {
-      if (selectedWorkspaceFile === "my_recording.py") {
-        await fetchFileContent("my_recording.py");
+      if (selectedWorkspaceFile === RECORDING_FILE) {
+        await fetchFileContent(RECORDING_FILE);
       }
     };
     window.addEventListener("recording-step-added", handleStepAdded);
@@ -826,8 +815,8 @@ export default function WebExplorerPage() {
       }
       resetPageScan();
       await fetchWorkspaceFiles();
-      if (selectedWorkspaceFile === "inspection_code/my_page.py") {
-        await fetchFileContent("inspection_code/my_page.py");
+      if (selectedWorkspaceFile === MY_PAGE_FILE) {
+        await fetchFileContent(MY_PAGE_FILE);
       }
     } catch (e: any) {
       showToast(e.message || "Failed to record scanned elements.", { type: "error" });
@@ -885,8 +874,8 @@ export default function WebExplorerPage() {
       showToast(`Method ${methodName} added to MyPage.`, { type: "info" });
       setTesterMethodName("");
       await fetchWorkspaceFiles();
-      if (selectedWorkspaceFile === "inspection_code/my_page.py") {
-        await fetchFileContent("inspection_code/my_page.py");
+      if (selectedWorkspaceFile === MY_PAGE_FILE) {
+        await fetchFileContent(MY_PAGE_FILE);
       }
     } catch (e: any) {
       showToast(e.message || "Failed to record selector to POM class.", { type: "error" });
@@ -918,8 +907,8 @@ export default function WebExplorerPage() {
       setSelectedElementMethodName("");
       
       await fetchWorkspaceFiles();
-      if (selectedWorkspaceFile === "inspection_code/my_page.py") {
-        await fetchFileContent("inspection_code/my_page.py");
+      if (selectedWorkspaceFile === MY_PAGE_FILE) {
+        await fetchFileContent(MY_PAGE_FILE);
       }
     } catch (e: any) {
       showToast(e.message || "Failed to record element to POM class.", { type: "error" });
@@ -1239,7 +1228,7 @@ export default function WebExplorerPage() {
                   <File className={`h-3.5 w-3.5 ${active ? "text-clay" : "text-mute"}`} />
                   <span className={`truncate ${active ? "text-clay font-medium" : "text-graphite"}`}>{file.name}</span>
                 </button>
-                {file.name !== "main.py" && file.name !== "playground.py" && !file.name.startsWith("inspection_code/") && (
+                {!isProtectedFile(file.name) && (
                   <button
                     onClick={(e) => { e.stopPropagation(); handleDeleteFile(file.name); }}
                     className="opacity-0 group-hover:opacity-100 text-mute hover:text-danger transition"
@@ -1265,12 +1254,12 @@ export default function WebExplorerPage() {
             {selectedWorkspaceFile || "No active file"}
           </span>
           <div className="flex items-center gap-2">
-            {selectedWorkspaceFile.startsWith("inspection_code/") && (
+            {isReadOnlyFile(selectedWorkspaceFile) && (
               <span className="h-[30px] px-3 bg-panel border border-line rounded-md text-xs font-medium text-mute flex items-center gap-1.5 select-none">
                 <Lock className="h-3.5 w-3.5" /> Read-only
               </span>
             )}
-            {!selectedWorkspaceFile.startsWith("inspection_code/") && (
+            {!isReadOnlyFile(selectedWorkspaceFile) && (
               <button
                 onClick={handleSaveWorkspaceFile}
                 disabled={!selectedWorkspaceFile || isWorkspaceLoading}
@@ -1279,7 +1268,7 @@ export default function WebExplorerPage() {
                 <Save className="h-3.5 w-3.5" /> Save
               </button>
             )}
-            {(selectedWorkspaceFile === "main.py" || selectedWorkspaceFile.startsWith("inspection_code/")) && (
+            {(selectedWorkspaceFile === MAIN_FILE || isReadOnlyFile(selectedWorkspaceFile)) && (
               <button
                 onClick={handleResetWorkspaceFile}
                 disabled={!selectedWorkspaceFile || isWorkspaceLoading}
@@ -1327,7 +1316,7 @@ export default function WebExplorerPage() {
                 fontSize: 12,
                 lineNumbers: "on",
                 automaticLayout: true,
-                readOnly: selectedWorkspaceFile.startsWith("inspection_code/"),
+                readOnly: isReadOnlyFile(selectedWorkspaceFile),
               }}
             />
           )}
@@ -2604,7 +2593,7 @@ export default function WebExplorerPage() {
 
       {/* Save network log to collection modal */}
       {showSaveToCollectionModal && pendingSaveLog && (
-        <ModalShell
+        <Modal
           title="Save to collection"
           onClose={() => setShowSaveToCollectionModal(false)}
           width={460}
@@ -2682,18 +2671,18 @@ export default function WebExplorerPage() {
               <span className="font-mono text-[11px] text-graphite truncate">{logBaseUrl(pendingSaveLog.url)}</span>
             </div>
 
-            <FooterButtons
+            <ModalFooter
               onCancel={() => setShowSaveToCollectionModal(false)}
               submitLabel={isSavingToCollection ? "Saving…" : saveShowDuplicateWarning ? "Save anyway" : "Save"}
             />
           </form>
-        </ModalShell>
+        </Modal>
       )}
 
       {showPythonModal && pendingPythonLog && (() => {
         const code = buildPythonFromNetworkLog(pendingPythonLog, pendingPythonDetails);
         return (
-          <ModalShell title="Python client" onClose={() => { setShowPythonModal(false); setPythonCopied(false); }} width={680}>
+          <Modal title="Python client" onClose={() => { setShowPythonModal(false); setPythonCopied(false); }} width={680}>
             <div className="flex flex-col gap-4">
               <p className="text-[13px] text-stone leading-relaxed">
                 Generated from the captured request and response. Uses{" "}
@@ -2722,13 +2711,13 @@ export default function WebExplorerPage() {
                 </button>
               </div>
             </div>
-          </ModalShell>
+          </Modal>
         );
       })()}
 
       {/* New file modal */}
       {showNewFileModal && (
-        <ModalShell title="Create Python module" onClose={() => { setShowNewFileModal(false); setNewFileName(""); }} width={420}>
+        <Modal title="Create Python module" onClose={() => { setShowNewFileModal(false); setNewFileName(""); }} width={420}>
           <form onSubmit={handleCreateFile} className="flex flex-col gap-5">
             <div className="flex flex-col gap-1.5">
               <label className="text-[13px] font-medium text-graphite">Filename</label>
@@ -2742,15 +2731,15 @@ export default function WebExplorerPage() {
                 className="h-10 bg-cream border border-line rounded-lg px-3.5 font-mono text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
               />
             </div>
-            <FooterButtons onCancel={() => { setShowNewFileModal(false); setNewFileName(""); }} submitLabel="Create" />
+            <ModalFooter onCancel={() => { setShowNewFileModal(false); setNewFileName(""); }} submitLabel="Create" />
           </form>
-        </ModalShell>
+        </Modal>
       )}
 
 
       {/* Resource Limit Exceeded Modal */}
       {limitExceededModalOpen && (
-        <ModalShell 
+        <Modal 
           title="Server Resource Limit Reached" 
           onClose={() => setLimitExceededModalOpen(false)} 
           width={640}
@@ -2834,7 +2823,7 @@ export default function WebExplorerPage() {
               </button>
             </div>
           </div>
-        </ModalShell>
+        </Modal>
       )}
     </div>
   );
@@ -2892,31 +2881,3 @@ function Field({ label, children, className = "", copyText }: { label: string; c
   );
 }
 
-function ModalShell({ title, onClose, children, width = 480 }: { title: string; onClose: () => void; children: React.ReactNode; width?: number }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(20,20,19,0.5)", backdropFilter: "blur(2px)" }}>
-      <div className="bg-cream rounded-2xl p-8 shadow-[0_24px_48px_-12px_rgba(20,20,19,0.18)] flex flex-col gap-5" style={{ width }}>
-        <div className="flex items-center justify-between">
-          <h2 className="m-0 font-serif text-xl font-medium text-ink">{title}</h2>
-          <button onClick={onClose} className="h-8 w-8 rounded-lg border border-line flex items-center justify-center hover:bg-panel transition-colors">
-            <X className="h-4 w-4 text-graphite" />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function FooterButtons({ onCancel, submitLabel }: { onCancel: () => void; submitLabel: string }) {
-  return (
-    <div className="flex justify-end gap-2 pt-1 border-t border-line">
-      <button type="button" onClick={onCancel} className="h-10 px-4 bg-cream border border-line rounded-lg text-[13px] font-medium text-graphite hover:bg-panel transition-colors">
-        Cancel
-      </button>
-      <button type="submit" className="h-10 px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors">
-        {submitLabel}
-      </button>
-    </div>
-  );
-}
