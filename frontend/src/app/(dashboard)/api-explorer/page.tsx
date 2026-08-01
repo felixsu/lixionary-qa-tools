@@ -17,6 +17,7 @@ import { useSearchIndexStatus } from "../../context/SearchIndexStatusContext";
 import SearchResultsList from "./SearchResultsList";
 import OutputsDialog from "./OutputsDialog";
 import MapPickerDialog from "./MapPickerDialog";
+import JsonTreeView from "../../components/JsonTreeView";
 import Dropdown from "../../components/Dropdown";
 import SelectablePre from "../../components/SelectablePre";
 import { Modal, ModalFooter } from "../../components/Modal";
@@ -661,6 +662,7 @@ export default function ApiExplorerPage() {
   const [outputsDialog, setOutputsDialog] = useState<{ open: boolean; selected?: string } | null>(null);
   const [outputValueDialog, setOutputValueDialog] = useState<{ name: string; value: string } | null>(null);
   const [outputValueCopied, setOutputValueCopied] = useState(false);
+  const [bodyView, setBodyView] = useState<"tree" | "text">("tree");
   const [descMode, setDescMode] = useState<"write" | "preview">("write");
   const [showImproveModal, setShowImproveModal] = useState(false);
   const [improvedDraft, setImprovedDraft] = useState("");
@@ -2139,6 +2141,21 @@ export default function ApiExplorerPage() {
                         {d.status} {d.statusText}
                       </span>
                       <span className="font-mono text-xs text-stone">{d.executionTimeMs} ms</span>
+                      {(responseTab === "pretty" || responseTab === "last") && (
+                        <div className="flex items-center rounded-md border border-line overflow-hidden">
+                          {(["tree", "text"] as const).map((mode) => (
+                            <button
+                              key={mode}
+                              onClick={() => setBodyView(mode)}
+                              className={`h-7 px-2.5 text-xs font-medium capitalize transition-colors ${
+                                bodyView === mode ? "bg-panel text-ink" : "bg-cream text-stone hover:bg-panel"
+                              }`}
+                            >
+                              {mode}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                       <button
                         onClick={() => copyToClipboard(getResponseText(), setResponseCopied)}
                         title="Copy response"
@@ -2152,13 +2169,19 @@ export default function ApiExplorerPage() {
               </div>
 
               {responseTab === "last" ? (
-                <SelectablePre className="flex-1 m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap">
-                  {activeRequest?.lastResponse
-                    ? (typeof activeRequest.lastResponse.body === "object"
-                        ? JSON.stringify(activeRequest.lastResponse.body, null, 2)
-                        : String(activeRequest.lastResponse.body))
-                    : "No successful response recorded yet."}
-                </SelectablePre>
+                activeRequest?.lastResponse && typeof activeRequest.lastResponse.body === "object" && bodyView === "tree" ? (
+                  <div className="flex-1 overflow-auto bg-ink-900 p-4">
+                    <JsonTreeView data={activeRequest.lastResponse.body} />
+                  </div>
+                ) : (
+                  <SelectablePre className="flex-1 m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap">
+                    {activeRequest?.lastResponse
+                      ? (typeof activeRequest.lastResponse.body === "object"
+                          ? JSON.stringify(activeRequest.lastResponse.body, null, 2)
+                          : String(activeRequest.lastResponse.body))
+                      : "No successful response recorded yet."}
+                  </SelectablePre>
+                )
               ) : !apiResponse ? (
                 <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6">
                   <Send className="h-7 w-7 text-mute" />
@@ -2170,11 +2193,17 @@ export default function ApiExplorerPage() {
               ) : (
                 <div className="flex-1 overflow-hidden flex flex-col">
                   {responseTab === "pretty" && (
-                    <SelectablePre className="flex-1 m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap">
-                      {typeof apiResponse.body === "object"
-                        ? JSON.stringify(apiResponse.body, null, 2)
-                        : apiResponse.body}
-                    </SelectablePre>
+                    typeof apiResponse.body === "object" && apiResponse.body !== null && bodyView === "tree" ? (
+                      <div className="flex-1 overflow-auto bg-ink-900 p-4">
+                        <JsonTreeView data={apiResponse.body} />
+                      </div>
+                    ) : (
+                      <SelectablePre className="flex-1 m-0 p-4 bg-ink-900 text-sage font-mono text-xs leading-relaxed overflow-auto whitespace-pre-wrap">
+                        {typeof apiResponse.body === "object"
+                          ? JSON.stringify(apiResponse.body, null, 2)
+                          : apiResponse.body}
+                      </SelectablePre>
+                    )
                   )}
                   {responseTab === "headers" && (
                     <div className="flex-1 overflow-y-auto p-4">
