@@ -117,9 +117,18 @@ export const buildPythonFromNetworkLog = (log: NetworkLog, details: NetworkDetai
   }
 
   if (hasRequestModel) {
+    // Python literal, not JSON.stringify — JS emits true/false/null which are
+    // invalid Python (True/False/None), inside nested values too.
+    const pyLiteral = (v: any): string => {
+      if (v === null || v === undefined) return "None";
+      if (typeof v === "boolean") return v ? "True" : "False";
+      if (typeof v === "string") return JSON.stringify(v);
+      if (typeof v === "number") return String(v);
+      if (Array.isArray(v)) return `[${v.map(pyLiteral).join(", ")}]`;
+      return `{${Object.entries(v).map(([key, val]) => `${JSON.stringify(key)}: ${pyLiteral(val)}`).join(", ")}}`;
+    };
     const fieldInits = Object.entries(requestBodyObj!).map(([k, v]) => {
-      const val = typeof v === "string" ? `"${v}"` : JSON.stringify(v);
-      return `        ${k}=${val},`;
+      return `        ${k}=${pyLiteral(v)},`;
     }).join("\n");
     lines.push("    payload = RequestBody(");
     lines.push(fieldInits);

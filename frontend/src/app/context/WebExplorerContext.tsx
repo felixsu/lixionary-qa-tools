@@ -844,13 +844,8 @@ export function WebExplorerProvider({ children }: { children: React.ReactNode })
 
   const fetchNetworkLogs = async (sessId: string) => {
     try {
-       const res = await fetch(`${LOCAL_API_URL}/api/browser/network/${sessId}/logs`, {
-         headers: { "Authorization": `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setNetworkLogs(data);
-      }
+      const data = await apiCall(`/api/browser/network/${sessId}/logs`);
+      setNetworkLogs(data);
     } catch (e) {
       console.error("Error fetching network logs", e);
     }
@@ -859,13 +854,8 @@ export function WebExplorerProvider({ children }: { children: React.ReactNode })
   const handleLogClick = async (logId: string) => {
     setLogDetails(null);
     try {
-       const res = await fetch(`${LOCAL_API_URL}/api/browser/network/${sessionId}/details/${encodeURIComponent(logId)}`, {
-         headers: { "Authorization": `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setLogDetails(data);
-      }
+      const data = await apiCall(`/api/browser/network/${sessionId}/details/${encodeURIComponent(logId)}`);
+      setLogDetails(data);
     } catch (e) {
       console.error("Error fetching network log details", e);
     }

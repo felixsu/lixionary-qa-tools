@@ -18,6 +18,18 @@ export default function LoginPage() {
   const pollCancelledRef = useRef(false);
   const router = useRouter();
 
+  // Segment-local hydration guard. The page prerenders with the auth-loading
+  // spinner, but AppProvider's mount effect can flip isLoadingAuth to false
+  // BEFORE this lazily-hydrated segment (root <Suspense>) hydrates — making
+  // the client's first render (the form) mismatch the server HTML (spinner).
+  // Local state can't change before this component's own hydration, so gating
+  // on it keeps the first client render identical to the prerender.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional one-time post-hydration flip
+    setMounted(true);
+  }, []);
+
   useEffect(() => {
     return () => {
       pollCancelledRef.current = true;
@@ -121,7 +133,7 @@ export default function LoginPage() {
     }
   };
 
-  if (isLoadingAuth) {
+  if (!mounted || isLoadingAuth) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-cream text-ink">
         <div className="flex flex-col items-center gap-4">
