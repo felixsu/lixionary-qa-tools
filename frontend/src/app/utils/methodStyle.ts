@@ -13,3 +13,10 @@ export const methodStyle = (m: string): CSSProperties => {
   const s = map[m] || { bg: "#f0f0ee", c: "#6c6a64" };
   return { background: s.bg, color: s.c };
 };
+
+/** Matching chip colors for an HTTP status code (null = still pending). */
+export const statusStyle = (status: number | null): CSSProperties => {
+  if (status === null) return { background: "#fff3e0", color: "#9a5c00" };
+  if (status < 400) return { background: "#e3f5e9", color: "#276749" };
+  return { background: "#fde8e8", color: "#c64545" };
+};

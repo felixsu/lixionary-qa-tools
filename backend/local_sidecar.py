@@ -26,7 +26,7 @@ CDP_PORT = int(os.environ.get("AE_CDP_PORT", "9222"))
 
 from services.browser import BrowserSessionManager, rank_locators, sanitize_cookies, render_recording_script
 from services.naming import polish_method_names, dedupe_names, heuristic_method_name, propose_locator_fix
-from services.generator import generate_pom_class, generate_http_client, build_pom_method_code
+from services.generator import build_pom_method_code
 from db.local_store import LocalStore
 from routes.local_store import router as local_store_router
 from routes.local_executor import router as local_executor_router
@@ -124,17 +124,6 @@ class FileResetPayload(BaseModel):
 class RunScriptPayload(BaseModel):
     filename: str
     session_id: str
-
-class GeneratePOMPayload(BaseModel):
-    className: str
-    url: Optional[str] = ""
-    parentLocator: Optional[str] = ""
-    elements: List[dict]
-
-class GenerateClientPayload(BaseModel):
-    baseUrl: str
-    logIds: List[str]
-    sessionId: str
 
 class AddPOMMethodPayload(BaseModel):
     sessionId: str
@@ -1163,34 +1152,6 @@ async def get_local_network_log_details(session_id: str, log_id: str):
     if not details:
         raise HTTPException(status_code=404, detail="Network log details not found")
     return details
-
-@app.post("/api/browser/pom/generate")
-async def generate_local_pom(payload: GeneratePOMPayload):
-    try:
-        pom_code = generate_pom_class(
-            class_name=payload.className,
-            url=payload.url,
-            parent_locator=payload.parentLocator,
-            elements=payload.elements
-        )
-        return {"code": pom_code}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.post("/api/browser/client/generate")
-async def generate_local_client(payload: GenerateClientPayload):
-    try:
-        logs = []
-        for log_id in payload.logIds:
-            details = _network_log_details.get(payload.sessionId, {}).get(log_id)
-            if details:
-                req_data = details["request"]
-                req_data["responseBody"] = details["response"].get("body")
-                logs.append(req_data)
-        client_code = generate_http_client(payload.baseUrl, logs)
-        return {"code": client_code}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/browser/pom/add")
 async def add_local_pom_method(payload: AddPOMMethodPayload):
