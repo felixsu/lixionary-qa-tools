@@ -3,9 +3,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
   Globe, Eye, Crosshair, FileCode, Play,
-  Save, Rows, Lock, X, Activity,
-  ChevronDown, Copy, Mail, Anchor, Loader2, ScanSearch,
-  Sparkles, StopCircle, AppWindow, Braces,
+  Save, Rows, X, Activity,
+  Copy, Mail, Anchor, Loader2, ScanSearch,
+  Sparkles, Braces,
 } from "lucide-react";
 import { useAppContext } from "../../context/AppContext";
 import { useWebExplorer } from "../../context/WebExplorerContext";
@@ -14,6 +14,7 @@ import { useToast } from "../../context/ToastContext";
 import Dropdown from "../../components/Dropdown";
 import { Modal, ModalFooter } from "../../components/Modal";
 import { MY_PAGE_FILE } from "./lib/workspaceFiles";
+import ControlBar from "./components/ControlBar";
 import BrowserPreview from "./components/BrowserPreview";
 import WorkspacePanel from "./components/WorkspacePanel";
 import NetworkPanel from "./components/NetworkPanel";
@@ -25,14 +26,10 @@ import { usePythonAutocomplete } from "./hooks/usePythonAutocomplete";
 
 export default function WebExplorerPage() {
   const {
-    profiles,
     selectedProfileId,
-    setSelectedProfileId,
     apiCall,
   } = useAppContext();
   const {
-    browserUrl,
-    setBrowserUrl,
     isBrowserConnected,
     inspectMode,
     sessionId,
@@ -48,7 +45,6 @@ export default function WebExplorerPage() {
     pageScanError,
     pageScanResults,
     pageScanScopeLabel,
-    handleScanPage,
     resetPageScan,
     selectedElementAction,
     setSelectedElementAction,
@@ -65,26 +61,16 @@ export default function WebExplorerPage() {
     handleTestSelector,
     handleClearHighlights,
     handleVerifyCustomSelector,
-    handleFocusBrowserWindow,
     isExploring,
     exploreSteps,
     setExploreSteps,
-    explorePrompt,
-    setExplorePrompt,
-    handleStartExplore,
-    handleStopExplore,
     isRecording,
-    handleBrowserNavigate,
     handleToggleInspect,
     anchorElement,
     handleSetAnchor,
     handleClearAnchor,
     handleStartBrowser,
-    handleDisconnectBrowser,
-    userSessions,
-    fetchUserSessions,
     handleCloseSession,
-    handleReconnectSession,
   } = useWebExplorer();
 
   const [limitExceededModalOpen, setLimitExceededModalOpen] = useState(false);
@@ -134,7 +120,6 @@ export default function WebExplorerPage() {
 
   const [newFileName, setNewFileName] = useState<string>("");
   const [showNewFileModal, setShowNewFileModal] = useState<boolean>(false);
-  const [showSessionsDropdown, setShowSessionsDropdown] = useState<boolean>(false);
   const [isConsoleMinimized, setIsConsoleMinimized] = useState<boolean>(false);
 
   // Save network log to API Explorer collection
@@ -259,9 +244,6 @@ export default function WebExplorerPage() {
   // Page-scan review drawer: per-element checkbox + editable method name
   const [scanSelections, setScanSelections] = useState<Record<number, { checked: boolean; name: string }>>({});
   const [isRecordingScan, setIsRecordingScan] = useState(false);
-  const [showScanMenu, setShowScanMenu] = useState(false);
-  const [showExploreMenu, setShowExploreMenu] = useState(false);
-  const [exploreScope, setExploreScope] = useState<"page" | "selected">("page");
   // Manual selector testing — inspector-card override input + standalone tester card
   const [customSelectorInput, setCustomSelectorInput] = useState("");
   const [showSelectorTester, setShowSelectorTester] = useState(false);
@@ -269,37 +251,6 @@ export default function WebExplorerPage() {
   const [testerAction, setTesterAction] = useState("click");
   const [testerValue, setTesterValue] = useState("");
   const [testerMethodName, setTesterMethodName] = useState("");
-  const scanMenuRef = useRef<HTMLDivElement>(null);
-  const exploreMenuRef = useRef<HTMLDivElement>(null);
-  const sessionsMenuRef = useRef<HTMLDivElement>(null);
-
-  // Close the Scan/Explore/Sessions dropdowns on an outside click or Escape.
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (scanMenuRef.current && !scanMenuRef.current.contains(e.target as Node)) {
-        setShowScanMenu(false);
-      }
-      if (exploreMenuRef.current && !exploreMenuRef.current.contains(e.target as Node)) {
-        setShowExploreMenu(false);
-      }
-      if (sessionsMenuRef.current && !sessionsMenuRef.current.contains(e.target as Node)) {
-        setShowSessionsDropdown(false);
-      }
-    }
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        setShowScanMenu(false);
-        setShowExploreMenu(false);
-        setShowSessionsDropdown(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, []);
 
   useEffect(() => {
     if (!pageScanResults) {
@@ -482,303 +433,15 @@ export default function WebExplorerPage() {
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* Control bar */}
-      <div className="px-4 py-2.5 border-b border-line bg-panel flex items-center gap-2 flex-shrink-0">
-        <Globe className="h-4 w-4 text-stone flex-shrink-0" />
-        <div className="flex-1 h-[34px] bg-cream border border-line rounded-lg flex items-center px-3 gap-2">
-          <Lock className="h-3 w-3 text-mute flex-shrink-0" />
-          <input
-            type="text"
-            value={browserUrl}
-            onChange={(e) => setBrowserUrl(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && isBrowserConnected) {
-                handleBrowserNavigate();
-              }
-            }}
-            placeholder="https://example.com"
-            className="flex-1 bg-transparent font-mono text-xs text-ink outline-none disabled:text-stone"
-          />
-        </div>
-        {isBrowserConnected ? (
-          <>
-            <button
-              onClick={handleBrowserNavigate}
-              className="h-[34px] px-3.5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors"
-            >
-              Go
-            </button>
-            <button
-              onClick={handleToggleInspect}
-              disabled={isVerifying || isExploring || isRecording}
-              title={isVerifying ? "Inspect is disabled while verification is running" : isExploring ? "Inspect is disabled while exploration is running" : isRecording ? "Inspect is disabled while recording" : undefined}
-              className="h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border disabled:opacity-60"
-              style={
-                inspectMode
-                  ? { background: "rgba(204,120,92,0.12)", borderColor: "rgba(204,120,92,0.4)", color: "#cc785c" }
-                  : { background: "transparent", borderColor: "var(--color-line)", color: "var(--color-graphite)" }
-              }
-            >
-              <Crosshair className="h-3.5 w-3.5" />
-              {inspectMode ? "Inspecting" : "Inspect"}
-            </button>
-            <button
-              onClick={() => {
-                const next = !showSelectorTester;
-                setShowSelectorTester(next);
-                if (!next) handleClearHighlights();
-              }}
-              disabled={isVerifying || isExploring || isRecording}
-              title="Type a selector manually, test it against the page, run actions and save it"
-              className="h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border disabled:opacity-60"
-              style={
-                showSelectorTester
-                  ? { background: "rgba(204,120,92,0.12)", borderColor: "rgba(204,120,92,0.4)", color: "#cc785c" }
-                  : { background: "transparent", borderColor: "var(--color-line)", color: "var(--color-graphite)" }
-              }
-            >
-              <Braces className="h-3.5 w-3.5" />
-              Selector
-            </button>
-            <button
-              onClick={handleFocusBrowserWindow}
-              title="Raise the live browser window — browsing and inspect clicks work there too"
-              className="h-[34px] px-3 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border bg-transparent border-line text-graphite hover:bg-panel"
-            >
-              <AppWindow className="h-3.5 w-3.5" />
-              Window
-            </button>
-            <div className="relative" ref={scanMenuRef}>
-              <button
-                onClick={() => setShowScanMenu((v) => !v)}
-                disabled={pageScanStatus === "scanning" || isVerifying || isExploring || isRecording}
-                title={isVerifying ? "Scan is disabled while verification is running" : isExploring ? "Scan is disabled while exploration is running" : isRecording ? "Scan is disabled while recording" : "Detect interactive elements and propose POM methods"}
-                className="h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border bg-transparent border-line text-graphite hover:bg-panel disabled:opacity-60"
-              >
-                {pageScanStatus === "scanning" ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <ScanSearch className="h-3.5 w-3.5" />
-                )}
-                {pageScanStatus === "scanning" ? "Scanning…" : "Scan"}
-                <ChevronDown className="h-3 w-3" />
-              </button>
-              {showScanMenu && pageScanStatus !== "scanning" && (
-                <div className="absolute right-0 top-full mt-1 w-[260px] bg-cream border border-line rounded-xl shadow-[0_8px_24px_rgba(20,20,19,0.12)] z-50 overflow-hidden">
-                  <button
-                    onClick={() => { setShowScanMenu(false); handleScanPage("page"); }}
-                    className="w-full text-left px-3 py-2.5 text-xs text-ink hover:bg-panel transition-colors"
-                  >
-                    <span className="font-semibold block">Entire page</span>
-                    <span className="text-mute text-[11px]">All frames, including iframes</span>
-                  </button>
-                  <button
-                    onClick={() => { setShowScanMenu(false); handleScanPage("selected"); }}
-                    disabled={!selectedElement}
-                    className="w-full text-left px-3 py-2.5 text-xs text-ink hover:bg-panel transition-colors disabled:opacity-50 disabled:cursor-not-allowed border-t border-line"
-                  >
-                    <span className="font-semibold block">Inside selected element</span>
-                    <span className="text-mute text-[11px]">
-                      {selectedElement
-                        ? <>Scan within &lt;{selectedElement.tagName}&gt; {String(selectedElement.text || "").slice(0, 30)}</>
-                        : "Inspect & click a parent element first"}
-                    </span>
-                  </button>
-                </div>
-              )}
-            </div>
-            <button
-              onClick={handleToggleRecord}
-              disabled={isVerifying || isExploring}
-              title={isRecording ? "Stop recording user interactions" : "Record all user interactions on the page"}
-              className={`h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border ${
-                isRecording
-                  ? "bg-red-50 border-red-300 text-red-700 hover:bg-red-100 font-semibold"
-                  : "bg-transparent border-line text-graphite hover:bg-panel"
-              }`}
-            >
-              {isRecording ? (
-                <>
-                  <span className="h-2.5 w-2.5 rounded-full bg-red-600 animate-pulse flex-shrink-0" />
-                  Recording…
-                </>
-              ) : (
-                <>
-                  <svg className="h-3.5 w-3.5 text-graphite" fill="currentColor" viewBox="0 0 24 24">
-                    <circle cx="12" cy="12" r="8" />
-                  </svg>
-                  Record
-                </>
-              )}
-            </button>
-            <div className="relative" ref={exploreMenuRef}>
-              {isExploring ? (
-                <button
-                  onClick={handleStopExplore}
-                  title="Stop exploration and keep whatever was discovered so far"
-                  className="h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border bg-red-50 border-red-300 text-red-700 hover:bg-red-100"
-                >
-                  <StopCircle className="h-3.5 w-3.5" />
-                  Exploring… step {exploreSteps.length} (Stop)
-                </button>
-              ) : (
-                <button
-                  onClick={() => setShowExploreMenu((v) => !v)}
-                  disabled={isVerifying || isRecording}
-                  title={isRecording ? "Explore is disabled while recording" : "Let AI autonomously click/fill around the page to discover interactive elements"}
-                  className="h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border bg-transparent border-line text-graphite hover:bg-panel disabled:opacity-60"
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Explore
-                  <ChevronDown className="h-3 w-3" />
-                </button>
-              )}
-              {showExploreMenu && !isExploring && (
-                <div className="absolute right-0 top-full mt-1 w-[280px] bg-cream border border-line rounded-xl shadow-[0_8px_24px_rgba(20,20,19,0.12)] z-50 p-3 flex flex-col gap-2">
-                  <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">Scope</label>
-                  <div className="flex rounded-md border border-line overflow-hidden">
-                    <button
-                      onClick={() => setExploreScope("page")}
-                      className={`flex-1 h-7 text-[11px] font-medium transition-colors ${exploreScope === "page" ? "bg-clay text-white" : "bg-panel text-graphite hover:bg-line"}`}
-                    >
-                      Entire page
-                    </button>
-                    <button
-                      onClick={() => selectedElement && setExploreScope("selected")}
-                      disabled={!selectedElement}
-                      title={selectedElement ? undefined : "Inspect & click a parent element first"}
-                      className={`flex-1 h-7 text-[11px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${exploreScope === "selected" ? "bg-clay text-white" : "bg-panel text-graphite hover:bg-line"}`}
-                    >
-                      Selected element
-                    </button>
-                  </div>
-                  {exploreScope === "selected" && selectedElement && (
-                    <p className="text-[11px] text-mute -mt-1">
-                      Restricted to &lt;{selectedElement.tagName}&gt; {String(selectedElement.text || "").slice(0, 30)}
-                    </p>
-                  )}
-                  <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">
-                    What should the AI explore? (optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={explorePrompt}
-                    onChange={(e) => setExplorePrompt(e.target.value)}
-                    placeholder="e.g. explore the checkout flow"
-                    className="h-8 bg-panel border border-line rounded-md px-2.5 text-xs text-ink outline-none focus:border-clay"
-                  />
-                  <p className="text-[11px] text-mute">
-                    Runs for a few minutes, clicking/filling around the page for real. Destructive-looking
-                    actions (delete, pay, log out, etc.) are automatically skipped, and it won't leave this site.
-                  </p>
-                  <button
-                    onClick={() => { setShowExploreMenu(false); handleStartExplore(exploreScope); }}
-                    className="h-8 bg-clay hover:bg-clay-dark rounded-lg text-xs font-semibold text-white transition-colors flex items-center justify-center gap-1.5"
-                  >
-                    <Sparkles className="h-3.5 w-3.5" /> Start Exploring
-                  </button>
-                </div>
-              )}
-            </div>
-            {/* Sessions dropdown */}
-            <div className="relative" ref={sessionsMenuRef}>
-              <button
-                onClick={() => { setShowSessionsDropdown((v) => !v); fetchUserSessions(); }}
-                className="h-[34px] px-3 bg-cream border border-line rounded-lg text-[13px] text-graphite hover:bg-panel transition-colors flex items-center gap-1.5"
-              >
-                Sessions <ChevronDown className="h-3.5 w-3.5" />
-              </button>
-              {showSessionsDropdown && (
-                <div className="absolute right-0 top-full mt-1 w-[320px] bg-cream border border-line rounded-xl shadow-[0_8px_24px_rgba(20,20,19,0.12)] z-50 overflow-hidden">
-                  <div className="px-3 py-2 border-b border-line flex items-center justify-between">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-stone">Your sessions</span>
-                    <button onClick={() => setShowSessionsDropdown(false)} className="text-mute hover:text-graphite">
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                  <div className="max-h-[240px] overflow-y-auto">
-                    {userSessions.length === 0 && (
-                      <p className="text-xs text-mute text-center py-4">No sessions found.</p>
-                    )}
-                    {userSessions.map((s) => (
-                      <div key={s.session_id} className="flex items-center gap-2 px-3 py-2 border-b border-line last:border-0 hover:bg-panel transition-colors">
-                        <span className={`h-2 w-2 rounded-full flex-shrink-0 ${s.status === "active" ? "bg-sage" : s.status === "disconnected" ? "bg-stone" : "bg-danger"}`} />
-                        <span className="font-mono text-[11px] text-graphite flex-1 truncate" title={s.session_id}>{s.session_id}</span>
-                        <span className="text-[10px] text-mute capitalize">{s.status}</span>
-                        {s.status === "disconnected" && (
-                          <button
-                            onClick={() => { handleReconnectSession(s.session_id); setShowSessionsDropdown(false); }}
-                            className="text-[11px] font-medium text-clay hover:text-clay-dark"
-                          >Reconnect</button>
-                        )}
-                        <button
-                          onClick={() => onCloseSession(s.session_id)}
-                          disabled={closingSessionId === s.session_id}
-                          className="text-mute hover:text-danger transition-colors disabled:opacity-40"
-                          title="Close session"
-                        >
-                          {closingSessionId === s.session_id ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <X className="h-3.5 w-3.5" />
-                          )}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            <button
-              onClick={handleDisconnectBrowser}
-              className="h-[34px] px-3.5 bg-cream border border-line rounded-lg text-[13px] text-graphite hover:bg-panel transition-colors flex items-center gap-1.5"
-            >
-              <X className="h-3.5 w-3.5" /> Disconnect
-            </button>
-          </>
-        ) : (
-          <>
-            <Dropdown
-              value={selectedProfileId}
-              onChange={setSelectedProfileId}
-              className="h-[34px] px-3 rounded-lg text-[13px] text-graphite"
-              options={[
-                { value: "", label: "No profile (clean session)" },
-                ...profiles.map((p) => ({ value: p.id, label: p.name })),
-              ]}
-            />
-            {/* Pre-connect: show existing sessions to reconnect */}
-            {userSessions.length > 0 && (
-              <div className="flex flex-col gap-1 border border-line rounded-lg px-3 py-2 max-w-[240px]">
-                {userSessions.slice(0, 3).map((s) => (
-                  <div key={s.session_id} className="flex items-center gap-2">
-                    <span className={`h-2 w-2 rounded-full flex-shrink-0 ${s.status === "active" ? "bg-sage" : "bg-stone"}`} />
-                    <span className="font-mono text-[10px] text-graphite truncate flex-1" title={s.session_id}>{s.session_id}</span>
-                    <button
-                      onClick={() => handleReconnectSession(s.session_id)}
-                      className="text-[11px] font-medium text-clay hover:text-clay-dark whitespace-nowrap"
-                    >Reconnect</button>
-                    <button onClick={() => handleCloseSession(s.session_id)} className="text-mute hover:text-danger">
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <button
-              onClick={onStartBrowser}
-              disabled={isStartingSession}
-              className="h-[34px] px-4 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white flex items-center gap-1.5 transition-colors disabled:opacity-60"
-            >
-              {isStartingSession ? (
-                <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Starting…</>
-              ) : (
-                <><Play className="h-3.5 w-3.5" /> New Session</>
-              )}
-            </button>
-          </>
-        )}
-      </div>
+      <ControlBar
+        showSelectorTester={showSelectorTester}
+        setShowSelectorTester={setShowSelectorTester}
+        onToggleRecord={handleToggleRecord}
+        onStartBrowser={onStartBrowser}
+        isStartingSession={isStartingSession}
+        onCloseSession={onCloseSession}
+        closingSessionId={closingSessionId}
+      />
 
       {isBrowserConnected ? (
         <div className="flex-1 flex overflow-hidden">
