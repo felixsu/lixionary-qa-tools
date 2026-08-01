@@ -255,14 +255,6 @@ export interface NetworkDetails {
   } | null;
 }
 
-export interface RecordedElement {
-  element_id: string;
-  method_name: string;
-  strategy: string;
-  selector: string;
-  action: string;
-}
-
 export interface BrowserProfile {
   id: string; // local-store localId — stable offline, before any cloud sync
   cloudId?: string | null; // Mongo _id once synced
@@ -385,16 +377,12 @@ interface AppContextType {
   viewportSize: { width: number; height: number };
   inspectMode: boolean;
   setInspectMode: (inspect: boolean) => void;
-  vncUrl: string;
-  setVncUrl: (url: string) => void;
   sessionId: string;
   setSessionId: (id: string) => void;
   networkLogs: NetworkLog[];
   setNetworkLogs: React.Dispatch<React.SetStateAction<NetworkLog[]>>;
   networkFilter: string;
   setNetworkFilter: (filter: string) => void;
-  selectedLogId: string | null;
-  setSelectedLogId: (id: string | null) => void;
   logDetails: NetworkDetails | null;
   setLogDetails: (details: NetworkDetails | null) => void;
   networkPillFilter: "all" | "api";
@@ -403,12 +391,6 @@ interface AppContextType {
   sendBrowserMouseEvent: (type: "click" | "move" | "down" | "up", x: number, y: number) => void;
   sendBrowserWheelEvent: (deltaX: number, deltaY: number) => void;
   sendBrowserKeyboardEvent: (key: string) => void;
-  activePomClass: string;
-  setActivePomClass: (className: string) => void;
-  pomClasses: string[];
-  setPomClasses: React.Dispatch<React.SetStateAction<string[]>>;
-  pomElements: Record<string, RecordedElement[]>;
-  setPomElements: React.Dispatch<React.SetStateAction<Record<string, RecordedElement[]>>>;
   selectedElement: any;
   setSelectedElement: (el: any) => void;
   selectedElementLocators: any[];
@@ -453,16 +435,6 @@ interface AppContextType {
   isRecording: boolean;
   handleStartRecording: () => void;
   handleStopRecording: () => void;
-  activeGenCodeTab: "pom" | "client";
-  setActiveGenCodeTab: (tab: "pom" | "client") => void;
-  generatedPomCode: string;
-  setGeneratedPomCode: (code: string) => void;
-  generatedClientCode: string;
-  setGeneratedClientCode: (code: string) => void;
-  selectedLogsForClient: string[];
-  setSelectedLogsForClient: React.Dispatch<React.SetStateAction<string[]>>;
-  clientBaseUrl: string;
-  setClientBaseUrl: (url: string) => void;
 
   // Browser Profiles State
   profiles: BrowserProfile[];
@@ -501,7 +473,6 @@ interface AppContextType {
   apiCall: (path: string, options?: RequestInit) => Promise<any>;
   handleBrowserNavigate: () => void;
   handleToggleInspect: () => void;
-  handlePasteText: (text: string) => void;
   connectBrowserSession: (sessId: string, profileId?: string) => void;
   handleStartBrowser: (profileId?: string) => Promise<void>;
   handleDisconnectBrowser: () => void;
@@ -667,16 +638,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [isBrowserConnected, setIsBrowserConnected] = useState(false);
   const [viewportSize, setViewportSize] = useState({ width: 1280, height: 720 });
   const [inspectMode, setInspectMode] = useState(false);
-  const [vncUrl, setVncUrl] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [networkLogs, setNetworkLogs] = useState<NetworkLog[]>([]);
   const [networkFilter, setNetworkFilter] = useState("");
   const [networkPillFilter, setNetworkPillFilter] = useState<"all" | "api">("all");
-  const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [logDetails, setLogDetails] = useState<NetworkDetails | null>(null);
-  const [activePomClass, setActivePomClass] = useState("MyPage");
-  const [pomClasses, setPomClasses] = useState<string[]>(["MyPage"]);
-  const [pomElements, setPomElements] = useState<Record<string, RecordedElement[]>>({ "MyPage": [] });
   const [selectedElement, setSelectedElement] = useState<any>(null);
   const [selectedElementLocators, setSelectedElementLocators] = useState<any[]>([]);
   const [selectedElementStale, setSelectedElementStale] = useState<{ stale: boolean; reason: string | null }>({ stale: false, reason: null });
@@ -698,11 +664,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [explorePrompt, setExplorePrompt] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [anchorElement, setAnchorElement] = useState<{ tagName: string; id: string; text: string } | null>(null);
-  const [activeGenCodeTab, setActiveGenCodeTab] = useState<"pom" | "client">("pom");
-  const [generatedPomCode, setGeneratedPomCode] = useState("");
-  const [generatedClientCode, setGeneratedClientCode] = useState("");
-  const [selectedLogsForClient, setSelectedLogsForClient] = useState<string[]>([]);
-  const [clientBaseUrl, setClientBaseUrl] = useState("https://example.com");
 
   // Browser Profiles State
   const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
@@ -1664,7 +1625,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           setBrowserUrl(msg.data.url);
           setBrowserTabs([{ index: 0, url: msg.data.url }]);
           setActiveTabIndex(0);
-          setVncUrl("");
           if (msg.data.viewport?.width && msg.data.viewport?.height) {
             setViewportSize({ width: msg.data.viewport.width, height: msg.data.viewport.height });
           }
@@ -1869,7 +1829,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (wsRef.current) wsRef.current.close();
         setIsBrowserConnected(false);
         setInspectMode(false);
-        setVncUrl("");
         setScreencastFrame(null);
         setSessionId("");
       }
@@ -1891,7 +1850,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setPageScanScopeLabel(null);
     setBrowserTabs([]);
     setActiveTabIndex(0);
-    setVncUrl(""); // Empty initially; will be populated dynamically by the WebSocket status message
     setScreencastFrame(null);
     connectBrowserSession(sessId, profileId);
   };
@@ -1916,7 +1874,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setSelectedElementStale({ stale: false, reason: null });
       setBrowserTabs([]);
       setActiveTabIndex(0);
-      setVncUrl(""); // Empty initially; will be populated dynamically by the WebSocket status message
       setScreencastFrame(null);
       connectBrowserSession(sessId, profileId);
       await fetchUserSessions();
@@ -1936,7 +1893,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     setIsBrowserConnected(false);
     setInspectMode(false);
-    setVncUrl("");
     setScreencastFrame(null);
     setBrowserTabs([]);
     setActiveTabIndex(0);
@@ -2102,7 +2058,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const handleClearNetworkLogs = () => {
     setNetworkLogs([]);
-    setSelectedLogId(null);
     setLogDetails(null);
     setNetworkPillFilter("all");
   };
@@ -2167,7 +2122,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const handleLogClick = async (logId: string) => {
-    setSelectedLogId(logId);
     setLogDetails(null);
     try {
        const res = await fetch(`${LOCAL_API_URL}/api/browser/network/${sessionId}/details/${encodeURIComponent(logId)}`, {
@@ -2960,16 +2914,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         viewportSize,
         inspectMode,
         setInspectMode,
-        vncUrl,
-        setVncUrl,
         sessionId,
         setSessionId,
         networkLogs,
         setNetworkLogs,
         networkFilter,
         setNetworkFilter,
-        selectedLogId,
-        setSelectedLogId,
         logDetails,
         setLogDetails,
         networkPillFilter,
@@ -2978,12 +2928,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         sendBrowserMouseEvent,
         sendBrowserWheelEvent,
         sendBrowserKeyboardEvent,
-        activePomClass,
-        setActivePomClass,
-        pomClasses,
-        setPomClasses,
-        pomElements,
-        setPomElements,
         selectedElement,
         setSelectedElement,
         selectedElementLocators,
@@ -3024,16 +2968,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         isRecording,
         handleStartRecording,
         handleStopRecording,
-        activeGenCodeTab,
-        setActiveGenCodeTab,
-        generatedPomCode,
-        setGeneratedPomCode,
-        generatedClientCode,
-        setGeneratedClientCode,
-        selectedLogsForClient,
-        setSelectedLogsForClient,
-        clientBaseUrl,
-        setClientBaseUrl,
 
         profiles,
         fetchProfiles,
@@ -3057,7 +2991,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         apiCall,
         handleBrowserNavigate,
         handleToggleInspect,
-        handlePasteText,
         connectBrowserSession,
         handleStartBrowser,
         handleDisconnectBrowser,

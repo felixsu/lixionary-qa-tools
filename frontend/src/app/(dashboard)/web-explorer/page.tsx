@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import {
-  Globe, Terminal, Eye, Crosshair, Download, Trash2, Plus, FileCode, Play,
-  Save, File, Folder, XCircle, Rows, Lock, X, Layers, Code2, Clipboard, Activity,
+  Globe, Terminal, Eye, Crosshair, Trash2, Plus, FileCode, Play,
+  Save, File, Folder, XCircle, Rows, Lock, X, Code2, Activity,
   ChevronDown, ChevronUp, RotateCcw, Copy, Check, Mail, Anchor, Loader2, ScanSearch,
   Sparkles, StopCircle, AppWindow, Braces,
 } from "lucide-react";
@@ -53,12 +53,6 @@ export default function WebExplorerPage() {
     handleClearNetworkLogs,
     logDetails,
     setLogDetails,
-    activePomClass,
-    setActivePomClass,
-    pomClasses,
-    setPomClasses,
-    pomElements,
-    setPomElements,
     selectedElement,
     setSelectedElement,
     selectedElementLocators,
@@ -99,16 +93,6 @@ export default function WebExplorerPage() {
     isRecording,
     handleStartRecording,
     handleStopRecording,
-    activeGenCodeTab,
-    setActiveGenCodeTab,
-    generatedPomCode,
-    setGeneratedPomCode,
-    generatedClientCode,
-    setGeneratedClientCode,
-    selectedLogsForClient,
-    setSelectedLogsForClient,
-    clientBaseUrl,
-
     collections,
     handleSaveNetworkRequestToCollection,
     handleSaveNetworkRequestToNewCollection,
@@ -120,7 +104,6 @@ export default function WebExplorerPage() {
     apiCall,
     handleBrowserNavigate,
     handleToggleInspect,
-    handlePasteText,
     anchorElement,
     handleSetAnchor,
     handleClearAnchor,
@@ -250,8 +233,6 @@ export default function WebExplorerPage() {
   const [isScriptRunning, setIsScriptRunning] = useState<boolean>(false);
   const [newFileName, setNewFileName] = useState<string>("");
   const [showNewFileModal, setShowNewFileModal] = useState<boolean>(false);
-  const [showSaveToWorkspaceModal, setShowSaveToWorkspaceModal] = useState<boolean>(false);
-  const [saveToWorkspaceFilename, setSaveToWorkspaceFilename] = useState<string>("");
   const [showSessionsDropdown, setShowSessionsDropdown] = useState<boolean>(false);
   const [isConsoleMinimized, setIsConsoleMinimized] = useState<boolean>(false);
 
@@ -330,10 +311,6 @@ export default function WebExplorerPage() {
   useEffect(() => {
     try { localStorage.setItem("lixionary_explorer_width", String(explorerWidth)); } catch {}
   }, [explorerWidth]);
-
-  const toClassName = (snake: string) =>
-    snake.replace(/\.py$/, "").split("_").filter(Boolean)
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join("");
 
   const handleSplitDragStart = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -639,51 +616,6 @@ export default function WebExplorerPage() {
     }
   };
 
-  const injectImportIntoMain = async (filename: string) => {
-    if (!sessionId) return;
-    const moduleName = filename.replace(/\.py$/, "");
-    const className = toClassName(filename);
-    const importLine = `from ${moduleName} import ${className}`;
-    try {
-      const res = await apiCall(`/api/workspace/files/main.py?session_id=${sessionId}`);
-      const lines: string[] = res.content.split("\n");
-      if (lines.some((l: string) => l.trim() === importLine)) return; // already imported
-      let lastImportIdx = -1;
-      lines.forEach((l: string, i: number) => {
-        if (/^(import |from )/.test(l)) lastImportIdx = i;
-      });
-      lines.splice(lastImportIdx + 1, 0, importLine);
-      await apiCall(`/api/workspace/files/main.py?session_id=${sessionId}`, {
-        method: "POST",
-        body: JSON.stringify({ content: lines.join("\n") }),
-      });
-    } catch (e) {
-      console.warn("Failed to auto-import into main.py", e);
-    }
-  };
-
-  const handleSaveToWorkspace = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!sessionId) { showToast("No active session. Start a browser session first.", { type: "error" }); return; }
-    const code = activeGenCodeTab === "pom" ? generatedPomCode : generatedClientCode;
-    if (!code) return;
-    let name = saveToWorkspaceFilename.trim();
-    if (!name.endsWith(".py")) name += ".py";
-    try {
-      await apiCall(`/api/workspace/files/${name}?session_id=${sessionId}`, {
-        method: "POST",
-        body: JSON.stringify({ content: code }),
-      });
-      if (activeGenCodeTab === "pom") await injectImportIntoMain(name);
-      await fetchWorkspaceFiles();
-      setSelectedWorkspaceFile(name);
-      setShowSaveToWorkspaceModal(false);
-      setSaveToWorkspaceFilename("");
-    } catch (err: any) {
-      showToast(`Failed to save to workspace: ${err.message}`, { type: "error" });
-    }
-  };
-
   const handleRunScript = async () => {
     if (!selectedWorkspaceFile || !sessionId) return;
     
@@ -798,9 +730,6 @@ export default function WebExplorerPage() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedWorkspaceFile]);
-
-  const [showNewClassModal, setShowNewClassModal] = useState(false);
-  const [newClassName, setNewClassName] = useState("");
 
   // Page-scan review drawer: per-element checkbox + editable method name
   const [scanSelections, setScanSelections] = useState<Record<number, { checked: boolean; name: string }>>({});
@@ -995,30 +924,6 @@ export default function WebExplorerPage() {
     } catch (e: any) {
       showToast(e.message || "Failed to record element to POM class.", { type: "error" });
     }
-  };
-
-  const handleCreateClass = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newClassName) return;
-    if (pomClasses.includes(newClassName)) {
-      showToast("Class name already exists.", { type: "error" });
-      return;
-    }
-    setPomClasses([...pomClasses, newClassName]);
-    setPomElements((prev) => ({ ...prev, [newClassName]: [] }));
-    setActivePomClass(newClassName);
-    setNewClassName("");
-    setShowNewClassModal(false);
-  };
-  const downloadFile = (content: string, filename: string) => {
-    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
   };
 
   const filteredLogs = networkLogs.filter((log) => {
@@ -2821,27 +2726,6 @@ export default function WebExplorerPage() {
         );
       })()}
 
-      {/* New class modal */}
-      {showNewClassModal && (
-        <ModalShell title="Create page class" onClose={() => { setShowNewClassModal(false); setNewClassName(""); }} width={420}>
-          <form onSubmit={handleCreateClass} className="flex flex-col gap-5">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[13px] font-medium text-graphite">Class name</label>
-              <input
-                type="text"
-                placeholder="e.g. LoginPage"
-                value={newClassName}
-                onChange={(e) => setNewClassName(e.target.value)}
-                autoFocus
-                required
-                className="h-10 bg-cream border border-line rounded-lg px-3.5 text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
-              />
-            </div>
-            <FooterButtons onCancel={() => { setShowNewClassModal(false); setNewClassName(""); }} submitLabel="Create" />
-          </form>
-        </ModalShell>
-      )}
-
       {/* New file modal */}
       {showNewFileModal && (
         <ModalShell title="Create Python module" onClose={() => { setShowNewFileModal(false); setNewFileName(""); }} width={420}>
@@ -2862,34 +2746,6 @@ export default function WebExplorerPage() {
           </form>
         </ModalShell>
       )}
-
-      {/* Save to workspace modal */}
-      {showSaveToWorkspaceModal && (
-        <ModalShell title="Save to workspace" onClose={() => { setShowSaveToWorkspaceModal(false); setSaveToWorkspaceFilename(""); }} width={420}>
-          <form onSubmit={handleSaveToWorkspace} className="flex flex-col gap-5">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[13px] font-medium text-graphite">File name <span className="text-mute font-normal">(snake_case, .py)</span></label>
-              <input
-                type="text"
-                placeholder="e.g. order_page.py"
-                value={saveToWorkspaceFilename}
-                onChange={(e) => setSaveToWorkspaceFilename(e.target.value)}
-                autoFocus
-                required
-                className="h-10 bg-cream border border-line rounded-lg px-3.5 font-mono text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
-              />
-            </div>
-            {saveToWorkspaceFilename && activeGenCodeTab === "pom" && (
-              <div className="flex flex-col gap-1">
-                <span className="text-[11px] font-medium text-mute uppercase tracking-[0.08em]">Class name preview</span>
-                <span className="font-mono text-sm text-clay">{toClassName(saveToWorkspaceFilename)}</span>
-              </div>
-            )}
-            <FooterButtons onCancel={() => { setShowSaveToWorkspaceModal(false); setSaveToWorkspaceFilename(""); }} submitLabel="Save" />
-          </form>
-        </ModalShell>
-      )}
-
 
 
       {/* Resource Limit Exceeded Modal */}
