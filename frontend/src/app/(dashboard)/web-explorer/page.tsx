@@ -2,13 +2,12 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import {
-  Globe, Eye, FileCode, Play, Rows, Activity, Copy, Mail, Loader2,
+  Globe, Eye, FileCode, Play, Rows, Activity, Loader2,
 } from "lucide-react";
 import { useAppContext } from "../../context/AppContext";
 import { useWebExplorer } from "../../context/WebExplorerContext";
 import type { NetworkLog, NetworkDetails } from "../../context/WebExplorerContext";
 import { useToast } from "../../context/ToastContext";
-import { Modal, ModalFooter } from "../../components/Modal";
 import { MY_PAGE_FILE } from "./lib/workspaceFiles";
 import ControlBar from "./components/ControlBar";
 import BrowserPreview from "./components/BrowserPreview";
@@ -16,6 +15,8 @@ import WorkspacePanel from "./components/WorkspacePanel";
 import NetworkPanel from "./components/NetworkPanel";
 import SaveToCollectionModal from "./components/modals/SaveToCollectionModal";
 import PythonClientModal from "./components/modals/PythonClientModal";
+import NewFileModal from "./components/modals/NewFileModal";
+import SessionLimitModal from "./components/modals/SessionLimitModal";
 import AnchorBanner from "./components/overlays/AnchorBanner";
 import ScanErrorToast from "./components/overlays/ScanErrorToast";
 import ExploreLog from "./components/overlays/ExploreLog";
@@ -89,7 +90,6 @@ export default function WebExplorerPage() {
   const [isDraggingSidebar, setIsDraggingSidebar] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const [newFileName, setNewFileName] = useState<string>("");
   const [showNewFileModal, setShowNewFileModal] = useState<boolean>(false);
   const [isConsoleMinimized, setIsConsoleMinimized] = useState<boolean>(false);
 
@@ -120,13 +120,11 @@ export default function WebExplorerPage() {
     cancelPendingSave,
   });
 
-  const handleCreateFile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newFileName || !sessionId) return;
+  const handleCreateFile = async (name: string) => {
+    if (!name || !sessionId) return;
     try {
-      await workspace.createFile(newFileName);
+      await workspace.createFile(name);
       setShowNewFileModal(false);
-      setNewFileName("");
     } catch (err: any) {
       showToast(`Failed to create file: ${err.message}`, { type: "error" });
     }
@@ -409,113 +407,17 @@ export default function WebExplorerPage() {
 
       {/* New file modal */}
       {showNewFileModal && (
-        <Modal title="Create Python module" onClose={() => { setShowNewFileModal(false); setNewFileName(""); }} width={420}>
-          <form onSubmit={handleCreateFile} className="flex flex-col gap-5">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[13px] font-medium text-graphite">Filename</label>
-              <input
-                type="text"
-                placeholder="e.g. login_pom.py"
-                value={newFileName}
-                onChange={(e) => setNewFileName(e.target.value)}
-                autoFocus
-                required
-                className="h-10 bg-cream border border-line rounded-lg px-3.5 font-mono text-sm text-ink outline-none focus:border-clay focus:shadow-[0_0_0_3px_rgba(204,120,92,0.12)]"
-              />
-            </div>
-            <ModalFooter onCancel={() => { setShowNewFileModal(false); setNewFileName(""); }} submitLabel="Create" />
-          </form>
-        </Modal>
+        <NewFileModal
+          onCreate={handleCreateFile}
+          onClose={() => setShowNewFileModal(false)}
+        />
       )}
 
-
-      {/* Resource Limit Exceeded Modal */}
       {limitExceededModalOpen && (
-        <Modal 
-          title="Server Resource Limit Reached" 
-          onClose={() => setLimitExceededModalOpen(false)} 
-          width={640}
-        >
-          <div className="flex flex-col gap-4">
-            <div className="text-[13px] text-mute leading-relaxed">
-              The global limit of <strong>12 active browser sessions</strong> has been reached to prevent host Out of Memory (OOM) crashes.
-              Please ask a teammate to close their idle session:
-            </div>
-            
-            <div className="border border-line rounded-xl overflow-hidden max-h-[300px] overflow-y-auto bg-panel">
-              <table className="w-full text-left border-collapse text-[13px]">
-                <thead>
-                  <tr className="bg-panel border-b border-line text-mute font-semibold">
-                    <th className="p-3">Teammate</th>
-                    <th className="p-3">Session ID</th>
-                    <th className="p-3">Status</th>
-                    <th className="p-3">Started</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {activeSessions.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="p-4 text-center text-mute">
-                        No active sessions found (or data is unavailable).
-                      </td>
-                    </tr>
-                  ) : (
-                    activeSessions.map((sess) => (
-                      <tr key={sess.session_id} className="border-b border-line last:border-0 hover:bg-cream/40">
-                        <td className="p-3">
-                          <div className="font-medium text-ink">{sess.owner_name}</div>
-                          <div className="text-[11px] text-mute flex items-center gap-1.5 mt-0.5">
-                            {sess.owner_email}
-                            <button
-                              onClick={() => {
-                                navigator.clipboard.writeText(sess.owner_email);
-                              }}
-                              className="text-clay hover:text-clay-dark inline-flex items-center"
-                              title="Copy Email Address"
-                            >
-                              <Copy className="h-3.5 w-3.5" />
-                            </button>
-                            <a 
-                              href={`mailto:${sess.owner_email}?subject=Nudge: Close your idle Web Explorer session&body=Hi ${sess.owner_name},%0D%0A%0D%0ACould you please close your active browser session (${sess.session_id}) in Web Explorer so that I can start a session? Thanks!`} 
-                              className="text-clay hover:text-clay-dark inline-flex items-center"
-                              title="Email Teammate"
-                            >
-                              <Mail className="h-3.5 w-3.5" />
-                            </a>
-                          </div>
-                        </td>
-                        <td className="p-3 font-mono text-[11px] text-graphite">{sess.session_id}</td>
-                        <td className="p-3">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium capitalize ${
-                            sess.status === "active" 
-                              ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400" 
-                              : sess.status === "disconnected" 
-                              ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400" 
-                              : "bg-panel text-mute"
-                          }`}>
-                            {sess.status}
-                          </span>
-                        </td>
-                        <td className="p-3 text-[11px] text-mute">
-                          {sess.created_at ? new Date(sess.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "N/A"}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-            
-            <div className="flex justify-end pt-2 border-t border-line">
-              <button 
-                onClick={() => setLimitExceededModalOpen(false)}
-                className="h-10 px-5 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white transition-colors"
-              >
-                Got it
-              </button>
-            </div>
-          </div>
-        </Modal>
+        <SessionLimitModal
+          activeSessions={activeSessions}
+          onClose={() => setLimitExceededModalOpen(false)}
+        />
       )}
     </div>
   );
