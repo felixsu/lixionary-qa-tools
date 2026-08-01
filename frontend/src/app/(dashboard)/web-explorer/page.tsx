@@ -16,11 +16,11 @@ import Dropdown from "../../components/Dropdown";
 import { Modal, ModalFooter } from "../../components/Modal";
 import { methodStyle, statusStyle } from "../../utils/methodStyle";
 import { confirmDialog } from "../../utils/confirmDialog";
-import { useScreencastFrame } from "../../utils/screencastFrameStore";
 import {
   MAIN_FILE, PLAYGROUND_FILE, RECORDING_FILE, MY_PAGE_FILE, MY_CLIENT_FILE,
   isReadOnlyFile, isProtectedFile,
 } from "./lib/workspaceFiles";
+import BrowserPreview from "./components/BrowserPreview";
 
 const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8484';
 
@@ -39,12 +39,8 @@ export default function WebExplorerPage() {
     browserUrl,
     setBrowserUrl,
     isBrowserConnected,
-    viewportSize,
     inspectMode,
     sessionId,
-    sendBrowserMouseEvent,
-    sendBrowserWheelEvent,
-    sendBrowserKeyboardEvent,
     networkLogs,
     networkFilter,
     setNetworkFilter,
@@ -105,71 +101,7 @@ export default function WebExplorerPage() {
     fetchUserSessions,
     handleCloseSession,
     handleReconnectSession,
-    browserTabs,
-    activeTabIndex,
-    handleSwitchTab,
-    handleCloseTab,
   } = useWebExplorer();
-  const latestFrame = useScreencastFrame();
-
-  const previewContainerRef = useRef<HTMLDivElement>(null);
-
-  const handlePreviewMouseEvent = (e: React.MouseEvent, type: "click" | "move" | "down" | "up") => {
-    if (isVerifying || isExploring) return;
-    if (!previewContainerRef.current || !isBrowserConnected) return;
-
-    if (type === "move" && e.buttons !== 1 && !inspectMode) return;
-
-    const rect = previewContainerRef.current.getBoundingClientRect();
-    const containerWidth = rect.width;
-    const containerHeight = rect.height;
-    
-    // Aspect ratio of the actual browser viewport (profile-configurable resolution)
-    const imageAspectRatio = viewportSize.width / viewportSize.height;
-    const containerAspectRatio = containerWidth / containerHeight;
-    
-    let renderedWidth = containerWidth;
-    let renderedHeight = containerHeight;
-    let offsetX = 0;
-    let offsetY = 0;
-    
-    if (containerAspectRatio > imageAspectRatio) {
-      // Container is wider than the image: black bars on left/right
-      renderedWidth = containerHeight * imageAspectRatio;
-      offsetX = (containerWidth - renderedWidth) / 2;
-    } else {
-      // Container is taller than the image: black bars on top/bottom
-      renderedHeight = containerWidth / imageAspectRatio;
-      offsetY = (containerHeight - renderedHeight) / 2;
-    }
-    
-    const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
-    
-    const x = (clickX - offsetX) / renderedWidth;
-    const y = (clickY - offsetY) / renderedHeight;
-    
-    if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
-      sendBrowserMouseEvent(type, x, y);
-    }
-  };
-
-  const handlePreviewKeyDown = (e: React.KeyboardEvent) => {
-    if (inspectMode || isVerifying || isExploring) return;
-    if (!isBrowserConnected) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    sendBrowserKeyboardEvent(e.key);
-  };
-
-  const handlePreviewWheel = (e: React.WheelEvent) => {
-    if (isVerifying || isExploring) return;
-    if (!isBrowserConnected) return;
-
-    sendBrowserWheelEvent(e.deltaX, e.deltaY);
-  };
 
   const [workspaceFiles, setWorkspaceFiles] = useState<{ name: string; size: number; updatedAt: string }[]>([]);
   const [limitExceededModalOpen, setLimitExceededModalOpen] = useState(false);
@@ -1880,75 +1812,7 @@ export default function WebExplorerPage() {
 
             <div ref={containerRef} className="flex-1 overflow-hidden relative bg-ink-950 flex">
               {viewMode === "browser" && (
-                <div className="w-full h-full flex flex-col">
-                  {isBrowserConnected && browserTabs.length > 1 && (
-                    <div className="flex items-center gap-0.5 px-2 py-1 bg-ink-900 border-b border-white/10 overflow-x-auto flex-shrink-0">
-                      {browserTabs.map((tab, i) => (
-                        <div
-                          key={tab.index}
-                          onClick={() => handleSwitchTab(i)}
-                          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] cursor-pointer whitespace-nowrap max-w-[180px] select-none transition-colors ${
-                            activeTabIndex === i ? "bg-cream/15 text-cream" : "text-cream/40 hover:bg-cream/10 hover:text-cream/70"
-                          }`}
-                        >
-                          <Globe className="h-3 w-3 flex-shrink-0" />
-                          <span className="truncate">
-                            {tab.url ? (() => { try { return new URL(tab.url).hostname || "New tab"; } catch { return "New tab"; } })() : "New tab"}
-                          </span>
-                          {i > 0 && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleCloseTab(i); }}
-                              className="ml-0.5 text-cream/30 hover:text-danger transition-colors"
-                            >
-                              <X className="h-3 w-3" />
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="relative flex-1 w-full overflow-hidden">
-                    {isBrowserConnected ? (
-                      <div 
-                        ref={previewContainerRef}
-                        className="relative w-full h-full flex items-center justify-center bg-black overflow-hidden focus:outline-none"
-                        tabIndex={0}
-                        onKeyDown={handlePreviewKeyDown}
-                        onWheel={handlePreviewWheel}
-                        onMouseDown={(e) => handlePreviewMouseEvent(e, "down")}
-                        onMouseUp={(e) => handlePreviewMouseEvent(e, "up")}
-                        onMouseMove={(e) => handlePreviewMouseEvent(e, "move")}
-                      >
-                        {isRecording && (
-                          <div className="absolute top-4 left-4 z-40 flex items-center gap-2 px-3 py-1.5 bg-red-950 border border-red-500/50 rounded-lg shadow-md text-xs text-red-200 select-none pointer-events-none">
-                            <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse flex-shrink-0" />
-                            <span className="font-semibold uppercase tracking-wider text-[10px]">Recording Session</span>
-                          </div>
-                        )}
-                        {latestFrame ? (
-                          <img 
-                            src={`data:image/jpeg;base64,${latestFrame}`} 
-                            alt="Browser Screencast" 
-                            className="w-full h-full object-contain pointer-events-none select-none"
-                            draggable={false}
-                          />
-                        ) : (
-                          <div className="flex flex-col items-center justify-center text-cream/40 text-xs gap-2">
-                            <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
-                            Session started. Streaming native browser window...
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-cream/40 text-xs">
-                        Select a profile and click New Session to start a session.
-                      </div>
-                    )}
-                    {(isDraggingSplit || isDraggingSidebar) && (
-                      <div className="absolute inset-0 z-10" />
-                    )}
-                  </div>
-                </div>
+                <BrowserPreview dragOverlayActive={isDraggingSplit || isDraggingSidebar} />
               )}
 
               {viewMode === "workspace" && <div className="w-full h-full flex flex-col overflow-hidden">{renderWorkspacePanel()}</div>}
@@ -1956,73 +1820,7 @@ export default function WebExplorerPage() {
               {viewMode === "split" && (
                 <div className="w-full h-full flex flex-row overflow-hidden">
                   <div style={{ width: `${100 - workspaceSplitPercent}%` }} className="h-full bg-ink-950 flex flex-col overflow-hidden flex-shrink-0">
-                    {isBrowserConnected && browserTabs.length > 1 && (
-                      <div className="flex items-center gap-0.5 px-2 py-1 bg-ink-900 border-b border-white/10 overflow-x-auto flex-shrink-0">
-                        {browserTabs.map((tab, i) => (
-                          <div
-                            key={tab.index}
-                            onClick={() => handleSwitchTab(i)}
-                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[12px] cursor-pointer whitespace-nowrap max-w-[180px] select-none transition-colors ${
-                              activeTabIndex === i ? "bg-cream/15 text-cream" : "text-cream/40 hover:bg-cream/10 hover:text-cream/70"
-                            }`}
-                          >
-                            <Globe className="h-3 w-3 flex-shrink-0" />
-                            <span className="truncate">
-                              {tab.url ? (() => { try { return new URL(tab.url).hostname || "New tab"; } catch { return "New tab"; } })() : "New tab"}
-                            </span>
-                            {i > 0 && (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleCloseTab(i); }}
-                                className="ml-0.5 text-cream/30 hover:text-danger transition-colors"
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <div className="relative flex-1 w-full overflow-hidden">
-                      {isBrowserConnected ? (
-                        <div 
-                          ref={previewContainerRef}
-                          className="relative w-full h-full flex items-center justify-center bg-black overflow-hidden focus:outline-none"
-                          tabIndex={0}
-                          onKeyDown={handlePreviewKeyDown}
-                          onWheel={handlePreviewWheel}
-                          onMouseDown={(e) => handlePreviewMouseEvent(e, "down")}
-                          onMouseUp={(e) => handlePreviewMouseEvent(e, "up")}
-                          onMouseMove={(e) => handlePreviewMouseEvent(e, "move")}
-                        >
-                          {isRecording && (
-                            <div className="absolute top-4 left-4 z-40 flex items-center gap-2 px-3 py-1.5 bg-red-950 border border-red-500/50 rounded-lg shadow-md text-xs text-red-200 select-none pointer-events-none">
-                              <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse flex-shrink-0" />
-                              <span className="font-semibold uppercase tracking-wider text-[10px]">Recording Session</span>
-                            </div>
-                          )}
-                          {latestFrame ? (
-                            <img 
-                              src={`data:image/jpeg;base64,${latestFrame}`} 
-                              alt="Browser Screencast" 
-                              className="w-full h-full object-contain pointer-events-none select-none"
-                              draggable={false}
-                            />
-                          ) : (
-                            <div className="flex flex-col items-center justify-center text-cream/40 text-xs gap-2">
-                              <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
-                              Session started. Streaming native browser window...
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center text-cream/40 text-xs">
-                          Select a profile and click New Session to start a session.
-                        </div>
-                      )}
-                      {(isDraggingSplit || isDraggingSidebar) && (
-                        <div className="absolute inset-0 z-10" />
-                      )}
-                    </div>
+                    <BrowserPreview dragOverlayActive={isDraggingSplit || isDraggingSidebar} />
                   </div>
                   <div onMouseDown={handleSplitDragStart} className="w-1 bg-line hover:bg-clay cursor-col-resize transition-colors flex-shrink-0 h-full z-10 select-none" />
                   <div style={{ width: `${workspaceSplitPercent}%` }} className="h-full flex flex-col overflow-hidden flex-shrink-0">
