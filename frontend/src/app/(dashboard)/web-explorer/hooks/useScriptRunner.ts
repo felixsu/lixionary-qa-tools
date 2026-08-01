@@ -5,7 +5,17 @@ import { useAppContext } from "../../../context/AppContext";
 import { useWebExplorer } from "../../../context/WebExplorerContext";
 import { useToast } from "../../../context/ToastContext";
 
-const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8484';
+// Cap the console buffer so a chatty script can't grow an unbounded string —
+// every appended chunk re-renders the whole <pre>, which used to degrade the
+// page on long runs. 200k chars ≈ a few thousand lines of scrollback.
+const MAX_CONSOLE_CHARS = 200_000;
+const TRUNCATION_MARKER = "…[earlier output truncated]\n";
+
+const appendCapped = (prev: string, chunk: string): string => {
+  const next = prev + chunk;
+  if (next.length <= MAX_CONSOLE_CHARS) return next;
+  return TRUNCATION_MARKER + next.slice(next.length - MAX_CONSOLE_CHARS);
+};
 
 /**
  * Streams a workspace script run into the execution console. The reader and
@@ -23,7 +33,7 @@ export function useScriptRunner({
   workspaceFileContent: string;
   cancelPendingSave: () => void;
 }) {
-  const { token, apiCall } = useAppContext();
+  const { apiCall, apiFetch } = useAppContext();
   const { sessionId, inspectMode, handleToggleInspect } = useWebExplorer();
   const { showToast } = useToast();
 
@@ -51,11 +61,12 @@ export function useScriptRunner({
       console.warn("Failed to auto-save file before running", e);
     }
     try {
-      const response = await fetch(`${LOCAL_API_URL}/api/workspace/run`, {
+      // apiFetch (not apiCall): the run endpoint streams stdout, so we need
+      // the raw Response; record=false keeps diagnostics from buffering it.
+      const response = await apiFetch("/api/workspace/run", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ filename: selectedWorkspaceFile, session_id: sessionId }),
-      });
+      }, false);
       if (!response.body) throw new Error("No response body available");
       const reader = response.body.getReader();
       activeReaderRef.current = reader;
@@ -63,10 +74,10 @@ export function useScriptRunner({
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        setWorkspaceLogs((prev) => prev + decoder.decode(value, { stream: true }));
+        setWorkspaceLogs((prev) => appendCapped(prev, decoder.decode(value, { stream: true })));
       }
     } catch (err: any) {
-      setWorkspaceLogs((prev) => prev + `\nExecution Error: ${err.message}\n`);
+      setWorkspaceLogs((prev) => appendCapped(prev, `\nExecution Error: ${err.message}\n`));
     } finally {
       activeReaderRef.current = null;
       setIsScriptRunning(false);

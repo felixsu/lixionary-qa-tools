@@ -345,6 +345,7 @@ interface AppContextType {
 
   // Common operations
   apiCall: (path: string, options?: RequestInit) => Promise<any>;
+  apiFetch: (path: string, options?: RequestInit, record?: boolean) => Promise<Response>;
   handleExecuteRequest: () => Promise<void>;
   handleSaveRequest: () => Promise<void>;
   handleCreateRequest: (name: string, targetColId?: string) => Promise<void>;
@@ -786,7 +787,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [reqDescription, selectedRequestId]);
 
   // REST API helpers
-  const apiCall = async (path: string, options: RequestInit = {}) => {
+  // Authenticated fetch with local/cloud routing, token refresh + retry, and
+  // session-expiry logout. Returns the raw Response (ok or not) — use this
+  // directly for streaming endpoints; use apiCall for normal JSON calls.
+  // record=false skips diagnostics capture: recording clones the body and
+  // reads it to completion, which would buffer an entire response stream.
+  const apiFetch = async (path: string, options: RequestInit = {}, record: boolean = true): Promise<Response> => {
     let startedAt: number | null = null;
     const isLocal = path.startsWith("/api/browser") || path.startsWith("/api/workspace") || path.startsWith("/api/browser-helper") || path.startsWith("/api/local-store") || path.startsWith("/api/executor") || path.startsWith("/api/ai");
     const baseUrl = isLocal ? LOCAL_API_URL : VPS_API_URL;
@@ -863,17 +869,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       handleLogout();
     }
 
-    response.clone().text().then((text) => {
-      recordNetworkEntry({
-        method: options.method || "GET",
-        url: fullUrl,
-        status: response.status,
-        durationMs: startedAt !== null ? Date.now() - startedAt : 0,
-        requestBody: typeof options.body === "string" ? redactBodyForUrl(fullUrl, options.body) : undefined,
-        responseBody: redactBodyForUrl(fullUrl, text),
-        timestamp: Date.now(),
-      });
-    }).catch(() => {});
+    if (record) {
+      response.clone().text().then((text) => {
+        recordNetworkEntry({
+          method: options.method || "GET",
+          url: fullUrl,
+          status: response.status,
+          durationMs: startedAt !== null ? Date.now() - startedAt : 0,
+          requestBody: typeof options.body === "string" ? redactBodyForUrl(fullUrl, options.body) : undefined,
+          responseBody: redactBodyForUrl(fullUrl, text),
+          timestamp: Date.now(),
+        });
+      }).catch(() => {});
+    }
+
+    return response;
+  };
+
+  const apiCall = async (path: string, options: RequestInit = {}) => {
+    const response = await apiFetch(path, options);
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({ detail: "Unknown error occurred" }));
@@ -2036,6 +2050,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setSelectedProfileId,
 
         apiCall,
+        apiFetch,
         handleExecuteRequest,
         handleSaveRequest,
         handleCreateRequest,

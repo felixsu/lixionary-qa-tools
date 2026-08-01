@@ -102,6 +102,27 @@ describe("buildPythonFromNetworkLog", () => {
     expect(code).toContain("def call_api() -> dict:");
   });
 
+  it("emits Python literals (True/False/None), not JS ones, in the payload init", () => {
+    const d = details({
+      method: "POST",
+      postData: JSON.stringify({
+        flag: true,
+        off: false,
+        note: null,
+        tags: ["a", true, null],
+        meta: { nested: false },
+      }),
+    });
+    const code = buildPythonFromNetworkLog(baseLog({ method: "POST" }), d);
+    expect(code).toContain("        flag=True,");
+    expect(code).toContain("        off=False,");
+    expect(code).toContain("        note=None,");
+    expect(code).toContain('        tags=["a", True, None],');
+    expect(code).toContain('        meta={"nested": False},');
+    // no raw JS literals anywhere in the payload init
+    expect(code).not.toMatch(/=(true|false|null),/);
+  });
+
   it("marks null fields as Optional[Any]", () => {
     const d = details({ method: "POST", postData: JSON.stringify({ note: null }) });
     const code = buildPythonFromNetworkLog(baseLog({ method: "POST" }), d);

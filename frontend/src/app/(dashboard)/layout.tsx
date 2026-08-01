@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -58,6 +58,16 @@ export default function DashboardLayout({
     triggerSync,
   } = useAppContext();
 
+  // Segment-local hydration guard — same reasoning as the login page: the
+  // prerendered HTML is the auth spinner, and AppProvider's mount effect can
+  // flip isLoadingAuth/token before this lazily-hydrated segment hydrates,
+  // which would make the first client render (full layout) mismatch it.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional one-time post-hydration flip
+    setMounted(true);
+  }, []);
+
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -96,7 +106,7 @@ export default function DashboardLayout({
   const appVersion = useAppVersion();
   const updateChecker = useUpdateChecker();
 
-  if (isLoadingAuth || !token) {
+  if (!mounted || isLoadingAuth || !token) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-cream text-ink">
          <div className="flex flex-col items-center gap-4">
