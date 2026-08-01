@@ -35,6 +35,12 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      # Errors gate at zero; the warning budget is a ratchet — it must only
+      # ever be lowered. If your PR trips it, fix warnings (yours or any),
+      # then lower the budget to the new count.
+      - name: Lint
+        run: npx eslint src --max-warnings 310
+
       - name: Unit tests
         run: npm test
 

@@ -17,14 +17,6 @@ interface UserProfile {
   disabled: boolean;
 }
 
-interface ActiveSession {
-  session_id: string;
-  status: string;
-  created_at: string;
-  profile_id: string | null;
-  user: UserProfile;
-}
-
 interface RequestDefinition {
   id: string;
   name: string;
@@ -130,13 +122,12 @@ export default function AdminConsolePage() {
     setCollabError("");
     setIsCollabSubmitting(true);
     try {
-      const response = await apiCall(`/api/admin/collections/${collabModalCollection.id}/collaborators`, {
+      await apiCall(`/api/admin/collections/${collabModalCollection.id}/collaborators`, {
         method: "POST",
         body: JSON.stringify({ email: newCollabEmail.trim() }),
       });
       
       // Update local state
-      const updatedCol = response.collection;
       // Re-fetch collections or update locally. Let's re-fetch to get complete hydrated user profiles of collaborators.
       const freshCollections = await apiCall("/api/admin/collections");
       setCollections(freshCollections);
@@ -413,7 +404,7 @@ export default function AdminConsolePage() {
               </span>
               {collabModalCollection.collaborators.length === 0 ? (
                 <div className="text-xs text-mute italic py-2">
-                  This collection isn't shared with anyone yet.
+                  This collection isn&apos;t shared with anyone yet.
                 </div>
               ) : (
                 <div className="space-y-1.5">

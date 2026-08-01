@@ -49,7 +49,7 @@ export function useUpdateChecker() {
     checkNow();
     const interval = setInterval(checkNow, CHECK_INTERVAL_MS);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   return { update, version, checking, checkError, justChecked, checkNow };

@@ -119,7 +119,7 @@ export default function RequestPicker({ value, onChange, collections, placeholde
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [query, collections]);
 
   const updateCoords = () => {

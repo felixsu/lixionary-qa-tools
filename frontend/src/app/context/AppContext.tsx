@@ -473,6 +473,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // re-trigger the first-load auto-select and yank the user back to the first
   // request of the first collection.
   const selectedCollectionIdRef = useRef(selectedCollectionId);
+  // eslint-disable-next-line react-hooks/refs -- intentional latest-ref pattern; see comment above
   selectedCollectionIdRef.current = selectedCollectionId;
 
   // API Explorer Active Request Editor State
@@ -520,35 +521,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setIsLoadingAuth(false);
   }, []);
 
-  // Fetch data when authenticated
-  useEffect(() => {
-    if (token && user) {
-      (async () => {
-        // The local sync cache is device-wide, not per-user — if a different
-        // account than last time just signed in (e.g. someone with two
-        // Google accounts on this machine), wipe it before syncing so the
-        // previous account's browser profiles/environments/etc. never leak
-        // into view. Best-effort: if the sidecar isn't up yet, sync below
-        // already tolerates that and will just retry later.
-        try {
-          await apiCall("/api/local-store/active-user", {
-            method: "POST",
-            body: JSON.stringify({ userId: user.id }),
-          });
-        } catch {
-          // ignored — see comment above
-        }
-        fetchEnvironments();
-        fetchAuthFunctions();
-        fetchCollections();
-        fetchFlows();
-        fetchProfiles();
-        fetchUserGuides();
-        triggerSync();
-      })();
-    }
-  }, [token]);
-
   // Keep local-first data fresh without the user having to think about it:
   // re-sync when the window regains focus (debounced — skip if we just synced
   // within the last minute, e.g. quick tab-switching) and on a slow background
@@ -588,23 +560,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       triggerSync();
     }
   }, [localDb?.status, token, user]);
-
-  // Toast once when the desktop backend flips into a hard failure (Tauri IPC
-  // dead, sidecar process gone, local DB broken) so the user has something to
-  // report instead of just a quiet status pill. Only on the transition into
-  // "error" — "degraded" is the normal first-launch boot state, and vps
-  // unreachability is already covered by the offline pill.
-  const prevBackendBrokenRef = useRef(false);
-  useEffect(() => {
-    const brokenDetail =
-      tauri?.status === "error" ? tauri.detail :
-      sidecar?.status === "error" ? sidecar.detail :
-      localDb?.status === "error" ? localDb.detail : null;
-    if (brokenDetail && !prevBackendBrokenRef.current) {
-      showBackendErrorToast(`Desktop backend problem: ${brokenDetail}`);
-    }
-    prevBackendBrokenRef.current = !!brokenDetail;
-  }, [tauri?.status, sidecar?.status, localDb?.status]);
 
   // Ref to suppress the auth-persist write on the render right after a selection
   // change (when reqAuthType/reqAuthConfig haven't synced to the new request yet).
@@ -813,8 +768,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const currentRefreshToken = refreshTokenRef.current;
     if (response.status === 401 && currentRefreshToken && path !== "/api/auth/refresh") {
       try {
-        let newAccessToken: string;
-
         if (!refreshPromiseRef.current) {
           refreshPromiseRef.current = (async () => {
             try {
@@ -850,7 +803,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           })();
         }
 
-        newAccessToken = await refreshPromiseRef.current;
+        const newAccessToken = await refreshPromiseRef.current;
 
         // Retry the request with the new access token
         response = await makeRequest(newAccessToken);
@@ -1547,7 +1500,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Find source root collection
-      let sourceRootCol = collections.find(c => {
+      const sourceRootCol = collections.find(c => {
         if (nodeType === "request") {
           return findRequestInTree(c, nodeId) !== null;
         } else {
@@ -1956,6 +1909,55 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       null
     );
   };
+
+  // These two effects live below the functions they call (apiCall, the
+  // fetchers, triggerSync, showBackendErrorToast) so nothing is referenced
+  // before its declaration.
+  // Fetch data when authenticated
+  useEffect(() => {
+    if (token && user) {
+      (async () => {
+        // The local sync cache is device-wide, not per-user — if a different
+        // account than last time just signed in (e.g. someone with two
+        // Google accounts on this machine), wipe it before syncing so the
+        // previous account's browser profiles/environments/etc. never leak
+        // into view. Best-effort: if the sidecar isn't up yet, sync below
+        // already tolerates that and will just retry later.
+        try {
+          await apiCall("/api/local-store/active-user", {
+            method: "POST",
+            body: JSON.stringify({ userId: user.id }),
+          });
+        } catch {
+          // ignored — see comment above
+        }
+        fetchEnvironments();
+        fetchAuthFunctions();
+        fetchCollections();
+        fetchFlows();
+        fetchProfiles();
+        fetchUserGuides();
+        triggerSync();
+      })();
+    }
+  }, [token]);
+
+  // Toast once when the desktop backend flips into a hard failure (Tauri IPC
+  // dead, sidecar process gone, local DB broken) so the user has something to
+  // report instead of just a quiet status pill. Only on the transition into
+  // "error" — "degraded" is the normal first-launch boot state, and vps
+  // unreachability is already covered by the offline pill.
+  const prevBackendBrokenRef = useRef(false);
+  useEffect(() => {
+    const brokenDetail =
+      tauri?.status === "error" ? tauri.detail :
+      sidecar?.status === "error" ? sidecar.detail :
+      localDb?.status === "error" ? localDb.detail : null;
+    if (brokenDetail && !prevBackendBrokenRef.current) {
+      showBackendErrorToast(`Desktop backend problem: ${brokenDetail}`);
+    }
+    prevBackendBrokenRef.current = !!brokenDetail;
+  }, [tauri?.status, sidecar?.status, localDb?.status]);
 
   return (
     <AppContext.Provider

@@ -223,7 +223,7 @@ export function WebExplorerProvider({ children }: { children: React.ReactNode })
     return () => {
       document.removeEventListener("paste", handleGlobalPaste);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [isBrowserConnected]);
 
   // Browser WebSocket interaction methods
