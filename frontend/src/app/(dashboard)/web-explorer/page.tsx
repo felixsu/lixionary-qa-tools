@@ -9,7 +9,8 @@ import {
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
-import type { NetworkLog, NetworkDetails } from "../../context/AppContext";
+import { useWebExplorer } from "../../context/WebExplorerContext";
+import type { NetworkLog, NetworkDetails } from "../../context/WebExplorerContext";
 import { useToast } from "../../context/ToastContext";
 import Dropdown from "../../components/Dropdown";
 import { Modal, ModalFooter } from "../../components/Modal";
@@ -24,6 +25,16 @@ import {
 const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8484';
 
 export default function WebExplorerPage() {
+  const {
+    collections,
+    handleSaveNetworkRequestToCollection,
+    handleSaveNetworkRequestToNewCollection,
+    profiles,
+    selectedProfileId,
+    setSelectedProfileId,
+    token,
+    apiCall,
+  } = useAppContext();
   const {
     browserUrl,
     setBrowserUrl,
@@ -82,15 +93,6 @@ export default function WebExplorerPage() {
     isRecording,
     handleStartRecording,
     handleStopRecording,
-    collections,
-    handleSaveNetworkRequestToCollection,
-    handleSaveNetworkRequestToNewCollection,
-
-    profiles,
-    selectedProfileId,
-    setSelectedProfileId,
-    token,
-    apiCall,
     handleBrowserNavigate,
     handleToggleInspect,
     anchorElement,
@@ -107,7 +109,7 @@ export default function WebExplorerPage() {
     activeTabIndex,
     handleSwitchTab,
     handleCloseTab,
-  } = useAppContext();
+  } = useWebExplorer();
   const latestFrame = useScreencastFrame();
 
   const previewContainerRef = useRef<HTMLDivElement>(null);

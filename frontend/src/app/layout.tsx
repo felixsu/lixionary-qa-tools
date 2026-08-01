@@ -3,6 +3,7 @@ import { Inter, Cormorant_Garamond, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Suspense } from "react";
 import { AppProvider } from "./context/AppContext";
+import { WebExplorerProvider } from "./context/WebExplorerContext";
 import { BackendStatusProvider } from "./context/BackendStatusContext";
 import { SearchIndexStatusProvider } from "./context/SearchIndexStatusContext";
 import { ToastProvider } from "./context/ToastContext";
@@ -52,9 +53,13 @@ export default function RootLayout({
             <SearchIndexStatusProvider>
               <ToastProvider>
                 <AppProvider>
-                  <Suspense fallback={null}>
-                    {children}
-                  </Suspense>
+                  {/* Root-level so the live browser session (WebSocket +
+                      screencast) survives navigating between modules. */}
+                  <WebExplorerProvider>
+                    <Suspense fallback={null}>
+                      {children}
+                    </Suspense>
+                  </WebExplorerProvider>
                 </AppProvider>
               </ToastProvider>
             </SearchIndexStatusProvider>
