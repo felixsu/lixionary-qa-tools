@@ -4,10 +4,10 @@ import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from "re
 import { createPortal } from "react-dom";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  Send, Plus, Trash2, Share2, ChevronDown, ChevronRight,
+  Send, Plus, Trash2, ChevronDown, ChevronRight,
   Sparkles, Code2, Copy, Check, X, AlignLeft, Minimize2, Maximize2,
   PanelLeftClose, PanelLeftOpen, Folder, Play, Pencil, AlertCircle, Wand2,
-  Upload, Search, Bug, MapPin
+  Upload, Search, Bug, MapPin, MoreVertical
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, findRequestInTree, findRequestOwnerCollection, findAncestorPathToRequest } from "../../context/AppContext";
@@ -317,68 +317,63 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
         )}
         
         {editingNodeId !== node.id && (
-          <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-            {depth === 1 && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!node.cloudId) {
-                    showToast("This collection hasn't finished syncing yet — try again in a moment.", { type: "error" });
-                    return;
-                  }
-                  handleCopyId(node.cloudId);
-                }}
-                title="Copy collection ID"
-                className="text-stone hover:text-clay transition"
-              >
-                {copiedId === node.cloudId ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-              </button>
-            )}
-            {depth === 1 && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleExportCollection(node);
-                }}
-                title="Export collection as JSON"
-                className="text-stone hover:text-clay transition"
-              >
-                <Share2 className="h-3.5 w-3.5" />
-              </button>
-            )}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setEditingNodeId(node.id);
-                setEditingName(node.name);
-              }}
-              title="Rename collection"
-              className="text-stone hover:text-clay transition"
-            >
-              <Pencil className="h-3.5 w-3.5" />
-            </button>
-            <button
-              onClick={async (e) => {
-                e.stopPropagation();
-                const count = countRequestsInTree(node);
-                if (count > 0) {
-                  const yes = await confirmDialog(`This collection contains ${count} request(s). Are you sure you want to delete it and all its contents?`);
-                  if (!yes) return;
-                } else {
-                  const yes = await confirmDialog(`Are you sure you want to delete the collection "${node.name}"?`);
-                  if (!yes) return;
-                }
-                try {
-                  await handleDeleteNode(node.id, "collection");
-                } catch (err: any) {
-                  showToast(err.message, { type: "error" });
-                }
-              }}
-              title="Delete collection"
-              className="text-stone hover:text-danger transition"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
+          <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+            <RowActionsMenu
+              items={[
+                ...(depth === 1
+                  ? [
+                      {
+                        label: "Copy collection ID",
+                        onClick: () => {
+                          if (!node.cloudId) {
+                            showToast("This collection hasn't finished syncing yet — try again in a moment.", { type: "error" });
+                            return;
+                          }
+                          handleCopyId(node.cloudId);
+                        },
+                      },
+                      { label: "Export as JSON", onClick: () => handleExportCollection(node) },
+                    ]
+                  : []),
+                {
+                  label: "Rename",
+                  onClick: () => {
+                    setEditingNodeId(node.id);
+                    setEditingName(node.name);
+                  },
+                },
+                ...(depth < 5
+                  ? [
+                      {
+                        label: "New collection",
+                        onClick: () => {
+                          setTargetAddColId(node.id);
+                          setShowNewSubColModal(true);
+                        },
+                      },
+                    ]
+                  : []),
+                {
+                  label: "Delete",
+                  danger: true,
+                  onClick: async () => {
+                    const count = countRequestsInTree(node);
+                    if (count > 0) {
+                      const yes = await confirmDialog(`This collection contains ${count} request(s). Are you sure you want to delete it and all its contents?`);
+                      if (!yes) return;
+                    } else {
+                      const yes = await confirmDialog(`Are you sure you want to delete the collection "${node.name}"?`);
+                      if (!yes) return;
+                    }
+                    try {
+                      await handleDeleteNode(node.id, "collection");
+                    } catch (err: any) {
+                      showToast(err.message, { type: "error" });
+                    }
+                  },
+                },
+              ]}
+            />
           </div>
         )}
       </div>
@@ -478,48 +473,41 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
                 ) : (
                   <>
                     <span className="text-xs text-graphite truncate flex-1">{req.name}</span>
-                    <div className="flex items-center gap-1 opacity-0 group-hover/req:opacity-100 transition-opacity">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setEditingNodeId(req.id);
-                          setEditingName(req.name);
-                        }}
-                        title="Rename request"
-                        className="text-stone hover:text-clay transition flex-shrink-0"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          try {
-                            await handleDuplicateRequest(req);
-                          } catch (err: any) {
-                            showToast(err.message, { type: "error" });
-                          }
-                        }}
-                        title="Duplicate request"
-                        className="text-stone hover:text-clay transition flex-shrink-0"
-                      >
-                        <Copy className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          const yes = await confirmDialog(`Are you sure you want to delete the request "${req.name}"?`);
-                          if (!yes) return;
-                          try {
-                            await handleDeleteNode(req.id, "request");
-                          } catch (err: any) {
-                            showToast(err.message, { type: "error" });
-                          }
-                        }}
-                        title="Delete request"
-                        className="text-stone hover:text-danger transition flex-shrink-0"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                    <div className="flex items-center opacity-0 group-hover/req:opacity-100 transition-opacity">
+                      <RowActionsMenu
+                        items={[
+                          {
+                            label: "Rename",
+                            onClick: () => {
+                              setEditingNodeId(req.id);
+                              setEditingName(req.name);
+                            },
+                          },
+                          {
+                            label: "Duplicate",
+                            onClick: async () => {
+                              try {
+                                await handleDuplicateRequest(req);
+                              } catch (err: any) {
+                                showToast(err.message, { type: "error" });
+                              }
+                            },
+                          },
+                          {
+                            label: "Delete",
+                            danger: true,
+                            onClick: async () => {
+                              const yes = await confirmDialog(`Are you sure you want to delete the request "${req.name}"?`);
+                              if (!yes) return;
+                              try {
+                                await handleDeleteNode(req.id, "request");
+                              } catch (err: any) {
+                                showToast(err.message, { type: "error" });
+                              }
+                            },
+                          },
+                        ]}
+                      />
                     </div>
                   </>
                 )}
@@ -542,18 +530,6 @@ const CollectionNode: React.FC<CollectionNodeProps> = ({
             >
               <Plus className="h-3 w-3" /> Request
             </button>
-            {depth < 5 && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setTargetAddColId(node.id);
-                  setShowNewSubColModal(true);
-                }}
-                className="flex-1 flex items-center justify-center gap-1 py-1 px-1.5 border border-dashed border-line rounded-md text-[10px] text-mute hover:border-clay hover:text-clay transition-colors"
-              >
-                <Plus className="h-3 w-3" /> Collection
-              </button>
-            )}
           </div>
         </div>
       )}
@@ -636,7 +612,7 @@ export default function ApiExplorerPage() {
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareEmail, setShareEmail] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [configTab, setConfigTab] = useState<ConfigTab>("headers");
+  const [configTab, setConfigTab] = useState<ConfigTab>("body");
 
   const [showNewCollectionModal, setShowNewCollectionModal] = useState(false);
   const [newColName, setNewColName] = useState("");
@@ -1334,6 +1310,7 @@ export default function ApiExplorerPage() {
   };
 
   const configTabs: { id: ConfigTab; label: string }[] = [
+    { id: "body", label: "Body" },
     { id: "headers", label: "Headers" },
     { id: "params", label: "Params" },
     { id: "auth", label: "Auth" },
@@ -1342,7 +1319,6 @@ export default function ApiExplorerPage() {
     { id: "test", label: "Test" },
     { id: "interceptor", label: "Interceptor" },
     { id: "description", label: "Description" },
-    { id: "body", label: "Body" },
   ];
 
   const responseTabs: ("pretty" | "headers" | "raw" | "extracted" | "tests" | "last")[] = [
@@ -2890,6 +2866,98 @@ function GeneratorMenuPanel({ onPick, onOpenMap }: { onPick: (tokenBody: string)
           </button>
         ))}
       </div>
+    </>
+  );
+}
+
+// Sidebar row kebab menu: a 3-dots trigger opening a portal of text actions.
+// stopPropagation everywhere so opening/clicking never selects the row.
+function RowActionsMenu({
+  items,
+}: {
+  items: { label: string; onClick: () => void | Promise<void>; danger?: boolean }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const MENU_WIDTH = 180;
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    // Flip above the trigger when there's no room below the viewport edge.
+    const estHeight = items.length * 28 + 10;
+    const top = r.bottom + 4 + estHeight > window.innerHeight
+      ? Math.max(8, r.top - estHeight - 4)
+      : r.bottom + 4;
+    setCoords({ top, left: Math.max(8, r.right - MENU_WIDTH) });
+    const close = () => setOpen(false);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open, items.length]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    // Capture phase: other widgets (e.g. Dropdown triggers) stopPropagation on
+    // mousedown, which would otherwise keep this menu open.
+    document.addEventListener("mousedown", onPointer, true);
+    return () => document.removeEventListener("mousedown", onPointer, true);
+  }, [open]);
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        title="Actions"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        className="text-stone hover:text-ink transition flex-shrink-0"
+      >
+        <MoreVertical className="h-3.5 w-3.5" />
+      </button>
+
+      {open && coords &&
+        createPortal(
+          <div
+            ref={menuRef}
+            style={{ position: "fixed", top: coords.top, left: coords.left, width: MENU_WIDTH }}
+            className="z-[100] rounded-lg border border-line bg-cream py-1 shadow-lg shadow-ink/5 flex flex-col animate-[fadeUp_0.12s_ease-out]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {items.map((item) => (
+              <button
+                key={item.label}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpen(false);
+                  void item.onClick();
+                }}
+                className={`px-3 py-1.5 text-left text-xs transition-colors ${
+                  item.danger ? "text-danger hover:bg-danger-soft" : "text-ink hover:bg-hover"
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
     </>
   );
 }
