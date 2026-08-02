@@ -24,6 +24,7 @@ import InspectorCard from "./components/overlays/InspectorCard";
 import { useWorkspaceFiles } from "./hooks/useWorkspaceFiles";
 import { useScriptRunner } from "./hooks/useScriptRunner";
 import { usePythonAutocomplete } from "./hooks/usePythonAutocomplete";
+import { useEscapeActions } from "./hooks/useEscapeActions";
 
 export default function WebExplorerPage() {
   const {
@@ -35,6 +36,10 @@ export default function WebExplorerPage() {
     inspectMode,
     sessionId,
     selectedElement,
+    setSelectedElement,
+    setSelectedElementLocators,
+    setSelectedElementStale,
+    handleClearHighlights,
     inspectError,
     setInspectError,
     isRecording,
@@ -214,6 +219,18 @@ export default function WebExplorerPage() {
   // so it survives the card unmounting when the element is dismissed.
   const [customSelectorInput, setCustomSelectorInput] = useState("");
 
+  // Shared full reset for the InspectorCard — used by its ✕ button, after a
+  // successful Record, and by the Escape ladder, so all paths stay in sync.
+  const dismissInspectorCard = () => {
+    setSelectedElement(null);
+    setSelectedElementLocators([]);
+    setSelectedElementStale({ stale: false, reason: null });
+    setCustomSelectorInput("");
+    handleClearHighlights();
+  };
+
+  useEscapeActions({ dismissInspectorCard });
+
   const handleOpenSaveModal = async (log: NetworkLog, e: React.MouseEvent) => {
     e.stopPropagation();
     setPendingSaveLog(log);
@@ -333,6 +350,7 @@ export default function WebExplorerPage() {
                 <InspectorCard
                   customSelectorInput={customSelectorInput}
                   setCustomSelectorInput={setCustomSelectorInput}
+                  onDismiss={dismissInspectorCard}
                   onRecorded={refreshMyPageFile}
                 />
               )}

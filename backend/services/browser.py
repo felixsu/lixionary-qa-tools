@@ -1113,6 +1113,22 @@ class BrowserSessionManager:
         """.replace("//__LIX_CLICKABLE_HEURISTIC__", _CLICKABLE_HEURISTIC_JS)
 
     @classmethod
+    async def apply_inspect_overlay(cls, page: Page, enabled: bool):
+        """
+        Flips the page-side inspect overlay (crosshair, badge, event blocking)
+        on every frame without touching the session's inspect_enabled flag.
+        Used to toggle inspect mode proper, and to temporarily suspend the
+        overlay while Verify/Explore drive the page — the overlay's capture-
+        phase listeners block the very pointer events those actions dispatch.
+        """
+        eval_script = f"window.__setLixionaryInspectMode && window.__setLixionaryInspectMode({json.dumps(enabled)})"
+        for frame in page.frames:
+            try:
+                await frame.evaluate(eval_script)
+            except Exception:
+                pass
+
+    @classmethod
     async def set_recording_mode(cls, session_id: str, enabled: bool):
         session = cls._sessions.get(session_id)
         if session:
@@ -1470,6 +1486,12 @@ class BrowserSessionManager:
         page = cls._active_page(session)
         scope_label: Optional[str] = None
 
+        # The inspect overlay blocks the pointer events exploration dispatches;
+        # suspend it for the run and restore it in the finally below.
+        inspect_suspended = bool(session.get("inspect_enabled"))
+        if inspect_suspended:
+            await cls.apply_inspect_overlay(page, False)
+
         try:
             while True:
                 if session.get("explore_cancelled"):
@@ -1598,6 +1620,11 @@ class BrowserSessionManager:
                 pass
         finally:
             session["explore_in_progress"] = False
+            if inspect_suspended and session.get("inspect_enabled"):
+                try:
+                    await cls.apply_inspect_overlay(page, True)
+                except Exception:
+                    pass
 
 
 _EXPLORE_DENYLIST_KEYWORDS = (
