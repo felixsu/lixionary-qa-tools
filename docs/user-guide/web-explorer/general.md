@@ -7,11 +7,11 @@
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                                  Web Explorer Workspace                                 │
 ├─────────────────────────────────────────────────────────────────────────────────────────┤
-│ Control bar: URL / Go · Inspect · Scan · Record · Explore · Sessions · Disconnect       │
+│ Control bar: URL / Go · Inspect · Scan · Record · Explore · End Session                 │
 ├────────────────────────────────────────────┬────────────────────────────────────────────┤
 │ Browser preview (live screencast)          │ Workspace (Files · Editor · Console)       │
-│ - click / type / scroll the real page      │ - my_page.py (recorded POM)                │
-│ - inspect overlay & selector highlights    │ - playground.py, main.py, my_recording.py  │
+│ - click / type / scroll the real page      │ - builder/ (my_page.py POM, playground.py, │
+│ - inspect overlay & selector highlights    │   main.py) · recording/ (main.py replay)   │
 ├────────────────────────────────────────────┴────────────────────────────────────────────┤
 │ View modes: Browser · Split · Workspace · Network Activity                              │
 └─────────────────────────────────────────────────────────────────────────────────────────┘

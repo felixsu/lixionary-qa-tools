@@ -23,7 +23,7 @@ Each pick generates candidate Playwright locators, scored by strategy quality mi
 
 ## **Recording to the POM**
 
-**Record** on the Inspect Element card appends the method to the `MyPage` class in `inspection_code/my_page.py` (see [Workspace](workspace-and-scripts.md)). A method that would duplicate an existing name is rejected — rename it first.
+**Record** on the Inspect Element card appends the method to the `MyPage` class in `builder/my_page.py` (see [Workspace](workspace-and-scripts.md)). A method that would duplicate an existing name is rejected — rename it first.
 
 Generated methods use the primary locator, chain `.frame_locator(…)` automatically for elements inside iframes, and map actions to Playwright calls (`Type` → `press_sequentially`, `Get Text` → `inner_text`, etc.):
 

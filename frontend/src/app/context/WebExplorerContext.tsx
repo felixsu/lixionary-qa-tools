@@ -42,13 +42,6 @@ export interface NetworkDetails {
   } | null;
 }
 
-export interface SessionInfo {
-  session_id: string;
-  status: "pending" | "active" | "disconnected" | "error";
-  created_at: string;
-  profile_id: string | null;
-}
-
 export interface SelectorTestResult {
   selector: string;
   totalCount: number;
@@ -120,11 +113,8 @@ interface WebExplorerContextType {
   handleStartRecording: () => void;
   handleStopRecording: () => void;
 
-  // Browser Session Management
-  userSessions: SessionInfo[];
-  fetchUserSessions: () => Promise<void>;
+  // Browser Session Management (single local session)
   handleCloseSession: (sessionId: string) => Promise<void>;
-  handleReconnectSession: (sessionId: string, profileId?: string) => void;
 
   // Browser Tab State
   browserTabs: { index: number; url: string }[];
@@ -184,9 +174,6 @@ export function WebExplorerProvider({ children }: { children: React.ReactNode })
   const [explorePrompt, setExplorePrompt] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [anchorElement, setAnchorElement] = useState<{ tagName: string; id: string; text: string } | null>(null);
-
-  // Browser Session Management
-  const [userSessions, setUserSessions] = useState<SessionInfo[]>([]);
 
   // Browser Tab State
   const [browserTabs, setBrowserTabs] = useState<{ index: number; url: string }[]>([]);
@@ -507,7 +494,6 @@ export function WebExplorerProvider({ children }: { children: React.ReactNode })
         case "error":
           showToast(`Browser session error: ${msg.message}`, { type: "error" });
           setIsBrowserConnected(false);
-          fetchUserSessions();
           break;
       }
     };
@@ -539,15 +525,6 @@ export function WebExplorerProvider({ children }: { children: React.ReactNode })
     };
   };
 
-  const fetchUserSessions = async () => {
-    try {
-      const data = await apiCall("/api/browser/sessions");
-      setUserSessions(data);
-    } catch (e) {
-      console.error("Failed to fetch user sessions", e);
-    }
-  };
-
   const handleCloseSession = async (sessId: string) => {
     try {
       await apiCall(`/api/browser/sessions/${sessId}`, { method: "DELETE" });
@@ -558,26 +535,9 @@ export function WebExplorerProvider({ children }: { children: React.ReactNode })
         setScreencastFrame(null);
         setSessionId("");
       }
-      await fetchUserSessions();
     } catch (e) {
       console.error("Failed to close session", e);
     }
-  };
-
-  const handleReconnectSession = (sessId: string, profileId?: string) => {
-    setSessionId(sessId);
-    setNetworkLogs([]);
-    setSelectedElement(null);
-    setSelectedElementLocators([]);
-    setSelectedElementStale({ stale: false, reason: null });
-    setPageScanStatus("idle");
-    setPageScanError(null);
-    setPageScanResults(null);
-    setPageScanScopeLabel(null);
-    setBrowserTabs([]);
-    setActiveTabIndex(0);
-    setScreencastFrame(null);
-    connectBrowserSession(sessId, profileId);
   };
 
   const handleStartBrowser = async (profileId?: string) => {
@@ -602,7 +562,6 @@ export function WebExplorerProvider({ children }: { children: React.ReactNode })
       setActiveTabIndex(0);
       setScreencastFrame(null);
       connectBrowserSession(sessId, profileId);
-      await fetchUserSessions();
     } catch (e: any) {
       console.error("Failed to create browser session:", e.message);
       throw e;
@@ -610,8 +569,9 @@ export function WebExplorerProvider({ children }: { children: React.ReactNode })
   };
 
   const handleDisconnectBrowser = () => {
-    // Close the WebSocket only — the browser session stays alive in the backend
-    // so the user can reconnect later. Use handleCloseSession to fully terminate.
+    // Detach the WS handlers first so onclose's auto-terminate doesn't double
+    // fire, then end the single local session explicitly.
+    const sessId = sessionId;
     if (wsRef.current) {
       wsRef.current.onclose = null;
       wsRef.current.onerror = null;
@@ -622,7 +582,9 @@ export function WebExplorerProvider({ children }: { children: React.ReactNode })
     setScreencastFrame(null);
     setBrowserTabs([]);
     setActiveTabIndex(0);
-    // Keep sessionId so the UI can show the disconnected state and offer reconnect.
+    if (sessId) {
+      handleCloseSession(sessId);
+    }
   };
 
   const handleSwitchTab = (index: number) => {
@@ -834,13 +796,11 @@ export function WebExplorerProvider({ children }: { children: React.ReactNode })
     }
   };
 
-  // Session list on sign-in, browser teardown on sign-out — these replace the
-  // direct fetchUserSessions()/handleDisconnectBrowser() calls that lived in
-  // AppContext's auth flow before the browser state was extracted here.
+  // Browser teardown on sign-out — replaces the direct
+  // handleDisconnectBrowser() call that lived in AppContext's auth flow
+  // before the browser state was extracted here.
   useEffect(() => {
-    if (token) {
-      fetchUserSessions();
-    } else {
+    if (!token) {
       handleDisconnectBrowser();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -909,10 +869,7 @@ export function WebExplorerProvider({ children }: { children: React.ReactNode })
         handleStartRecording,
         handleStopRecording,
 
-        userSessions,
-        fetchUserSessions,
         handleCloseSession,
-        handleReconnectSession,
 
         browserTabs,
         activeTabIndex,

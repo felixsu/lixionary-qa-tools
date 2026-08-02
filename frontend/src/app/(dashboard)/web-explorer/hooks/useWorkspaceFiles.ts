@@ -5,7 +5,7 @@ import { useAppContext } from "../../../context/AppContext";
 import { useWebExplorer } from "../../../context/WebExplorerContext";
 import { useToast } from "../../../context/ToastContext";
 import { confirmDialog } from "../../../utils/confirmDialog";
-import { MAIN_FILE, RECORDING_FILE, isReadOnlyFile } from "../lib/workspaceFiles";
+import { BUILDER_PREFIX, MAIN_FILE, RECORDING_FILE, isReadOnlyFile, isProtectedFile } from "../lib/workspaceFiles";
 
 export interface WorkspaceFileEntry {
   name: string;
@@ -154,6 +154,8 @@ export function useWorkspaceFiles({ onFilesRefreshed }: { onFilesRefreshed?: () 
     if (!rawName || !sessionId) return;
     let name = rawName.trim();
     if (!name.endsWith(".py")) name += ".py";
+    // User modules live on the builder side; recording/ is generator-owned.
+    if (!name.startsWith(BUILDER_PREFIX)) name = `${BUILDER_PREFIX}${name}`;
     await apiCall(`/api/workspace/files/${name}?session_id=${sessionId}`, {
       method: "POST",
       body: JSON.stringify({ content: "# New workspace module\n" }),
@@ -163,7 +165,7 @@ export function useWorkspaceFiles({ onFilesRefreshed }: { onFilesRefreshed?: () 
   };
 
   const handleDeleteFile = async (filename: string) => {
-    if (filename === MAIN_FILE) { showToast("main.py cannot be deleted.", { type: "error" }); return; }
+    if (isProtectedFile(filename)) { showToast(`${filename} cannot be deleted.`, { type: "error" }); return; }
     if (!(await confirmDialog(`Are you sure you want to delete ${filename}?`))) return;
     if (!sessionId) return;
     // A pending flush after the DELETE would re-create the file (POST creates)
@@ -190,7 +192,7 @@ export function useWorkspaceFiles({ onFilesRefreshed }: { onFilesRefreshed?: () 
     }
   };
 
-  // Live-refresh my_recording.py while it's open and the recorder appends steps
+  // Live-refresh recording/main.py while it's open and the recorder appends steps
   // (the WS handler re-dispatches recording_step_added as a window event).
   useEffect(() => {
     const handleStepAdded = async () => {
