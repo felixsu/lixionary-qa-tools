@@ -1,220 +1,264 @@
-# API Explorer: User Flow & Dependency Guide
+# **API Explorer Documentation Hierarchy**
 
-This document explains the **API Automation Explorer** module, its core dependencies (**Environments** and **Auth Hook Functions**), and the step-by-step user flow for executing requests and chaining variables.
+Below is the complete user guide structure for **API Explorer**, organized into a high-level **Parent Page** (Overview & Fundamentals) and focused **Child Pages** for detailed functional reference.
 
----
+# ** API Explorer Overview**
 
-## 1. Core Mental Model & Dependency Hierarchy
+## **Introduction**
 
-To effectively use the API Explorer, it is essential to understand the four key entities and how they relate:
+**API Explorer** is an integrated workspace within Lixionary designed for designing, testing, and executing HTTP API requests against backend services. Similar to tools like Postman, it allows QA engineers, developers, and automation specialists to interactive call endpoints, manage environment-aware collections, write assertion tests, and export execution scripts or models directly into automation frameworks.
 
-```mermaid
-graph TD
-    classDef main fill:#312e81,stroke:#4338ca,stroke-width:2px,color:#fff;
-    classDef config fill:#1e293b,stroke:#475569,stroke-width:1px,color:#fff;
-    classDef runtime fill:#064e3b,stroke:#059669,stroke-width:1px,color:#fff;
+┌────────────────────────────────────────────────────────────────────────────────────────┐  
+│                                   API Explorer Workspace                               │  
+├────────────────────────────────┬───────────────────────────────────────────────────────┤  
+│ Sidebar (Collections)          │ Main Workspace (Request / Response Pane)               │  
+│ \- Connected Collections (Sync) │ \- Top Bar: Method, Environment URL, Save, cURL, Python│  
+│ \- Local / Imported Collections │ \- Request Tabs: Headers, Params, Auth, Input, Output...│  
+│ \- Search & Navigation          │ \- Response View: Pretty, Headers, Raw, Extracted, Tests│  
+└────────────────────────────────┴───────────────────────────────────────────────────────┘
 
-    Env["Environments <br>(Variables Context)"]:::config
-    AuthFunc["Auth Hook Functions <br>(JS Sandboxed Scripts)"]:::config
-    Collection["Collections & Requests <br>(API Definitions)"]:::main
-    Sandbox["QuickJS Sandbox <br>(Backend Execution)"]:::runtime
-    Executor["API Proxy Executor <br>(FastAPI Backend)"]:::runtime
+## **Core Capabilities**
 
-    Env -->|Provides variables to| AuthFunc
-    Env -->|Interpolates values in| Collection
-    AuthFunc -->|Executes in| Sandbox
-    Sandbox -->|Returns Cached Token| Executor
-    Executor -->|Injects Bearer Token| Collection
-    Collection -->|Runs Response Parser in| Sandbox
-    Sandbox -->|Updates variable values| Env
-```
+1. **Shared & Isolated Collections**: Collaborative, real-time synced collections for teams or isolated local JSON clones for individual experimentation.  
+2. **Environment & Input Dynamic Injection**: Native template string parsing using {{env.VARIABLE\_NAME}} for infrastructure variables and {{ input\_name }} for dynamic test parameters.  
+3. **API Studio Interoperability**: Input and Output parameter definitions allow API Explorer requests to serve as modular components in multi-step API workflows.  
+4. **Automated Testing & Interceptors**: Write custom JavaScript pre-request interceptors and post-execution assertions using standard test helpers.  
+5. **Code & Model Generation**: Instantly generate resolved cURL commands or auto-generate Pydantic models and ready-to-run Python code snippet wrappers.
 
-1. **Environments**: The global context containing key-value variable sets (e.g., `BASE_URL`, `CLIENT_SECRET`). These variables are referenced with an explicit prefix: `{{env.VARIABLE_NAME}}`.
-2. **Auth Hook Functions**: Programmatic JavaScript scripts executed inside a secure backend sandbox (QuickJS). They access Environment variables, make an HTTP call to retrieve an authentication token, and cache it according to a TTL (expires-in config) or the JWT's `exp` claim.
-3. **Collections & Requests**: Stored HTTP request definitions (URL, Method, Headers, Query Params, Payload) grouped by folder/collection. They can reference Environment variables and designate an **Auth Hook Function** for dynamic authentication. Each request additionally carries **Inputs** and **Outputs** (see below).
-4. **Request Inputs**: Any bare `{{name}}` token (no `env.` prefix, no `$`) in the URL, headers, params, body, or auth fields is an input of the request. The **Input** tab lists detected inputs and binds each to either a free-typed literal value or a built-in generator (date with offset/format, random int, random email/name). Bindings are resolved once per run, so a generator used in several places yields one consistent value. Inline `{{$date:...}}`-style tokens still work and re-roll per occurrence.
-5. **Request Outputs (Response Parser)**: A request declares its output names on the **Output** tab (e.g. `order_id`). The post-execution parser script must assign each one onto the injected `output` object (`output.order_id = ...`); results appear in the **Extracted** response tab, with warnings for declared outputs the script did not set. The script can also call `env.set(key, value)` to write into the active Environment — those are env writes, not outputs.
+## **Workspace Layout At a Glance**
 
-**Token grammar summary:**
+The API Explorer interface is split into two primary areas:
 
-| Token | Meaning |
-| :--- | :--- |
-| `{{env.NAME}}` | Environment variable `NAME` |
-| `{{name}}` | Request input, bound in the Input tab (unbound tokens are sent literally) |
-| `{{$date:+1d:YYYY-MM-DD}}`, `{{$randomInt:4}}`, `{{$randomEmail}}`, … | Inline dynamic token, generated fresh at each occurrence |
+### **1\. Left Sidebar (Collections Navigation)**
 
----
+* **Search Bar**: Quick-filter requests across collections by name, endpoint path, or description text.  
+* **Connect Collection**: Join a shared collection via ID to enable real-time collaboration.  
+* **Import/Export**: Drag-and-drop or load JSON collection blueprints.  
+* **Tree View**: Hierarchical organization of collections, folders, and individual endpoint operations (GET, POST, PUT, DELETE).
 
-## 2. Request Execution Lifecycle (Sequence Flow)
+### **2\. Main Workbench (Request & Response Inspector)**
 
-When you click the **Send** button on a request in the API Explorer, the backend goes through a structured execution loop:
+* **Header Bar**: Displays HTTP Method selection, request target URL with variable interpolation, Save action, cURL generator, Show Python code window, and the Send execution trigger.  
+* **Request Configuration Tabs**: Customize headers, params, security context, runtime inputs, declared outputs, validation scripts, interceptors, and documentation.  
+* **Response View Area**: Rendered output, raw payloads, HTTP headers, extracted variables, test execution outcomes, and historical execution stats.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as QA Engineer
-    participant FE as Frontend Client
-    participant BE as Backend Proxy (FastAPI)
-    participant DB as MongoDB
-    participant JS as QuickJS Sandbox
-    participant API as Target Host API
+## **User Guide Navigation (Child Pages)**
 
-    User->>FE: Click "Send" Request
-    FE->>BE: POST /api/executor/run (requestData, environmentId)
-    
-    rect rgb(30, 41, 59)
-        note right of BE: Step 1: Interpolation
-        BE->>DB: Fetch Environment variables
-        DB-->>BE: Environment Variables
-        BE->>BE: Resolve input bindings once (literals & generators)
-        BE->>BE: Interpolate {{env.key}}, {{input}} and {{$generator}} tokens<br>in URL, Headers, Params, Body and Auth
-    end
+* Child Page 1: Collections Management  
+* Child Page 2: Request Builder & Execution  
+* Child Page 3: Parameterization & Variable Scope (Env & Inputs)  
+* Child Page 4: Interceptors & Test Scripting  
+* Child Page 5: Outputs & API Studio Integration  
+* Child Page 6: Code Export (cURL & Python / Pydantic)
 
-    rect rgb(49, 46, 129)
-        note right of BE: Step 2: Resolve Authentication
-        BE->>DB: Fetch associated Auth Hook details
-        DB-->>BE: Auth Hook Script & cachedToken
-        
-        alt Cached Token is Missing or Expired
-            BE->>JS: Execute Auth script with Env Context
-            note over JS: Runs fetchToken() helper
-            JS-->>BE: Returns newly fetched token string
-            BE->>DB: Cache new token & expiresAt (TTL / JWT exp)
-        else Token is Cached & Valid
-            note over BE: Use cachedToken directly
-        end
-        BE->>BE: Inject header: 'Authorization: Bearer <token>'
-    end
+# **\[Child Page 1\] Collections Management**
 
-    rect rgb(6, 78, 59)
-        note right of BE: Step 3: HTTP Dispatch
-        BE->>API: Send HTTP Request (Method, URL, Headers, Body)
-        API-->>BE: Return HTTP Response (Status, Headers, Body)
-    end
+## **Overview**
 
-    rect rgb(30, 41, 59)
-        note right of BE: Step 4: Outputs & Chaining (Response Parser)
-        alt Response Parser Script exists AND Status < 400
-            BE->>JS: Execute Response Parser script
-            note over JS: Injects 'response', 'output' & 'env'<br>Script assigns output.<name> and may call env.set()
-            JS-->>BE: Returns outputs + env writes
-            BE->>DB: Upsert env writes into Active Environment
-            BE->>DB: Persist last outputs per request (request_outputs)
-        end
-    end
+Collections organize related API requests into structured groups. API Explorer supports two distinct collection modes: **Connected (Shared) Collections** and **Local / Cloned Collections**.
 
-    BE-->>FE: Return Execution Stats, Body, Headers, Outputs & Missing Outputs
-    FE->>User: Display Response & Extracted outputs
-```
+## **Collection Types**
 
----
+### **1\. Connected Collections (Real-time Sync)**
 
-## 3. Step-by-Step User Flow
+* **Purpose**: Best suited for team environments where endpoint definitions, standard payloads, and environment configurations must remain synchronized across all team members.  
+* **How it works**: Connecting to a collection using its unique **Collection ID** creates a live link. Any addition, edit, or deletion of a request within a connected collection is immediately pushed to all subscribers.  
+* **Best Practice**: Use environment variables (e.g., {{env.BASE\_URL}}) within connected collections so team members can run identical requests against different target environments (QA, Staging, Local) without modifying endpoint definitions.
 
-### Step 1: Setup Workspace Environments
-Before running requests, define your environment variables. 
-1. Navigate to **Environments** (`/environments`) in the sidebar.
-2. Click **Create Environment** and name it (e.g., `Staging`).
-3. Add key-value variables:
-   - Mark secrets (like passwords or client secrets) by checking the **Secret** box to mask them in the UI.
-4. Set your active environment in the top header's **"Active Env"** dropdown.
+### **2\. Local / Cloned Collections**
 
-### Step 2: Write an Auth Hook Function
-If your APIs require bearer token authorization that expires frequently, define a dynamic hook:
-1. Navigate to **Auth Hook Functions** (`/auth-functions`).
-2. Click **Create Auth Function** and configure:
-   - **Name**: e.g., `OAuth Client Credentials`
-   - **Expires-In**: Set the cache lifetime in seconds (leave empty to parse from JWT expiration).
-3. Write the JavaScript retrieval logic inside the Monaco editor.
-4. Click **Create** to save.
+* **Purpose**: Ideal for isolated testing, experimental payload modifications, or offline work without risking shared team configurations.  
+* **How it works**: Importing a collection via JSON creates a local clone completely detached from the origin collection.
 
-*Example Auth Script:*
-```javascript
-// Access variables from the active environment using `env.<variable>`
-const clientId = env.AUTH_CLIENT_ID;
-const clientSecret = env.AUTH_CLIENT_SECRET;
-const tokenUrl = env.AUTH_URL || "https://auth.staging.ninjavan.co/token";
+## **Operations**
 
-// Use the fetchToken(url, options) helper to call the authentication server
-const responseText = fetchToken(tokenUrl, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({
-    client_id: clientId,
-    client_secret: clientSecret,
-    grant_type: "client_credentials"
-  })
-});
+### **Connecting to a Collection**
 
-const res = JSON.parse(responseText);
+1. Locate the **Connect collection by ID...** input in the left sidebar.  
+2. Paste the target Collection ID.  
+3. Click **Connect**. The collection and its folder hierarchy will appear in your tree view.
 
-if (res.error) {
-  throw new Error("Auth request failed: " + res.error_description);
+### **Importing a Collection**
+
+1. Click the **Import from JSON file** button.  
+2. Select a valid API Explorer collection JSON file.  
+3. A isolated clone will be instantiated in your collection tree.
+
+### **Exporting a Collection**
+
+1. Hover over or right-click the target collection in the sidebar.  
+2. Select **Export**.  
+3. Download the JSON definition file for backups or sharing offline.
+
+# **\[Child Page 2\] Request Builder & Execution**
+
+## **Overview**
+
+The Request Builder provides a unified header bar to construct, persist, and execute HTTP requests.
+
+## **Action Controls**
+
+| Element | Description | Keyboard Shortcut |
+| :---- | :---- | :---- |
+| **HTTP Method Selector** | Select standard verbs (GET, POST, PUT, DELETE, etc.). | — |
+| **URL Input Bar** | Target address line supporting variable injection. | — |
+| **Save Button** | Persists changes to the current request in your collection. | CMD \+ S / CTRL \+ S |
+| **cURL Button** | Opens a modal displaying the fully resolved cURL command. | — |
+| **Show Python** | Generates Pydantic models and ready-to-run Python HTTP code. | — |
+| **Send Button** | Dispatches the request to the configured target endpoint. | CTRL \+ Enter |
+
+## **URL Construction & Method Selection**
+
+* Choose the appropriate HTTP method from the dropdown menu to match your API specification.  
+* Enter the full endpoint path or utilize environment placeholders directly in the address line.  
+  * Example: {{env.BASE\_URL}}/{{env.SYSTEM\_ID}}/order-search/search/masked
+
+# **\[Child Page 3\] Parameterization & Variable Scope**
+
+## **Overview**
+
+API Explorer supports dynamic substitution across two distinct scopes: **Environment Variables** (env) and **Runtime Input Variables** (input).
+
+## **Variable Types & Syntax**
+
+### **1\. Environment Variables ({{env.VARIABLE\_NAME}})**
+
+* **Syntax**: {{env.KEY\_NAME}}  
+* **Scope**: Global / Workspace level, toggled via the active environment selector (e.g., QA SG) in the top navbar.  
+* **Usage**: Ideal for infrastructure and system parameters such as BASE\_URL, SYSTEM\_ID, API\_KEY, or AUTH\_TOKEN.  
+* **Example**:  
+  POST {{env.BASE\_URL}}/{{env.SYSTEM\_ID}}/v1/orders
+
+### **2\. Input Variables ({{ input\_name }})**
+
+* **Syntax**: {{ input\_name }} or {{ input\_name }} inside URLs, headers, or body payloads.  
+* **Scope**: Request-specific input parameters.  
+* **Detection**: Any string matching the double curly-brace pattern {{ name }} (without the env. prefix) is automatically recognized by the engine and exposed in the **Input Tab**.  
+* **API Studio Linking**: Input variables declared here populate automatically as configurable input fields when this request is imported into **API Studio** workflows.
+
+## **Request Configuration Tabs**
+
+### **1\. Headers**
+
+* Define custom HTTP header key-value pairs (e.g., Content-Type: application/json, X-Tracking-ID: {{env.TRACKING\_ID}}).  
+* Toggle individual headers on or off using checkboxes.
+
+### **2\. Params (Query Parameters)**
+
+* Add key-value query parameters that automatically append to the end of the URL using standard URL encoding.  
+* Example: Key page \= 1, Key limit \= 20 appends ?page=1\&limit=20 to the request URL.
+
+### **3\. Auth**
+
+* Configure authorization mechanics for the request.  
+* **Dynamic Auth Hook**: For specialized backend ecosystems (such as Ninja Van requests), select the Dynamic Auth hook provider to compute signatures or auto-refresh OAuth tokens prior to dispatch.
+
+### **4\. Input**
+
+* Review and assign values to all detected {{ input\_name }} placeholders present in the URL, headers, or request body.
+
+### **5\. Description**
+
+* Free-text / Markdown editor to describe the endpoint business logic, payload requirements, and context.  
+* **LLM Assistant Integration**: The written description is utilized by AI assistants and LLMs to understand the semantic context of the endpoint, enabling automatic sequencing of consecutive requests in automated flows.
+
+### **6\. Body**
+
+* Main request payload editor supporting JSON, Text, Form-Data, and x-www-form-urlencoded formats.
+
+# **\[Child Page 4\] Scripting & Automated Testing**
+
+## **Overview**
+
+API Explorer provides JavaScript-based pre-request processing (**Interceptor**) and post-request verification (**Test**) capabilities.
+
+## **1\. Interceptor (Pre-Request Scripts)**
+
+The **Interceptor** tab executes custom JavaScript logic *before* the request payload is transmitted across the network.
+
+* **Use Cases**:  
+  * Calculating cryptographic signatures or HMAC hashes on the fly.  
+  * Generating dynamic timestamps or UUIDs.  
+  * Modifying request headers or transforming payload structure dynamically before dispatch.  
+* **Behavior**: Works similarly to Postman's pre-request scripts.
+
+## **2\. Test (Post-Request Assertions)**
+
+The **Test** tab runs JavaScript assertion logic immediately after receiving an API response.
+
+### **Predefined Global Objects**
+
+* request: Read-only representation of the transmitted request details (URL, headers, body).  
+* response: The server response context, containing:  
+  * response.status (number)  
+  * response.headers (object)  
+  * response.body (parsed JSON object or raw string)  
+* test(description: string, condition: boolean): Assertion helper function.
+
+### **Code Example**
+
+if (response && response.body) {  
+  var body \= response.body;  
+  var order\_id \= body.id;  
+  var transactions \= body.transactions;  
+  var last\_transaction \= transactions\[transactions.length \- 1\];  
+  var waypoint\_id \= last\_transaction.waypointId;
+
+  // Execute test assertions  
+  test("Order ID exists", order\_id \!= null);  
+  test("Waypoint ID is not null", waypoint\_id \!= null);  
 }
 
-// Return only the string token to be cached
-return res.access_token;
-```
+# **\[Child Page 5\] Outputs & API Studio Integration**
 
-> [!TIP]
-> Use the **Dry-run (Test)** feature inside the edit form to verify that your script executes successfully and outputs the expected token structure.
+## **Overview**
 
-### Step 3: Build the Request in API Explorer
-1. Navigate to **API Automation Explorer** (`/api-explorer`).
-2. Create or select a Collection, and add a request.
-3. Define the HTTP Method and URL (e.g., `{{env.BASE_URL}}/sg/order-search/search/masked`).
-4. In the request builder's **Authentication** tab:
-   - Select **Dynamic Auth Hook** as the authentication type.
-   - Choose the Auth Function created in Step 2 from the dropdown.
+The **Output** tab bridges individual API requests with **API Studio**, allowing users to transform raw API responses into reusable variables across automation pipelines.
 
-### Step 4: Bind Request Inputs
-Any bare `{{name}}` token you type (e.g. a body of `{"ref": "{{order_ref}}"}`) appears live in the **Input** tab:
-1. Open the **Input** tab — each detected input shows one row.
-2. Choose the source per input:
-   - **Literal**: free-type a value; it may itself contain `{{env.X}}` or `{{$...}}` tokens.
-   - **Generator**: pick a date (with offset and format), random int, or random email/name from the menu.
-3. Unbound inputs are sent literally as `{{name}}`. Bindings are saved with the request and synced with the collection.
+## **Configuring Output Variables**
 
-### Step 5: Declare Outputs and the Parser Script
-To extract fields from the response (for verification or downstream use):
-1. Open the **Output** tab and declare output names as chips (e.g. `last_searched_order_id`).
-2. Write a JavaScript snippet that assigns each declared output onto the injected `output` object. Use `env.set(key, value)` only when you explicitly want to write an environment variable.
+1. Open the **Output** tab in the Request Editor.  
+2. Click **Add** (or **Manage**) and declare output names (e.g., extracted\_order\_id) — they appear as chips.  
+3. Write one JavaScript **parser script** that runs after the response and assigns each declared output onto the injected output object (env.get(key) reads and env.set(key, value) writes environment variables):  
+   output.extracted\_order\_id \= response.body.data.order.id;
 
-*Example Parser Script:*
-```javascript
-// The backend injects 'response' (parsed JSON body + headers), 'output' and 'env'
-if (response.body && response.body.data && response.body.data.length > 0) {
-  // Declared output — shows up in the Extracted tab
-  output.last_searched_order_id = response.body.data[0].id;
+4. Use **Debug** to re-run the script against the last recorded response (no request is sent; console.log output is captured), or the AI assist to generate the script from a plain-English description.  
+5. Executed requests will display extracted outputs under the **Extracted** tab in the response pane, with warnings for declared outputs the script did not set.
 
-  // Optional: also persist into the active environment for other requests
-  env.set("last_searched_order_id", response.body.data[0].id);
-}
-```
+## **Integration with API Studio**
 
-> [!NOTE]
-> You can click the **AI Agent Parser** button to open an AI assist window. Type in plain English what you want to extract (e.g., *"extract the order ID from the first element"*), and Gemini will generate the QuickJS-compliant script for you, targeting your declared outputs.
+When this request node is used inside **API Studio**:
 
-> [!WARNING]
-> Legacy scripts using `vars.set(...)` keep working as environment writes, but their values no longer appear in the Extracted tab — declare outputs and assign `output.<name>` instead.
+* Declared **Inputs** become node input ports.  
+* Declared **Outputs** become node output ports, allowing downstream nodes to ingest values produced by this API request.
 
-### Step 6: Execute and Verify
-1. Click **Send**.
-2. The response appears in the bottom panel. The **Extracted** tab lists every declared output — extracted values as rows, and a warning for any output the parser script did not set (the request still succeeds).
-3. To chain requests through the environment: `env.set(...)` in this request, then reference `{{env.last_searched_order_id}}` in the next request's URL (e.g. `{{env.BASE_URL}}/orders/{{env.last_searched_order_id}}`).
+# **\[Child Page 6\] Code Export (cURL & Python / Pydantic)**
 
----
+## **Overview**
 
-## 4. Key Differences: API Explorer vs. Web Explorer Auth Integration
+API Explorer allows seamless transition from manual testing to automated codebases via built-in code generators.
 
-While both modules share the same **Auth Hook Functions**, they inject the tokens differently depending on the execution context:
+## **1\. cURL Export**
 
-| Feature | API Explorer Request | Web Explorer Browser Session |
-| :--- | :--- | :--- |
-| **Execution Layer** | Headless backend `httpx` proxy | Remote Chromium browser (via VNC) |
-| **Trigger Point** | Every time the **Send** button is clicked | Once upon establishing the VNC socket connection |
-| **Token Injection** | Injected directly into the request headers (`Authorization: Bearer <token>`) | Pre-injected into the browser state (Cookies or LocalStorage) prior to navigating to the `defaultUrl` |
-| **Caching Scope** | Cached in MongoDB per-user session | Resolved once at launch (renewed inside profile cookies/localStorage if expired) |
-| **Setup Config** | Auth Function selected directly on the request | Auth Function linked to a **Browser Profile**, mapped with target keys and domains |
+Clicking the **cURL** button in the header bar opens a modal displaying the exact shell-ready cURL command.
+
+* All {{env.VARIABLE\_NAME}} and {{ input\_name }} placeholders are fully evaluated and resolved to their active dynamic values.  
+* Includes all enabled headers, query parameters, and body payloads.
+
+## **2\. Python & Pydantic Code Generation**
+
+Clicking **Show Python** generates production-ready Python code utilizing pydantic data structures and httpx/requests libraries.
+
+### **Features**
+
+1. **Request Code**: Generates boilerplate Python code ready to copy into automated test suites or framework scripts.  
+2. **Pydantic Response Models**:  
+   * *Requirement*: You must execute the request at least **once with a successful (2xx) response**.  
+   * The generator parses the JSON structure of the latest response payload and automatically creates matching Pydantic class definitions for type-safe data parsing.
+
+### **Workflow Example**
+
+1. Configure and dispatch your request via **Send**.  
+2. Verify a successful response in the response panel.  
+3. Click **Show Python**.  
+4. Copy the generated Pydantic response models and request invocation code directly into your Python automation repository.
