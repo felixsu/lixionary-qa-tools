@@ -3,10 +3,12 @@
 import React from "react";
 import Editor from "@monaco-editor/react";
 import {
-  ChevronDown, ChevronUp, File, FileCode, Folder, Lock, Play, Plus,
-  RotateCcw, Save, Terminal, Trash2, XCircle,
+  ChevronDown, ChevronUp, Copy, File, FileCode, Folder, FolderOpen, Lock,
+  Play, Plus, RotateCcw, Save, Terminal, Trash2, XCircle,
 } from "lucide-react";
-import { MAIN_FILE, isReadOnlyFile, isProtectedFile } from "../lib/workspaceFiles";
+import { useAppContext } from "../../../context/AppContext";
+import { useToast } from "../../../context/ToastContext";
+import { MAIN_FILE, RECORDING_FILE, isReadOnlyFile, isProtectedFile } from "../lib/workspaceFiles";
 import { sectionLabel, iconBtn } from "../lib/styles";
 import type { useWorkspaceFiles } from "../hooks/useWorkspaceFiles";
 import type { useScriptRunner } from "../hooks/useScriptRunner";
@@ -49,6 +51,26 @@ export default function WorkspacePanel({
     handleDeleteFile,
   } = workspace;
   const { workspaceLogs, setWorkspaceLogs, isScriptRunning, handleRunScript, handleStopScript } = runner;
+  const { apiCall } = useAppContext();
+  const { showToast } = useToast();
+
+  const handleOpenWorkspaceFolder = async () => {
+    try {
+      await apiCall("/api/workspace/open-location", { method: "POST" });
+    } catch (e: any) {
+      showToast(`Failed to open workspace folder: ${e.message}`, { type: "error" });
+    }
+  };
+
+  const handleCopyWorkspacePath = async () => {
+    try {
+      const { path } = await apiCall("/api/workspace/path");
+      await navigator.clipboard.writeText(path);
+      showToast("Workspace path copied to clipboard", { type: "success" });
+    } catch (e: any) {
+      showToast(`Failed to copy workspace path: ${e.message}`, { type: "error" });
+    }
+  };
 
   const fileList = (
     <div style={{ width: `${explorerWidth}px` }} className="flex-shrink-0 bg-panel flex flex-col overflow-hidden">
@@ -56,34 +78,54 @@ export default function WorkspacePanel({
         <span className={sectionLabel}>
           <Folder className="h-3.5 w-3.5 text-clay" /> Files
         </span>
-        <button onClick={onNewFile} className={iconBtn} title="Create Python module">
-          <Plus className="h-3 w-3 text-graphite" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button onClick={handleOpenWorkspaceFolder} className={iconBtn} title="Open workspace folder in file manager">
+            <FolderOpen className="h-3 w-3 text-graphite" />
+          </button>
+          <button onClick={handleCopyWorkspacePath} className={iconBtn} title="Copy workspace folder path">
+            <Copy className="h-3 w-3 text-graphite" />
+          </button>
+          <button onClick={onNewFile} className={iconBtn} title="Create Python module">
+            <Plus className="h-3 w-3 text-graphite" />
+          </button>
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-0.5">
-        {workspaceFiles.map((file) => {
-          const active = selectedWorkspaceFile === file.name;
+        {["builder", "recording"].map((folder) => {
+          const folderFiles = workspaceFiles.filter((f) => f.name.startsWith(`${folder}/`));
+          if (folderFiles.length === 0) return null;
           return (
-            <div
-              key={file.name}
-              className="group flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs transition-colors hover:bg-cream"
-              style={{ background: active ? "var(--color-cream)" : "transparent" }}
-            >
-              <button
-                onClick={() => setSelectedWorkspaceFile(file.name)}
-                className="flex items-center gap-2 text-left truncate flex-1"
-              >
-                <File className={`h-3.5 w-3.5 ${active ? "text-clay" : "text-mute"}`} />
-                <span className={`truncate ${active ? "text-clay font-medium" : "text-graphite"}`}>{file.name}</span>
-              </button>
-              {!isProtectedFile(file.name) && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleDeleteFile(file.name); }}
-                  className="opacity-0 group-hover:opacity-100 text-mute hover:text-danger transition"
-                >
-                  <Trash2 className="h-3 w-3" />
-                </button>
-              )}
+            <div key={folder} className="flex flex-col gap-0.5">
+              <div className="flex items-center gap-1.5 px-2.5 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-stone select-none">
+                <Folder className="h-3 w-3 text-mute" /> {folder}
+              </div>
+              {folderFiles.map((file) => {
+                const active = selectedWorkspaceFile === file.name;
+                const baseName = file.name.slice(folder.length + 1);
+                return (
+                  <div
+                    key={file.name}
+                    className="group flex items-center gap-2 pl-6 pr-2.5 py-1.5 rounded-md text-xs transition-colors hover:bg-cream"
+                    style={{ background: active ? "var(--color-cream)" : "transparent" }}
+                  >
+                    <button
+                      onClick={() => setSelectedWorkspaceFile(file.name)}
+                      className="flex items-center gap-2 text-left truncate flex-1"
+                    >
+                      <File className={`h-3.5 w-3.5 ${active ? "text-clay" : "text-mute"}`} />
+                      <span className={`truncate ${active ? "text-clay font-medium" : "text-graphite"}`}>{baseName}</span>
+                    </button>
+                    {!isProtectedFile(file.name) && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDeleteFile(file.name); }}
+                        className="opacity-0 group-hover:opacity-100 text-mute hover:text-danger transition"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           );
         })}
@@ -116,7 +158,7 @@ export default function WorkspacePanel({
               <Save className="h-3.5 w-3.5" /> Save
             </button>
           )}
-          {(selectedWorkspaceFile === MAIN_FILE || isReadOnlyFile(selectedWorkspaceFile)) && (
+          {(selectedWorkspaceFile === MAIN_FILE || selectedWorkspaceFile === RECORDING_FILE || isReadOnlyFile(selectedWorkspaceFile)) && (
             <button
               onClick={handleResetWorkspaceFile}
               disabled={!selectedWorkspaceFile || isWorkspaceLoading}

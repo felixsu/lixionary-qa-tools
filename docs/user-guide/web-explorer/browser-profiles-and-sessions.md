@@ -51,9 +51,8 @@ If a linked auth function misbehaves, a descriptive toast explains what went wro
 ## **Session Lifecycle**
 
 * Sessions are named automatically (`sess_…`); there is no manual naming.
-* The **Sessions** dropdown lists your sessions (**Your sessions**), each with a status dot and a ✕ (**Close session**) to terminate it. Before connecting, a mini-list under the profile selector offers **Reconnect** / close for recent sessions.
-* **Disconnect** detaches the app from the session. In practice the sidecar tears the browser session down once its connection closes, so treat Disconnect as ending the session — start a **New Session** to continue working.
-* Only one session is attached to the app at a time; starting or reconnecting replaces the current attachment.
+* The tool runs locally with a single session, so there is no session list — the connected control bar simply offers **End Session**, which terminates the browser session. Start a **New Session** to continue working.
+* Only one session is attached to the app at a time; starting a new one replaces the current attachment.
 * If the session breaks (e.g. you close the real Chrome window), the next action surfaces *"Browser session error: …"* and the app returns to the disconnected state.
 
 > **Headless note**: In a headless session there is no visible Chromium window to interact with — disable **Headless** in the browser profile if you want one.

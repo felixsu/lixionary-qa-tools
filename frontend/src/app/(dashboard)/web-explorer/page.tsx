@@ -45,21 +45,9 @@ export default function WebExplorerPage() {
     isRecording,
     handleToggleInspect,
     handleStartBrowser,
-    handleCloseSession,
   } = useWebExplorer();
 
   const [isStartingSession, setIsStartingSession] = useState(false);
-  const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
-
-  const onCloseSession = async (sessId: string) => {
-    if (closingSessionId) return;
-    setClosingSessionId(sessId);
-    try {
-      await handleCloseSession(sessId);
-    } finally {
-      setClosingSessionId(null);
-    }
-  };
 
   const onStartBrowser = async () => {
     if (isStartingSession) return;
@@ -266,8 +254,6 @@ export default function WebExplorerPage() {
         onToggleRecord={handleToggleRecord}
         onStartBrowser={onStartBrowser}
         isStartingSession={isStartingSession}
-        onCloseSession={onCloseSession}
-        closingSessionId={closingSessionId}
       />
 
       {isBrowserConnected ? (

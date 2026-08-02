@@ -90,7 +90,7 @@ def append_or_replace_step(steps: List[str], action: str, step_code: str) -> Non
     steps.append(step_code)
 
 def render_recording_script(steps: List[str]) -> str:
-    """Render the full my_recording.py replay script for the recorded steps."""
+    """Render the full recording/main.py replay script for the recorded steps."""
     content = "import os\n"
     content += "from playwright.sync_api import sync_playwright\n\n"
     content += "def run():\n"
@@ -1217,14 +1217,15 @@ class BrowserSessionManager:
         # Add to step list, coalescing consecutive fills on the same field
         append_or_replace_step(session.setdefault("recorded_steps", []), action, step_code)
 
-        # Regenerate my_recording.py in the flavor-aware workspace (AE_DATA_DIR
-        # in the packaged app) — the workspace file APIs only look there.
+        # Regenerate recording/main.py in the flavor-aware workspace
+        # (AE_DATA_DIR in the packaged app) — the workspace file APIs only
+        # look there. Keep in sync with local_sidecar.get_recording_script_path.
         from local_paths import get_base_dir
-        workspace_dir = os.path.join(get_base_dir(), "workspaces", "default")
-        os.makedirs(workspace_dir, exist_ok=True)
-        my_recording_path = os.path.join(workspace_dir, "my_recording.py")
+        recording_dir = os.path.join(get_base_dir(), "workspaces", "default", "recording")
+        os.makedirs(recording_dir, exist_ok=True)
+        recording_path = os.path.join(recording_dir, "main.py")
 
-        with open(my_recording_path, "w") as f:
+        with open(recording_path, "w") as f:
             f.write(render_recording_script(session["recorded_steps"]))
 
         # Notify client

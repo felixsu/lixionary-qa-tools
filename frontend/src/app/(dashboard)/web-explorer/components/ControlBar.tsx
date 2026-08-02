@@ -6,24 +6,20 @@ import { useWebExplorer } from "../../../context/WebExplorerContext";
 import Dropdown from "../../../components/Dropdown";
 import ScanMenu from "./menus/ScanMenu";
 import ExploreMenu from "./menus/ExploreMenu";
-import SessionsMenu from "./menus/SessionsMenu";
 
 /**
- * Top control bar. Connected: URL bar + Inspect/Scan/Record/Explore/Sessions/
- * Disconnect. Disconnected: profile picker + reconnect list + New Session.
+ * Top control bar. Connected: URL bar + Inspect/Scan/Record/Explore/
+ * End Session. Disconnected: profile picker + New Session. The tool runs
+ * locally with a single session, so there is no session list UI.
  */
 export default function ControlBar({
   onToggleRecord,
   onStartBrowser,
   isStartingSession,
-  onCloseSession,
-  closingSessionId,
 }: {
   onToggleRecord: () => void;
   onStartBrowser: () => void;
   isStartingSession: boolean;
-  onCloseSession: (sessionId: string) => void;
-  closingSessionId: string | null;
 }) {
   const { profiles, selectedProfileId, setSelectedProfileId } = useAppContext();
   const {
@@ -37,9 +33,6 @@ export default function ControlBar({
     handleBrowserNavigate,
     handleToggleInspect,
     handleDisconnectBrowser,
-    userSessions,
-    handleCloseSession,
-    handleReconnectSession,
   } = useWebExplorer();
 
   return (
@@ -108,12 +101,11 @@ export default function ControlBar({
             )}
           </button>
           <ExploreMenu />
-          <SessionsMenu onCloseSession={onCloseSession} closingSessionId={closingSessionId} />
           <button
             onClick={handleDisconnectBrowser}
             className="h-[34px] px-3.5 bg-cream border border-line rounded-lg text-[13px] text-graphite hover:bg-panel transition-colors flex items-center gap-1.5"
           >
-            <X className="h-3.5 w-3.5" /> Disconnect
+            <X className="h-3.5 w-3.5" /> End Session
           </button>
         </>
       ) : (
@@ -127,24 +119,6 @@ export default function ControlBar({
               ...profiles.map((p) => ({ value: p.id, label: p.name })),
             ]}
           />
-          {/* Pre-connect: show existing sessions to reconnect */}
-          {userSessions.length > 0 && (
-            <div className="flex flex-col gap-1 border border-line rounded-lg px-3 py-2 max-w-[240px]">
-              {userSessions.slice(0, 3).map((s) => (
-                <div key={s.session_id} className="flex items-center gap-2">
-                  <span className={`h-2 w-2 rounded-full flex-shrink-0 ${s.status === "active" ? "bg-sage" : "bg-stone"}`} />
-                  <span className="font-mono text-[10px] text-graphite truncate flex-1" title={s.session_id}>{s.session_id}</span>
-                  <button
-                    onClick={() => handleReconnectSession(s.session_id)}
-                    className="text-[11px] font-medium text-clay hover:text-clay-dark whitespace-nowrap"
-                  >Reconnect</button>
-                  <button onClick={() => handleCloseSession(s.session_id)} className="text-mute hover:text-danger">
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
           <button
             onClick={onStartBrowser}
             disabled={isStartingSession}

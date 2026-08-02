@@ -44,11 +44,11 @@ async def test_record_interaction():
         assert len(session["recorded_steps"]) == 1
         assert "page.get_by_test_id(\"submit-btn\").click()" in session["recorded_steps"][0]
 
-        # my_recording.py must land in the flavor-aware workspace (AE_DATA_DIR),
+        # recording/main.py must land in the flavor-aware workspace (AE_DATA_DIR),
         # not the legacy ~/Documents location
-        my_recording_path = os.path.join(tmp_base, "workspaces", "default", "my_recording.py")
-        assert os.path.exists(my_recording_path)
-        with open(my_recording_path) as f:
+        recording_path = os.path.join(tmp_base, "workspaces", "default", "recording", "main.py")
+        assert os.path.exists(recording_path)
+        with open(recording_path) as f:
             assert "page.get_by_test_id(\"submit-btn\").click()" in f.read()
     finally:
         del BrowserSessionManager._sessions[session_id]

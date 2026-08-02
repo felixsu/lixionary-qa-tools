@@ -78,7 +78,7 @@ DEFAULT_MY_PAGE_PY = "from playwright.sync_api import Page\n\nclass MyPage:\n   
 
 DEFAULT_MY_CLIENT_PY = 'from __future__ import annotations\nimport httpx\nfrom pydantic import BaseModel, Field\nfrom typing import List, Optional, Any\n\n# --- Pydantic Models ---\n\nclass MyClient:\n    def __init__(self, base_url: str = "https://api-qa.ninjavan.co", token: str = None):\n        self.client = httpx.Client(base_url=base_url)\n        if token:\n            self.client.headers.update({"Authorization": f"Bearer {token}"})\n'
 
-DEFAULT_PLAYGROUND_PY = 'from playwright.sync_api import Page\nfrom inspection_code.my_page import MyPage\n\n\nclass PlaygroundPage(MyPage):\n    def __init__(self, page: Page):\n        super().__init__(page)\n'
+DEFAULT_PLAYGROUND_PY = 'from playwright.sync_api import Page\nfrom my_page import MyPage\n\n\nclass PlaygroundPage(MyPage):\n    def __init__(self, page: Page):\n        super().__init__(page)\n'
 
 DEFAULT_MAIN_PY = """import os
 import time
@@ -144,26 +144,97 @@ class AddPOMMethodsBulkPayload(BaseModel):
     sessionId: str
     methods: List[BulkPOMMethod]
 
+# Workspace layout: builder/ holds hand-maintained scripts plus the generated
+# POM modules; recording/ holds the auto-generated replay script. Scripts run
+# with cwd set to their own folder, so imports are sibling-relative.
+BUILDER_DIR = "builder"
+RECORDING_DIR = "recording"
+WORKSPACE_SUBDIRS = (BUILDER_DIR, RECORDING_DIR)
+READONLY_FILES = (
+    os.path.join(BUILDER_DIR, "my_page.py"),
+    os.path.join(BUILDER_DIR, "my_client.py"),
+)
+PROTECTED_FILES = READONLY_FILES + (
+    os.path.join(BUILDER_DIR, "main.py"),
+    os.path.join(BUILDER_DIR, "playground.py"),
+    os.path.join(RECORDING_DIR, "main.py"),
+)
+
 def get_workspace_dir(session_id: str) -> str:
     path = os.path.join(WORKSPACE_DIR, "default")
     os.makedirs(path, exist_ok=True)
     return path
 
+def get_recording_script_path(session_id: str) -> str:
+    recording_dir = os.path.join(get_workspace_dir(session_id), RECORDING_DIR)
+    os.makedirs(recording_dir, exist_ok=True)
+    return os.path.join(recording_dir, "main.py")
+
 def sanitize_filename(filename: str) -> str:
     normalized = os.path.normpath(filename)
     parts = normalized.split(os.sep)
-    if len(parts) == 2 and parts[0] == "inspection_code":
-        base = parts[1]
-        if not base.endswith(".py") or ".." in base or "/" in base or "\\" in base:
-            raise HTTPException(status_code=400, detail="Invalid filename")
-        return os.path.join("inspection_code", base)
-    elif len(parts) == 1:
-        base = parts[0]
-        if not base.endswith(".py") or ".." in base or "/" in base or "\\" in base:
-            raise HTTPException(status_code=400, detail="Invalid filename")
-        return base
-    else:
+    if len(parts) != 2 or parts[0] not in WORKSPACE_SUBDIRS:
         raise HTTPException(status_code=400, detail="Invalid directory structure")
+    base = parts[1]
+    if not base.endswith(".py") or ".." in base or "/" in base or "\\" in base:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    return os.path.join(parts[0], base)
+
+def migrate_legacy_workspace_layout(workspace_dir: str) -> None:
+    """One-time move of the flat pre-builder layout into builder/ + recording/.
+
+    Old: main.py, playground.py, my_recording.py, inspection_code/{my_page,my_client}.py
+    New: builder/{main,playground,my_page,my_client}.py, recording/main.py
+
+    Idempotent: files move only when the source exists and the destination
+    does not, so an already-migrated (or fresh) workspace is untouched.
+    """
+    import shutil
+
+    builder_dir = os.path.join(workspace_dir, BUILDER_DIR)
+    recording_dir = os.path.join(workspace_dir, RECORDING_DIR)
+    inspection_dir = os.path.join(workspace_dir, "inspection_code")
+
+    moves = [
+        (os.path.join(inspection_dir, "my_page.py"), os.path.join(builder_dir, "my_page.py")),
+        (os.path.join(inspection_dir, "my_client.py"), os.path.join(builder_dir, "my_client.py")),
+        (os.path.join(workspace_dir, "my_recording.py"), os.path.join(recording_dir, "main.py")),
+    ]
+    # Any remaining root-level module (main.py, playground.py, user files)
+    # belongs to the builder side.
+    if os.path.isdir(workspace_dir):
+        for entry in os.scandir(workspace_dir):
+            if entry.is_file() and entry.name.endswith(".py") and entry.name != "my_recording.py":
+                moves.append((entry.path, os.path.join(builder_dir, entry.name)))
+
+    moved = 0
+    for src, dst in moves:
+        if os.path.exists(src) and not os.path.exists(dst):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.move(src, dst)
+            moved += 1
+
+    # playground.py imported MyPage through the inspection_code package;
+    # my_page.py is now a sibling module.
+    playground_path = os.path.join(builder_dir, "playground.py")
+    if moved and os.path.exists(playground_path):
+        with open(playground_path, "r") as f:
+            content = f.read()
+        migrated = content.replace("from inspection_code.my_page import", "from my_page import")
+        if migrated != content:
+            with open(playground_path, "w") as f:
+                f.write(migrated)
+
+    # Drop the emptied legacy dirs; inspection_code is only removed once empty.
+    shutil.rmtree(os.path.join(inspection_dir, "__pycache__"), ignore_errors=True)
+    shutil.rmtree(os.path.join(workspace_dir, "__pycache__"), ignore_errors=True)
+    try:
+        os.rmdir(inspection_dir)
+    except OSError:
+        pass
+
+    if moved:
+        print(f"Migrated {moved} workspace file(s) to the builder/recording layout")
 
 # Setup Python Virtual Environment at startup
 def setup_local_venv():
@@ -682,9 +753,8 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
             elif action == "start-recording":
                 session["recording_enabled"] = True
                 session["recorded_steps"] = []
-                # Initialize my_recording.py with boilerplate
-                my_recording_path = os.path.join(get_workspace_dir(session_id), "my_recording.py")
-                with open(my_recording_path, "w") as f:
+                # Initialize recording/main.py with boilerplate
+                with open(get_recording_script_path(session_id), "w") as f:
                     f.write(render_recording_script([]))
 
                 # Enable recording mode on page frames
@@ -986,8 +1056,8 @@ async def add_local_pom_method(payload: AddPOMMethodPayload):
     from services.naming import sanitize_method_name
 
     session_workspace = get_workspace_dir(payload.sessionId)
-    os.makedirs(os.path.join(session_workspace, "inspection_code"), exist_ok=True)
-    my_page_path = os.path.join(session_workspace, "inspection_code", "my_page.py")
+    os.makedirs(os.path.join(session_workspace, BUILDER_DIR), exist_ok=True)
+    my_page_path = os.path.join(session_workspace, BUILDER_DIR, "my_page.py")
 
     method_name = sanitize_method_name(payload.methodName)
 
@@ -1033,8 +1103,8 @@ async def add_local_pom_methods_bulk(payload: AddPOMMethodsBulkPayload):
     from services.naming import sanitize_method_name
 
     session_workspace = get_workspace_dir(payload.sessionId)
-    os.makedirs(os.path.join(session_workspace, "inspection_code"), exist_ok=True)
-    my_page_path = os.path.join(session_workspace, "inspection_code", "my_page.py")
+    os.makedirs(os.path.join(session_workspace, BUILDER_DIR), exist_ok=True)
+    my_page_path = os.path.join(session_workspace, BUILDER_DIR, "my_page.py")
 
     page_url = None
     session = _active_sessions.get(payload.sessionId)
@@ -1086,55 +1156,62 @@ async def add_local_pom_methods_bulk(payload: AddPOMMethodsBulkPayload):
         raise HTTPException(status_code=500, detail=str(e))
 
 # Workspace File System Management APIs
+
+@app.get("/api/workspace/path")
+async def get_workspace_path():
+    return {"path": get_workspace_dir("default")}
+
+@app.post("/api/workspace/open-location")
+async def open_workspace_location():
+    """Reveal the workspace folder in the OS file manager. The sidecar runs on
+    the user's machine, so this works in both the Tauri and browser flavors."""
+    path = get_workspace_dir("default")
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        elif os.name == "nt":
+            subprocess.Popen(["explorer", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to open workspace folder: {e}")
+    return {"message": "Workspace folder opened", "path": path}
 @app.get("/api/workspace/files")
 async def list_workspace_files(session_id: str = Query(...)):
     workspace_dir = get_workspace_dir(session_id)
-    
-    # Pre-scaffold boiletplates
-    inspection_code_dir = os.path.join(workspace_dir, "inspection_code")
-    os.makedirs(inspection_code_dir, exist_ok=True)
 
-    my_page_path = os.path.join(inspection_code_dir, "my_page.py")
-    if not os.path.exists(my_page_path):
-        with open(my_page_path, "w") as f:
-            f.write(DEFAULT_MY_PAGE_PY)
+    migrate_legacy_workspace_layout(workspace_dir)
 
-    my_client_path = os.path.join(inspection_code_dir, "my_client.py")
-    if not os.path.exists(my_client_path):
-        with open(my_client_path, "w") as f:
-            f.write(DEFAULT_MY_CLIENT_PY)
+    # Pre-scaffold boilerplates
+    builder_dir = os.path.join(workspace_dir, BUILDER_DIR)
+    recording_dir = os.path.join(workspace_dir, RECORDING_DIR)
+    os.makedirs(builder_dir, exist_ok=True)
+    os.makedirs(recording_dir, exist_ok=True)
 
-    playground_path = os.path.join(workspace_dir, "playground.py")
-    if not os.path.exists(playground_path):
-        with open(playground_path, "w") as f:
-            f.write(DEFAULT_PLAYGROUND_PY)
-
-    main_py_path = os.path.join(workspace_dir, "main.py")
-    if not os.path.exists(main_py_path):
-        with open(main_py_path, "w") as f:
-            f.write(DEFAULT_MAIN_PY)
+    scaffold = {
+        os.path.join(builder_dir, "my_page.py"): DEFAULT_MY_PAGE_PY,
+        os.path.join(builder_dir, "my_client.py"): DEFAULT_MY_CLIENT_PY,
+        os.path.join(builder_dir, "playground.py"): DEFAULT_PLAYGROUND_PY,
+        os.path.join(builder_dir, "main.py"): DEFAULT_MAIN_PY,
+        os.path.join(recording_dir, "main.py"): render_recording_script([]),
+    }
+    for path, boilerplate in scaffold.items():
+        if not os.path.exists(path):
+            with open(path, "w") as f:
+                f.write(boilerplate)
 
     files = []
-    # Scan root folder
-    for entry in os.scandir(workspace_dir):
-        if entry.is_file() and entry.name.endswith(".py"):
-            stat = entry.stat()
-            files.append({
-                "name": entry.name,
-                "size": stat.st_size,
-                "updatedAt": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
-            })
-    # Scan inspection_code folder
-    for entry in os.scandir(inspection_code_dir):
-        if entry.is_file() and entry.name.endswith(".py"):
-            stat = entry.stat()
-            files.append({
-                "name": f"inspection_code/{entry.name}",
-                "size": stat.st_size,
-                "updatedAt": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
-            })
+    for subdir in WORKSPACE_SUBDIRS:
+        for entry in os.scandir(os.path.join(workspace_dir, subdir)):
+            if entry.is_file() and entry.name.endswith(".py"):
+                stat = entry.stat()
+                files.append({
+                    "name": f"{subdir}/{entry.name}",
+                    "size": stat.st_size,
+                    "updatedAt": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+                })
 
-    files.sort(key=lambda x: (x["name"] != "main.py", x["name"]))
+    files.sort(key=lambda x: (x["name"] != f"{BUILDER_DIR}/main.py", x["name"]))
     return files
 
 @app.get("/api/workspace/files/{filename:path}")
@@ -1152,9 +1229,10 @@ async def read_workspace_file(filename: str, session_id: str = Query(...)):
 async def save_workspace_file(filename: str, payload: FileSavePayload, session_id: str = Query(...)):
     workspace_dir = get_workspace_dir(session_id)
     safe_name = sanitize_filename(filename)
-    if safe_name.startswith("inspection_code/"):
-        raise HTTPException(status_code=403, detail="Files inside inspection_code/ are read-only")
+    if safe_name in READONLY_FILES:
+        raise HTTPException(status_code=403, detail=f"{safe_name} is generated and read-only")
     file_path = os.path.join(workspace_dir, safe_name)
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
     with open(file_path, "w") as f:
         f.write(payload.content)
     return {"message": f"File {safe_name} saved successfully"}
@@ -1163,10 +1241,8 @@ async def save_workspace_file(filename: str, payload: FileSavePayload, session_i
 async def delete_workspace_file(filename: str, session_id: str = Query(...)):
     workspace_dir = get_workspace_dir(session_id)
     safe_name = sanitize_filename(filename)
-    if safe_name.startswith("inspection_code/"):
-        raise HTTPException(status_code=403, detail="Files inside inspection_code/ are read-only")
-    if safe_name == "main.py":
-        raise HTTPException(status_code=400, detail="Cannot delete main.py")
+    if safe_name in PROTECTED_FILES:
+        raise HTTPException(status_code=400, detail=f"Cannot delete {safe_name}")
     file_path = os.path.join(workspace_dir, safe_name)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
@@ -1179,19 +1255,16 @@ async def reset_workspace(payload: FileResetPayload):
     safe_name = sanitize_filename(payload.filename)
     file_path = os.path.join(workspace_dir, safe_name)
 
-    if safe_name == "inspection_code/my_page.py":
-        content = DEFAULT_MY_PAGE_PY
-    elif safe_name == "inspection_code/my_client.py":
-        content = DEFAULT_MY_CLIENT_PY
-    elif safe_name.startswith("inspection_code/"):
-        raise HTTPException(status_code=403, detail="Files inside inspection_code/ are read-only")
-    elif safe_name == "playground.py":
-        content = DEFAULT_PLAYGROUND_PY
-    elif safe_name == "main.py":
-        content = DEFAULT_MAIN_PY
-    else:
-        content = ""
+    boilerplates = {
+        os.path.join(BUILDER_DIR, "my_page.py"): DEFAULT_MY_PAGE_PY,
+        os.path.join(BUILDER_DIR, "my_client.py"): DEFAULT_MY_CLIENT_PY,
+        os.path.join(BUILDER_DIR, "playground.py"): DEFAULT_PLAYGROUND_PY,
+        os.path.join(BUILDER_DIR, "main.py"): DEFAULT_MAIN_PY,
+        os.path.join(RECORDING_DIR, "main.py"): render_recording_script([]),
+    }
+    content = boilerplates.get(safe_name, "")
 
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
     with open(file_path, "w") as f:
         f.write(content)
 
@@ -1200,10 +1273,15 @@ async def reset_workspace(payload: FileResetPayload):
 @app.post("/api/workspace/run")
 async def run_local_script_direct(payload: RunScriptPayload):
     session_workspace = get_workspace_dir(payload.session_id)
-    file_path = os.path.join(session_workspace, payload.filename)
+    safe_name = sanitize_filename(payload.filename)
+    file_path = os.path.join(session_workspace, safe_name)
 
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail=f"Script {payload.filename} not found in workspace")
+
+    # Run from the script's own folder so builder/ scripts can import their
+    # sibling modules (playground, my_page) and recording/ stays standalone.
+    script_cwd = os.path.dirname(file_path)
 
     # Determine virtualenv python path or fallback to system python
     python_bin = os.path.join(VENV_DIR, "bin", "python") if os.name != "nt" else os.path.join(VENV_DIR, "Scripts", "python")
@@ -1225,7 +1303,7 @@ async def run_local_script_direct(payload: RunScriptPayload):
                 python_bin, "-u", file_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                cwd=session_workspace,
+                cwd=script_cwd,
                 env=env
             )
             _running_processes[payload.session_id] = process
