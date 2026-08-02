@@ -16,13 +16,11 @@ import NetworkPanel from "./components/NetworkPanel";
 import SaveToCollectionModal from "./components/modals/SaveToCollectionModal";
 import PythonClientModal from "./components/modals/PythonClientModal";
 import NewFileModal from "./components/modals/NewFileModal";
-import SessionLimitModal from "./components/modals/SessionLimitModal";
 import AnchorBanner from "./components/overlays/AnchorBanner";
 import ScanErrorToast from "./components/overlays/ScanErrorToast";
 import ExploreLog from "./components/overlays/ExploreLog";
 import ScanReviewDrawer from "./components/overlays/ScanReviewDrawer";
 import InspectorCard from "./components/overlays/InspectorCard";
-import SelectorTesterCard from "./components/overlays/SelectorTesterCard";
 import { useWorkspaceFiles } from "./hooks/useWorkspaceFiles";
 import { useScriptRunner } from "./hooks/useScriptRunner";
 import { usePythonAutocomplete } from "./hooks/usePythonAutocomplete";
@@ -45,8 +43,6 @@ export default function WebExplorerPage() {
     handleCloseSession,
   } = useWebExplorer();
 
-  const [limitExceededModalOpen, setLimitExceededModalOpen] = useState(false);
-  const [activeSessions, setActiveSessions] = useState<any[]>([]);
   const [isStartingSession, setIsStartingSession] = useState(false);
   const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
 
@@ -68,12 +64,7 @@ export default function WebExplorerPage() {
       // Do NOT clear isStartingSession here — wait for isBrowserConnected (via useEffect below)
     } catch (e: any) {
       setIsStartingSession(false);
-      if (e.status === 429 && e.detail && e.detail.error === "resource_depleted") {
-        setActiveSessions(e.detail.active_sessions || []);
-        setLimitExceededModalOpen(true);
-      } else {
-        showToast(e.message || "Failed to start browser session", { type: "error" });
-      }
+      showToast(e.message || "Failed to start browser session", { type: "error" });
     }
   };
 
@@ -219,13 +210,9 @@ export default function WebExplorerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isRecording]);
 
-  // Manual selector testing — inspector-card override input + standalone tester card
+  // Manual selector testing — inspector-card override input. State lives here
+  // so it survives the card unmounting when the element is dismissed.
   const [customSelectorInput, setCustomSelectorInput] = useState("");
-  const [showSelectorTester, setShowSelectorTester] = useState(false);
-  const [testerSelector, setTesterSelector] = useState("");
-  const [testerAction, setTesterAction] = useState("click");
-  const [testerValue, setTesterValue] = useState("");
-  const [testerMethodName, setTesterMethodName] = useState("");
 
   const handleOpenSaveModal = async (log: NetworkLog, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -259,8 +246,6 @@ export default function WebExplorerPage() {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       <ControlBar
-        showSelectorTester={showSelectorTester}
-        setShowSelectorTester={setShowSelectorTester}
         onToggleRecord={handleToggleRecord}
         onStartBrowser={onStartBrowser}
         isStartingSession={isStartingSession}
@@ -344,22 +329,10 @@ export default function WebExplorerPage() {
               <ScanErrorToast />
               <ExploreLog />
               <ScanReviewDrawer onRecorded={refreshMyPageFile} />
-              {selectedElement && !showSelectorTester && (
+              {selectedElement && (
                 <InspectorCard
                   customSelectorInput={customSelectorInput}
                   setCustomSelectorInput={setCustomSelectorInput}
-                  onRecorded={refreshMyPageFile}
-                />
-              )}
-              {showSelectorTester && (
-                <SelectorTesterCard
-                  tester={{
-                    testerSelector, setTesterSelector,
-                    testerAction, setTesterAction,
-                    testerValue, setTesterValue,
-                    testerMethodName, setTesterMethodName,
-                  }}
-                  onClose={() => setShowSelectorTester(false)}
                   onRecorded={refreshMyPageFile}
                 />
               )}
@@ -413,12 +386,6 @@ export default function WebExplorerPage() {
         />
       )}
 
-      {limitExceededModalOpen && (
-        <SessionLimitModal
-          activeSessions={activeSessions}
-          onClose={() => setLimitExceededModalOpen(false)}
-        />
-      )}
     </div>
   );
 }

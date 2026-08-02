@@ -749,7 +749,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // reads it to completion, which would buffer an entire response stream.
   const apiFetch = async (path: string, options: RequestInit = {}, record: boolean = true): Promise<Response> => {
     let startedAt: number | null = null;
-    const isLocal = path.startsWith("/api/browser") || path.startsWith("/api/workspace") || path.startsWith("/api/browser-helper") || path.startsWith("/api/local-store") || path.startsWith("/api/executor") || path.startsWith("/api/ai");
+    const isLocal = path.startsWith("/api/browser") || path.startsWith("/api/workspace") || path.startsWith("/api/local-store") || path.startsWith("/api/executor") || path.startsWith("/api/ai");
     const baseUrl = isLocal ? LOCAL_API_URL : VPS_API_URL;
     const fullUrl = `${baseUrl}${path}`;
 

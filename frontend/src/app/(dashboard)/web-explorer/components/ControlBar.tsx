@@ -1,6 +1,6 @@
 "use client";
 
-import { AppWindow, Braces, Crosshair, Globe, Loader2, Lock, Play, X } from "lucide-react";
+import { Crosshair, Globe, Loader2, Lock, Play, X } from "lucide-react";
 import { useAppContext } from "../../../context/AppContext";
 import { useWebExplorer } from "../../../context/WebExplorerContext";
 import Dropdown from "../../../components/Dropdown";
@@ -9,21 +9,16 @@ import ExploreMenu from "./menus/ExploreMenu";
 import SessionsMenu from "./menus/SessionsMenu";
 
 /**
- * Top control bar. Connected: URL bar + Inspect/Selector/Window/Scan/Record/
- * Explore/Sessions/Disconnect. Disconnected: profile picker + reconnect list
- * + New Session.
+ * Top control bar. Connected: URL bar + Inspect/Scan/Record/Explore/Sessions/
+ * Disconnect. Disconnected: profile picker + reconnect list + New Session.
  */
 export default function ControlBar({
-  showSelectorTester,
-  setShowSelectorTester,
   onToggleRecord,
   onStartBrowser,
   isStartingSession,
   onCloseSession,
   closingSessionId,
 }: {
-  showSelectorTester: boolean;
-  setShowSelectorTester: (show: boolean) => void;
   onToggleRecord: () => void;
   onStartBrowser: () => void;
   isStartingSession: boolean;
@@ -41,8 +36,6 @@ export default function ControlBar({
     isRecording,
     handleBrowserNavigate,
     handleToggleInspect,
-    handleClearHighlights,
-    handleFocusBrowserWindow,
     handleDisconnectBrowser,
     userSessions,
     handleCloseSession,
@@ -88,32 +81,6 @@ export default function ControlBar({
           >
             <Crosshair className="h-3.5 w-3.5" />
             {inspectMode ? "Inspecting" : "Inspect"}
-          </button>
-          <button
-            onClick={() => {
-              const next = !showSelectorTester;
-              setShowSelectorTester(next);
-              if (!next) handleClearHighlights();
-            }}
-            disabled={isVerifying || isExploring || isRecording}
-            title="Type a selector manually, test it against the page, run actions and save it"
-            className="h-[34px] px-3.5 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border disabled:opacity-60"
-            style={
-              showSelectorTester
-                ? { background: "rgba(204,120,92,0.12)", borderColor: "rgba(204,120,92,0.4)", color: "#cc785c" }
-                : { background: "transparent", borderColor: "var(--color-line)", color: "var(--color-graphite)" }
-            }
-          >
-            <Braces className="h-3.5 w-3.5" />
-            Selector
-          </button>
-          <button
-            onClick={handleFocusBrowserWindow}
-            title="Raise the live browser window — browsing and inspect clicks work there too"
-            className="h-[34px] px-3 rounded-lg text-[13px] font-medium flex items-center gap-1.5 transition-colors border bg-transparent border-line text-graphite hover:bg-panel"
-          >
-            <AppWindow className="h-3.5 w-3.5" />
-            Window
           </button>
           <ScanMenu />
           <button

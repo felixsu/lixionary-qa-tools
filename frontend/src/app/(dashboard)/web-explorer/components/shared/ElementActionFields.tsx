@@ -3,7 +3,7 @@
 import Dropdown from "../../../../components/Dropdown";
 import { ACTION_OPTIONS, VALUE_ACTIONS } from "../../lib/actions";
 
-// Form blocks shared between InspectorCard and SelectorTesterCard.
+// Form blocks for InspectorCard's element/action fields.
 
 export function ActionSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (

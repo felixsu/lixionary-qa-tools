@@ -109,10 +109,6 @@ interface WebExplorerContextType {
   isTestingSelector: boolean;
   handleTestSelector: (selector: string) => void;
   handleClearHighlights: () => void;
-  handleVerifyCustomSelector: (selector: string, action: string, value?: string, frameLocators?: string[]) => void;
-
-  // Live browser window
-  handleFocusBrowserWindow: () => void;
   isExploring: boolean;
   exploreSteps: any[];
   setExploreSteps: React.Dispatch<React.SetStateAction<any[]>>;
@@ -508,11 +504,6 @@ export function WebExplorerProvider({ children }: { children: React.ReactNode })
           setIsTestingSelector(false);
           setSelectorTestResult(msg.data);
           break;
-        case "window_focused":
-          break;
-        case "window_focus_error":
-          showToast(msg.data?.message || "Could not raise the browser window", { type: "error" });
-          break;
         case "error":
           showToast(`Browser session error: ${msg.message}`, { type: "error" });
           setIsBrowserConnected(false);
@@ -734,24 +725,6 @@ export function WebExplorerProvider({ children }: { children: React.ReactNode })
     wsRef.current.send(JSON.stringify({ action: "clear-highlight" }));
   };
 
-  // Runs an action with a user-typed selector through the same verify path the
-  // inspector uses; frameLocators (from the selector test) target an iframe.
-  const handleVerifyCustomSelector = (selector: string, action: string, value?: string, frameLocators?: string[]) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-    wsRef.current.send(JSON.stringify({
-      action: "verify",
-      verifyAction: action,
-      locators: [{ strategy: "locator (Custom)", selector }],
-      value: ["fill", "type", "select_option"].includes(action) ? (value ?? "") : undefined,
-      frameLocators: frameLocators && frameLocators.length ? frameLocators : undefined,
-    }));
-  };
-
-  const handleFocusBrowserWindow = () => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-    wsRef.current.send(JSON.stringify({ action: "focus-window" }));
-  };
-
   const resetPageScan = () => {
     setPageScanStatus("idle");
     setPageScanError(null);
@@ -925,8 +898,6 @@ export function WebExplorerProvider({ children }: { children: React.ReactNode })
         isTestingSelector,
         handleTestSelector,
         handleClearHighlights,
-        handleVerifyCustomSelector,
-        handleFocusBrowserWindow,
         isExploring,
         exploreSteps,
         setExploreSteps,

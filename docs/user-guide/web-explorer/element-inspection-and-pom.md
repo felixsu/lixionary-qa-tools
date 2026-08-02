@@ -21,10 +21,6 @@ Each pick generates candidate Playwright locators, scored by strategy quality mi
 * **Set as Anchor** (*"Set this element as XPath anchor — then click a descendant to get a relative XPath"*): anchor a stable parent (outlined green, with a banner showing the anchor and a clear ✕), then pick descendants — they gain a top-ranked anchor-relative XPath candidate.
 * **Verify** actually performs the chosen action against the live page, trying each candidate in order and logging every attempt (`✅ Verified` / `❌ All candidates failed`). If all ranked candidates fail, the AI proposes alternative locators (marked with 🤖 in the log) and those are tried too. A successful verify promotes the winning locator to primary.
 
-## **Selector Tester**
-
-The **Selector** button (*"Type a selector manually, test it against the page, run actions and save it"*) opens the **Selector Tester** card. Enter any Playwright selector (*CSS, `xpath=//…`, `text=Submit`, chaining with `>>`*): matches are highlighted on the live page for a few seconds with a match-count chip, and the card reports *"✅ Unique match"*, *"⚠️ N matches — Playwright strict mode rejects actions on multi-match selectors; refine it or append `>> nth=0`"*, or *"No matches on this page"*. **Run** executes the chosen action with it; **Save to POM** records it as a method (*"Method «name» added to MyPage."*).
-
 ## **Recording to the POM**
 
 **Record** on the Inspect Element card appends the method to the `MyPage` class in `inspection_code/my_page.py` (see [Workspace](workspace-and-scripts.md)). A method that would duplicate an existing name is rejected — rename it first.
