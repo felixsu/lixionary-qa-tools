@@ -678,12 +678,7 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
             elif action == "toggle-inspect":
                 enabled = cmd.get("enabled", False)
                 session["inspect_enabled"] = enabled
-                eval_script = f"window.__setLixionaryInspectMode({json.dumps(enabled)})"
-                for frame in active_page.frames:
-                    try:
-                        await frame.evaluate(eval_script)
-                    except Exception:
-                        pass
+                await BrowserSessionManager.apply_inspect_overlay(active_page, enabled)
             elif action == "start-recording":
                 session["recording_enabled"] = True
                 session["recorded_steps"] = []
@@ -733,6 +728,13 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                 locators = cmd.get("locators") or []
                 value = cmd.get("value")
                 await send_to_client({"type": "verify_started", "data": {"action": verify_action}})
+                # The inspect overlay's capture-phase listeners block the very
+                # events the verify action dispatches — suspend the overlay for
+                # the attempts and restore it after (the session's
+                # inspect_enabled flag and the UI state are untouched).
+                inspect_suspended = bool(session.get("inspect_enabled"))
+                if inspect_suspended:
+                    await BrowserSessionManager.apply_inspect_overlay(active_page, False)
                 try:
                     frame = session.get("last_clicked_frame") or active_page.main_frame
                     success = False
@@ -789,6 +791,13 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                     })
                 except Exception as ex:
                     await send_to_client({"type": "verify_result", "data": {"success": False, "action": verify_action, "error": str(ex)}})
+                finally:
+                    # Re-check the flag: the user may have toggled inspect off mid-verify.
+                    if inspect_suspended and session.get("inspect_enabled"):
+                        try:
+                            await BrowserSessionManager.apply_inspect_overlay(active_page, True)
+                        except Exception:
+                            pass
             elif action == "test-selector":
                 raw_selector = (cmd.get("selector") or "").strip()
                 if not raw_selector:
@@ -853,11 +862,7 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                     except Exception:
                         pass
                     if session.get("inspect_enabled"):
-                        for frame in new_active.frames:
-                            try:
-                                await frame.evaluate("window.__setLixionaryInspectMode(true)")
-                            except Exception:
-                                pass
+                        await BrowserSessionManager.apply_inspect_overlay(new_active, True)
                     await send_to_client({"type": "navigation", "url": new_active.url})
             elif action == "close_tab":
                 idx = int(cmd.get("page_index", 0))

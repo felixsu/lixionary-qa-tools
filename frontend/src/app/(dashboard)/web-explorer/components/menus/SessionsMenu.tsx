@@ -16,7 +16,7 @@ export default function SessionsMenu({
   const { userSessions, fetchUserSessions, handleReconnectSession } = useWebExplorer();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  useOutsideDismiss(menuRef, () => setOpen(false));
+  useOutsideDismiss(menuRef, () => setOpen(false), open);
 
   return (
     <div className="relative" ref={menuRef}>

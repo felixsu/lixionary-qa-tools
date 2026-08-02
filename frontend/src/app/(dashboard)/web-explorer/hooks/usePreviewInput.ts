@@ -64,6 +64,11 @@ export function usePreviewInput() {
   };
 
   const handlePreviewKeyDown = (e: React.KeyboardEvent) => {
+    // Escape is reserved for the app (close overlays, exit inspect mode) and
+    // is never relayed to the remote page — letting it bubble keeps the
+    // document-level Esc handlers alive while the preview has focus. Use the
+    // real Chromium window to send Esc to the page under test.
+    if (e.key === "Escape") return;
     if (inspectMode || isVerifying || isExploring) return;
     if (!isBrowserConnected) return;
 

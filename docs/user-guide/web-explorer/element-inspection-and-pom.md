@@ -2,14 +2,14 @@
 
 ## **Inspect Mode**
 
-Click **Inspect** in the control bar (it reads **Inspecting** while active). The page shows a crosshair cursor, a dashed hover outline, and an *"Inspect mode — click an element"* badge; normal page interactions are suppressed so dropdowns and buttons don't fire while you pick. You can click elements either in the in-app preview or directly in the real Chrome window.
+Click **Inspect** in the control bar (it reads **Inspecting** while active). The page shows a crosshair cursor, a dashed hover outline, and an *"Inspect mode — click an element"* badge; normal page interactions are suppressed so dropdowns and buttons don't fire while you pick. You can click elements either in the in-app preview or directly in the real Chrome window. Press **Esc** anywhere in the app to exit inspect mode and close the Inspect Element card (Esc also closes dialogs, menus and the scan drawer — it is never forwarded to the page under test).
 
 Picking an element opens the floating **Inspect Element** card showing the element's tag and text (plus its iframe chain, e.g. *Frame: a → b*, when nested), and:
 
 * **Method name** — pre-seeded from the action, tag, and winning locator (e.g. `click_button_get_by_role`); edit freely.
 * **Action** — `Click`, `Fill`, `Type`, `Hover`, `Check`, `Select option`, `Get Text`. Fill/Type/Select option add a **Test value** field.
 * **Locator strategy** — the ranked candidate list (see below).
-* **Custom selector (optional)** — type your own Playwright selector; if it tests as a unique match it becomes the primary strategy (*"✅ Unique match — set as primary strategy"*).
+* **Custom selector (optional)** — type your own Playwright selector; if it tests as a unique match it becomes the primary strategy (*"✅ Unique match — set as primary strategy"*). The **?** icon next to the label opens a hint popover with clickable syntax examples (`#submit-btn`, `xpath=//button[text()="Submit"]`, `text=Submit`, `role=button[name="Save"]`, `div.modal >> button >> nth=0`) and a reminder to click **Test** first — Verify and Record use the primary strategy, and a selector only becomes primary once it tests unique.
 * **Set as Anchor** / **Verify** / **Record** buttons.
 
 > If the page mutates while an element is being analyzed you'll see *"⚠️ Content changed while analyzing… Click the element again once it settles."*
@@ -19,7 +19,7 @@ Picking an element opens the floating **Inspect Element** card showing the eleme
 Each pick generates candidate Playwright locators, scored by strategy quality minus selector length, then **live-checked against the page** — a candidate matching more than one element is heavily penalized. Ranking order (best first): user-anchored XPath, anchored XPath, `get_by_test_id`, CSS ID, `get_by_label`, `get_by_placeholder`, `get_by_role`, `get_by_text`, CSS name attribute, plain CSS, raw XPath. The dropdown marks each option **✅ (Unique)** or **⚠️ (N matches)**; selecting one makes it the primary strategy used by Verify and Record.
 
 * **Set as Anchor** (*"Set this element as XPath anchor — then click a descendant to get a relative XPath"*): anchor a stable parent (outlined green, with a banner showing the anchor and a clear ✕), then pick descendants — they gain a top-ranked anchor-relative XPath candidate.
-* **Verify** actually performs the chosen action against the live page, trying each candidate in order and logging every attempt (`✅ Verified` / `❌ All candidates failed`). If all ranked candidates fail, the AI proposes alternative locators (marked with 🤖 in the log) and those are tried too. A successful verify promotes the winning locator to primary.
+* **Verify** actually performs the chosen action against the live page, trying each candidate in order and logging every attempt (`✅ Verified` / `❌ All candidates failed`). If all ranked candidates fail, the AI proposes alternative locators (marked with 🤖 in the log) and those are tried too. A successful verify promotes the winning locator to primary. Verifying while inspect mode is on just works: the inspect overlay (which suppresses page interactions) is automatically suspended for the verify run and restored right after, so the button keeps reading **Inspecting** throughout.
 
 ## **Recording to the POM**
 

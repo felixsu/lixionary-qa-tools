@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 
 export function Modal({
@@ -14,8 +14,28 @@ export function Modal({
   children: React.ReactNode;
   width?: number;
 }) {
+  // Escape closes the modal. Modals are conditionally rendered, so mounted
+  // means open. A component that already consumed Escape (e.g. an open
+  // Dropdown) marks it via preventDefault — respect that; and preventDefault
+  // here so page-level Esc handlers don't also act on the same keypress.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && !e.defaultPrevented) {
+        e.preventDefault();
+        onCloseRef.current();
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   return (
     <div
+      data-modal-root
       className="fixed inset-0 z-50 flex items-center justify-center"
       style={{ background: "rgba(20,20,19,0.5)", backdropFilter: "blur(2px)" }}
     >

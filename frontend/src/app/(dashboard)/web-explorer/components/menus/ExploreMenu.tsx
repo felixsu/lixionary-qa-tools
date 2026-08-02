@@ -21,7 +21,7 @@ export default function ExploreMenu() {
   const [open, setOpen] = useState(false);
   const [exploreScope, setExploreScope] = useState<"page" | "selected">("page");
   const menuRef = useRef<HTMLDivElement>(null);
-  useOutsideDismiss(menuRef, () => setOpen(false));
+  useOutsideDismiss(menuRef, () => setOpen(false), open);
 
   return (
     <div className="relative" ref={menuRef}>

@@ -10,7 +10,7 @@ export default function ScanMenu() {
   const { pageScanStatus, isVerifying, isExploring, isRecording, selectedElement, handleScanPage } = useWebExplorer();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  useOutsideDismiss(menuRef, () => setOpen(false));
+  useOutsideDismiss(menuRef, () => setOpen(false), open);
 
   return (
     <div className="relative" ref={menuRef}>

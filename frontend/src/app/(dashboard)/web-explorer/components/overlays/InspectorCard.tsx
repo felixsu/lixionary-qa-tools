@@ -1,37 +1,47 @@
 "use client";
 
-import { useEffect } from "react";
-import { Anchor, Crosshair, Loader2, Play, Save, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Anchor, Crosshair, HelpCircle, Loader2, Play, Save, X } from "lucide-react";
 import Dropdown from "../../../../components/Dropdown";
 import { useAppContext } from "../../../../context/AppContext";
 import { useWebExplorer } from "../../../../context/WebExplorerContext";
 import { useToast } from "../../../../context/ToastContext";
+import { useOutsideDismiss } from "../../hooks/useOutsideDismiss";
 import { ActionSelect, TestValueField, MethodNameField, VerifyResultsLog } from "../shared/ElementActionFields";
+
+const SELECTOR_EXAMPLES: { example: string; label: string }[] = [
+  { example: "#submit-btn", label: "CSS id" },
+  { example: ".card button.primary", label: "CSS" },
+  { example: 'xpath=//button[text()="Submit"]', label: "XPath" },
+  { example: "text=Submit", label: "visible text" },
+  { example: 'role=button[name="Save"]', label: "ARIA role" },
+  { example: "div.modal >> button >> nth=0", label: "chaining" },
+];
 
 /**
  * Floating card for an inspect-clicked element: method name, action, locator
  * strategy ranking, optional custom selector override, anchor/verify/record.
- * The custom-selector input state stays in the page so it survives toggling
- * to the selector tester and back.
+ * The custom-selector input state and the full dismiss reset live in the page
+ * so the Escape ladder and the ✕ button share one path.
  */
 export default function InspectorCard({
   customSelectorInput,
   setCustomSelectorInput,
+  onDismiss,
   onRecorded,
 }: {
   customSelectorInput: string;
   setCustomSelectorInput: (v: string) => void;
+  onDismiss: () => void;
   onRecorded: () => Promise<void>;
 }) {
   const { apiCall } = useAppContext();
   const {
     sessionId,
     selectedElement,
-    setSelectedElement,
     selectedElementLocators,
     setSelectedElementLocators,
     selectedElementStale,
-    setSelectedElementStale,
     selectedElementAction,
     setSelectedElementAction,
     selectedElementMethodName,
@@ -45,10 +55,13 @@ export default function InspectorCard({
     selectorTestResult,
     isTestingSelector,
     handleTestSelector,
-    handleClearHighlights,
     handleSetAnchor,
   } = useWebExplorer();
   const { showToast } = useToast();
+
+  const [showSelectorHint, setShowSelectorHint] = useState(false);
+  const hintRef = useRef<HTMLDivElement>(null);
+  useOutsideDismiss(hintRef, () => setShowSelectorHint(false), showSelectorHint);
 
   // When a custom selector typed in the inspector card tests successfully, it
   // becomes the primary strategy (index 0) — Verify and Record both use the
@@ -90,9 +103,7 @@ export default function InspectorCard({
         }),
       });
 
-      setSelectedElement(null);
-      setSelectedElementLocators([]);
-      setSelectedElementStale({ stale: false, reason: null });
+      onDismiss();
       setSelectedElementMethodName("");
 
       await onRecorded();
@@ -108,7 +119,7 @@ export default function InspectorCard({
           <Crosshair className="h-4 w-4 text-clay animate-pulse" /> Inspect Element
         </span>
         <button
-          onClick={() => { setSelectedElement(null); setSelectedElementLocators([]); setSelectedElementStale({ stale: false, reason: null }); setCustomSelectorInput(""); handleClearHighlights(); }}
+          onClick={onDismiss}
           className="h-6 w-6 rounded-md hover:bg-line flex items-center justify-center transition-colors"
         >
           <X className="h-4 w-4 text-mute hover:text-graphite" />
@@ -173,8 +184,42 @@ export default function InspectorCard({
           />
         </div>
 
-        <div className="flex flex-col gap-1">
-          <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">Custom selector (optional)</label>
+        <div className="flex flex-col gap-1 relative">
+          <div className="flex items-center gap-1.5">
+            <label className="text-[10px] uppercase tracking-wider font-semibold text-stone">Custom selector (optional)</label>
+            <button
+              onClick={() => setShowSelectorHint((v) => !v)}
+              title="Show selector examples"
+              className="h-4 w-4 flex items-center justify-center rounded-full transition-colors"
+            >
+              <HelpCircle className={`h-3.5 w-3.5 ${showSelectorHint ? "text-clay" : "text-mute hover:text-clay"}`} />
+            </button>
+          </div>
+          {showSelectorHint && (
+            <div
+              ref={hintRef}
+              className="absolute bottom-full left-0 right-0 mb-1.5 z-50 bg-cream border border-line rounded-xl shadow-[0_12px_24px_rgba(20,20,19,0.15)] p-3 flex flex-col gap-2"
+            >
+              <span className="text-[10px] uppercase tracking-wider font-semibold text-stone">Selector examples</span>
+              <div className="flex flex-col gap-1">
+                {SELECTOR_EXAMPLES.map(({ example, label }) => (
+                  <button
+                    key={example}
+                    onClick={() => { setCustomSelectorInput(example); setShowSelectorHint(false); }}
+                    title="Use this example as a starting point"
+                    className="flex items-baseline justify-between gap-2 px-2 py-1 rounded-md hover:bg-panel transition-colors text-left"
+                  >
+                    <code className="font-mono text-[11px] text-ink break-all">{example}</code>
+                    <span className="text-[10px] text-mute flex-shrink-0">{label}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-graphite border-t border-line pt-2">
+                Click <span className="font-semibold">Test</span> first — a selector that tests as a unique
+                match becomes the primary strategy used by Verify and Record.
+              </p>
+            </div>
+          )}
           <div className="flex gap-1.5">
             <input
               type="text"
