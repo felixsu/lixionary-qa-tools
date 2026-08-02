@@ -7,8 +7,7 @@
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                                  Web Explorer Workspace                                 │
 ├─────────────────────────────────────────────────────────────────────────────────────────┤
-│ Control bar: URL / Go · Inspect · Selector · Window · Scan · Record · Explore ·         │
-│              Sessions · Disconnect                                                      │
+│ Control bar: URL / Go · Inspect · Scan · Record · Explore · Sessions · Disconnect       │
 ├────────────────────────────────────────────┬────────────────────────────────────────────┤
 │ Browser preview (live screencast)          │ Workspace (Files · Editor · Console)       │
 │ - click / type / scroll the real page      │ - my_page.py (recorded POM)                │
@@ -19,7 +18,7 @@
 
 ## **How the Browser Works**
 
-Unlike an embedded iframe, Web Explorer drives a **real Chromium window** launched locally by the app's sidecar. What you see in the app is a live **screencast** of that window — clicking, typing, scrolling, and pasting in the preview are relayed to the real browser. You can also interact with the actual Chromium window directly at any time: the **Window** button raises it (*"Raise the live browser window — browsing and inspect clicks work there too"*). Profiles can opt into **Headless** mode, where no visible window opens but the preview and interactions still work.
+Unlike an embedded iframe, Web Explorer drives a **real Chromium window** launched locally by the app's sidecar. What you see in the app is a live **screencast** of that window — clicking, typing, scrolling, and pasting in the preview are relayed to the real browser. You can also interact with the actual Chromium window directly at any time — raise it from your OS taskbar/dock; browsing and inspect clicks work there too. Profiles can opt into **Headless** mode, where no visible window opens but the preview and interactions still work.
 
 ## **Core Capabilities**
 

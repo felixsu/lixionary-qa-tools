@@ -45,7 +45,7 @@ If a linked auth function misbehaves, a descriptive toast explains what went wro
 ## **Navigating & Tabs**
 
 * Use the URL bar and **Go** (or Enter) to navigate. URLs must start with `http://` or `https://`. The bar follows navigations that happen in the page itself.
-* There are no back/forward/reload buttons in the app — use the real Chrome window for those (raise it with **Window**).
+* There are no back/forward/reload buttons in the app — use the real Chrome window for those (raise it from your OS taskbar/dock).
 * When the page opens extra tabs, a tab strip appears above the preview; click a tab to switch the stream to it, or close it with its ✕ (the first tab can't be closed from the app).
 
 ## **Session Lifecycle**
@@ -56,4 +56,4 @@ If a linked auth function misbehaves, a descriptive toast explains what went wro
 * Only one session is attached to the app at a time; starting or reconnecting replaces the current attachment.
 * If the session breaks (e.g. you close the real Chrome window), the next action surfaces *"Browser session error: …"* and the app returns to the disconnected state.
 
-> **Headless note**: In a headless session the **Window** button can't raise anything — you'll get *"Session is headless — disable Headless in the browser profile to get a visible window"*.
+> **Headless note**: In a headless session there is no visible Chromium window to interact with — disable **Headless** in the browser profile if you want one.

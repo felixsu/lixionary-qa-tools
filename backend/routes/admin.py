@@ -181,7 +181,6 @@ async def update_user_status(user_id: str, payload: UpdateUserStatusPayload, cur
     """
     Disable or enable a user.
     An admin cannot disable themselves.
-    If disabled, terminates all their active browser sessions immediately.
     """
     if str(current_user["id"]) == user_id:
         raise HTTPException(status_code=400, detail="Admins cannot disable their own account to prevent lockout")
@@ -193,9 +192,7 @@ async def update_user_status(user_id: str, payload: UpdateUserStatusPayload, cur
     )
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
-        
 
-            
     status_str = "disabled" if payload.disabled else "enabled"
     return {"message": f"User account has been {status_str}"}
 
@@ -204,7 +201,6 @@ async def delete_user(user_id: str, current_user: dict = Depends(require_admin))
     """
     Delete a user account.
     An admin cannot delete themselves.
-    Terminates any active browser sessions immediately.
     """
     if str(current_user["id"]) == user_id:
         raise HTTPException(status_code=400, detail="Admins cannot delete their own account to prevent lockout")
@@ -218,7 +214,5 @@ async def delete_user(user_id: str, current_user: dict = Depends(require_admin))
         
     # Delete user profile
     await users_col.delete_one({"_id": ObjectId(user_id)})
-    
 
-        
     return {"message": "User successfully deleted"}

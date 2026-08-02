@@ -25,7 +25,7 @@ SIDECAR_PORT = int(os.environ.get("SIDECAR_PORT", "8484"))
 CDP_PORT = int(os.environ.get("AE_CDP_PORT", "9222"))
 
 from services.browser import BrowserSessionManager, rank_locators, sanitize_cookies, render_recording_script
-from services.naming import polish_method_names, dedupe_names, heuristic_method_name, propose_locator_fix
+from services.naming import propose_locator_fix
 from services.generator import build_pom_method_code
 from db.local_store import LocalStore
 from routes.local_store import router as local_store_router
@@ -198,66 +198,6 @@ async def startup_event():
     # Setup venv in background so startup returns immediately
     asyncio.create_task(asyncio.to_thread(setup_local_venv))
 
-# Helper to check if frame locator matches uniquely
-async def count_locator_matches(frame, strategy: str, selector: str) -> int:
-    try:
-        loc = BrowserSessionManager._build_locator(frame, strategy, selector)
-        return await loc.count()
-    except Exception:
-        return 0
-
-# Helper to traverse frames chain
-async def get_frame_locators_chain(frame, page: Page) -> List[str]:
-    chain = []
-    curr = frame
-    while curr and curr != page.main_frame:
-        try:
-            iframe_el = await curr.frame_element()
-            if iframe_el:
-                parent = curr.parent_frame
-                if parent:
-                    selector = await parent.evaluate("""
-                        (el) => {
-                            if (el.id) return '#' + el.id;
-                            const nameAttr = el.getAttribute('name');
-                            if (nameAttr) return 'iframe[name="' + nameAttr.replace(/"/g, '\\\\"') + '"]';
-                            const srcAttr = el.getAttribute('src');
-                            if (srcAttr) {
-                                const cleanSrc = srcAttr.split(/[?#]/)[0].replace(/"/g, '\\\\"');
-                                return `iframe[src*="${cleanSrc}"]`;
-                            }
-                            const iframes = Array.from(document.querySelectorAll('iframe'));
-                            const idx = iframes.indexOf(el);
-                            if (idx !== -1) {
-                                return `iframe:nth-of-type(${idx + 1})`;
-                            }
-                            return 'iframe';
-                        }
-                    """, iframe_el)
-                    if selector:
-                        chain.insert(0, selector)
-            curr = curr.parent_frame
-        except Exception:
-            break
-    return chain
-
-# Reverse of get_frame_locators_chain: find the live frame whose iframe-locator
-# chain matches the one a client captured earlier (e.g. from a selector test).
-# Returns None when nothing matches — e.g. after a navigation replaced the frame.
-async def resolve_frame_by_chain(page: Page, frame_chain: List[str]):
-    if not frame_chain:
-        return page.main_frame
-    for frame in page.frames:
-        if frame == page.main_frame:
-            continue
-        try:
-            chain = await get_frame_locators_chain(frame, page)
-            if chain == frame_chain:
-                return frame
-        except Exception:
-            continue
-    return None
-
 async def get_live_viewport(session, active_page: Page) -> dict:
     """Current page size in CSS px, for scaling normalized mouse coords.
 
@@ -395,12 +335,12 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
 
             try:
                 el_info = json.loads(element_info_str)
-                frame_chain = await get_frame_locators_chain(source["frame"], session["pages"][session["active_page_index"]])
+                frame_chain = await BrowserSessionManager._get_frame_locators_chain(source["frame"], session["pages"][session["active_page_index"]])
                 el_info["frameLocators"] = frame_chain
 
                 ranked_locators = rank_locators(el_info)
                 counts = await asyncio.gather(*[
-                    count_locator_matches(source["frame"], loc["strategy"], loc["selector"])
+                    BrowserSessionManager._count_locator_matches(source["frame"], loc["strategy"], loc["selector"])
                     for loc in ranked_locators
                 ])
 
@@ -443,7 +383,7 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                 action_data = json.loads(action_json)
                 session = _active_sessions.get(session_id)
                 if session:
-                    frame_chain = await get_frame_locators_chain(source["frame"], session["pages"][session["active_page_index"]])
+                    frame_chain = await BrowserSessionManager._get_frame_locators_chain(source["frame"], session["pages"][session["active_page_index"]])
                     action_data["element"]["frameLocators"] = frame_chain
                     await BrowserSessionManager.record_interaction(session_id, action_data)
             except Exception as e:
@@ -744,39 +684,6 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                         await frame.evaluate(eval_script)
                     except Exception:
                         pass
-            elif action == "focus-window":
-                if session.get("headless"):
-                    await send_to_client({
-                        "type": "window_focus_error",
-                        "data": {"message": "Session is headless — disable Headless in the browser profile to get a visible window"}
-                    })
-                    continue
-                try:
-                    await active_page.bring_to_front()
-                    raise_cdp = await context.new_cdp_session(active_page)
-                    try:
-                        info = await raise_cdp.send("Browser.getWindowForTarget")
-                        window_id = info.get("windowId")
-                        if window_id is not None:
-                            # Minimize/restore is the reliable cross-platform way to
-                            # raise the OS window above other applications via CDP.
-                            await raise_cdp.send("Browser.setWindowBounds", {"windowId": window_id, "bounds": {"windowState": "minimized"}})
-                            await raise_cdp.send("Browser.setWindowBounds", {"windowId": window_id, "bounds": {"windowState": "normal"}})
-                    finally:
-                        try:
-                            await raise_cdp.detach()
-                        except Exception:
-                            pass
-                    if sys.platform == "darwin":
-                        # CDP raises the window within the browser app, but macOS
-                        # won't bring the app itself above the Tauri window.
-                        subprocess.Popen(
-                            ["osascript", "-e", 'tell application "Chromium" to activate'],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                        )
-                    await send_to_client({"type": "window_focused", "data": {}})
-                except Exception as e:
-                    await send_to_client({"type": "window_focus_error", "data": {"message": str(e)}})
             elif action == "start-recording":
                 session["recording_enabled"] = True
                 session["recorded_steps"] = []
@@ -811,90 +718,13 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
             elif action == "scan-page":
                 scan_scope = cmd.get("scope", "page")
                 await send_to_client({"type": "page_scan_started", "data": {"scope": scan_scope}})
-                
                 try:
-                    # Enumerate items
-                    scan_items = []
-                    scope_label = None
-                    total = 0
-                    truncated = False
-                    
-                    if scan_scope == "selected":
-                        frame = session.get("last_clicked_frame") or active_page.main_frame
-                        raw = await frame.evaluate("window.__lixionaryScanPage ? window.__lixionaryScanPage({scoped: true}) : null")
-                        if raw:
-                            scope_info = raw.get("scope") or {}
-                            scope_label = f"<{scope_info.get('tagName', '?')}> {scope_info.get('text', '')}".strip()
-                            frame_chain = await get_frame_locators_chain(frame, active_page)
-                            total = raw.get("total", 0)
-                            truncated = bool(raw.get("truncated"))
-                            for item in raw.get("elements", []):
-                                scan_items.append((frame, item, frame_chain))
-                    else:
-                        for frame in active_page.frames:
-                            try:
-                                raw = await frame.evaluate("window.__lixionaryScanPage ? window.__lixionaryScanPage({scoped: false}) : null")
-                                if raw:
-                                    frame_chain = await get_frame_locators_chain(frame, active_page)
-                                    total += raw.get("total", 0)
-                                    truncated = truncated or bool(raw.get("truncated"))
-                                    for item in raw.get("elements", []):
-                                        scan_items.append((frame, item, frame_chain))
-                            except Exception:
-                                pass
-
-                    # Resolve locators
-                    resolved = []
-                    for frame, item, _chain in scan_items:
-                        ranked = rank_locators(item)
-                        chosen = None
-                        for loc in ranked:
-                            count = await count_locator_matches(frame, loc["strategy"], loc["selector"])
-                            loc["count"] = count
-                            loc["unique"] = (count == 1)
-                            if count == 1:
-                                chosen = loc
-                                break
-                        if chosen is None:
-                            for loc in ranked:
-                                loc["count"] = None
-                                loc["unique"] = False
-                            chosen = ranked[0] if ranked else None
-                        resolved.append({"ranked": ranked, "chosen": chosen})
-
-                    # Deduplicate names and polish
-                    items_list = [item for _frame, item, _chain in scan_items]
-                    positional_counters = {}
-                    heuristic_results = [heuristic_method_name(item, positional_counters) for item in items_list]
-                    heuristic_names = dedupe_names([name for name, _weak in heuristic_results])
-                    final_names, name_source = await polish_method_names(items_list, heuristic_names)
-
-                    elements = []
-                    for idx, ((_frame, item, frame_chain), res) in enumerate(zip(scan_items, resolved)):
-                        if res["chosen"] is None:
-                            continue
-                        elements.append({
-                            "id": idx,
-                            "tagName": item.get("tagName", ""),
-                            "text": item.get("text") or item.get("value") or "",
-                            "action": item.get("action"),
-                            "subtype": item.get("subtype"),
-                            "disabled": bool(item.get("disabled")),
-                            "methodName": final_names[idx],
-                            "locator": res["chosen"],
-                            "locators": res["ranked"],
-                            "frameLocators": frame_chain,
-                        })
-
-                    scan_result = {
-                        "url": active_page.url,
-                        "total": total or len(elements),
-                        "truncated": truncated,
-                        "nameSource": name_source,
-                        "scope": scan_scope,
-                        "scopeLabel": scope_label,
-                        "elements": elements,
-                    }
+                    # Same enumerate → resolve → name pipeline Explore uses.
+                    scan_items, total, truncated, scope_label = await BrowserSessionManager._enumerate_interactive_elements(session_id, scan_scope)
+                    resolved = await BrowserSessionManager._resolve_locators_for_items(scan_items)
+                    scan_result = await BrowserSessionManager._finalize_scan_elements(
+                        scan_items, resolved, active_page.url, scan_scope, scope_label, total, truncated
+                    )
                     await send_to_client({"type": "page_scan_result", "data": scan_result})
                 except Exception as ex:
                     await send_to_client({"type": "page_scan_error", "data": {"message": str(ex)}})
@@ -904,14 +734,7 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                 value = cmd.get("value")
                 await send_to_client({"type": "verify_started", "data": {"action": verify_action}})
                 try:
-                    # A manual selector tested inside an iframe carries its frame
-                    # chain explicitly — inspect-clicks keep the legacy fallback.
-                    frame = None
-                    requested_chain = cmd.get("frameLocators")
-                    if requested_chain:
-                        frame = await resolve_frame_by_chain(active_page, requested_chain)
-                    if frame is None:
-                        frame = session.get("last_clicked_frame") or active_page.main_frame
+                    frame = session.get("last_clicked_frame") or active_page.main_frame
                     success = False
                     result_text = None
                     attempts = []
@@ -993,7 +816,7 @@ async def local_browser_websocket(websocket: WebSocket, session_id: str):
                             )
                         except Exception:
                             pass
-                        frame_chain = await get_frame_locators_chain(frame, active_page)
+                        frame_chain = await BrowserSessionManager._get_frame_locators_chain(frame, active_page)
                         frame_results.append({"frameLocators": frame_chain, "count": count})
                 await send_to_client({
                     "type": "selector_test_result",

@@ -40,7 +40,6 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./backend:/app
-      - ./workspaces:/workspaces
     depends_on:
       - mongodb
       - redis
