@@ -20,6 +20,29 @@ from tests.test_flows import test_serialize_flow_doc
 from tests.test_auth import test_expired_token_reports_expiry_not_bad_signature, test_refresh_token_rotates_and_rejects_replay, test_refresh_token_rejected_when_expired_or_user_disabled, test_revoke_is_idempotent
 from tests.test_user_guides import test_serialize_guide_hierarchy_fields, test_normalize_slug, test_compute_depth_and_height, test_is_descendant_cycle_detection, test_move_depth_rule
 from tests.test_local_ai import test_validate_assistant_response_shapes, test_normalize_messages_merges_roles
+from tests.test_flow_runner import (
+    test_linear_chain_pipes_outputs,
+    test_fanout_runs_branches_concurrently,
+    test_merge_waits_for_all_branches_and_sees_both_outputs,
+    test_failure_skips_only_descendants,
+    test_shared_merge_skipped_exactly_once,
+    test_looper_iterates_and_publishes_results,
+    test_looper_stops_on_first_failing_iteration,
+    test_verifier_retries_until_comparisons_pass,
+    test_verifier_exhausts_attempts_and_fails,
+    test_unresolved_reference_fails_node,
+    test_executor_exception_becomes_failed_record,
+    test_cycle_rejected,
+    test_timeout_cancels_run,
+    test_delay_node_waits_and_succeeds,
+    test_auth_override_pref_applied,
+    test_walk_path_and_references,
+    test_interpolate_studio_tokens_leaves_backend_tokens,
+    test_evaluate_comparison_operators,
+    test_build_run_csv_orders_and_escapes,
+    test_condense_summary_digest_and_truncation,
+)
+from tests.test_mcp_tools import run_mcp_tool_tests
 
 def run():
     print("Running tests...")
@@ -111,6 +134,68 @@ def run():
 
         test_normalize_messages_merges_roles()
         print("✓ test_normalize_messages_merges_roles passed")
+
+        asyncio.run(test_linear_chain_pipes_outputs())
+        print("✓ test_linear_chain_pipes_outputs passed")
+
+        asyncio.run(test_fanout_runs_branches_concurrently())
+        print("✓ test_fanout_runs_branches_concurrently passed")
+
+        asyncio.run(test_merge_waits_for_all_branches_and_sees_both_outputs())
+        print("✓ test_merge_waits_for_all_branches_and_sees_both_outputs passed")
+
+        asyncio.run(test_failure_skips_only_descendants())
+        print("✓ test_failure_skips_only_descendants passed")
+
+        asyncio.run(test_shared_merge_skipped_exactly_once())
+        print("✓ test_shared_merge_skipped_exactly_once passed")
+
+        asyncio.run(test_looper_iterates_and_publishes_results())
+        print("✓ test_looper_iterates_and_publishes_results passed")
+
+        asyncio.run(test_looper_stops_on_first_failing_iteration())
+        print("✓ test_looper_stops_on_first_failing_iteration passed")
+
+        asyncio.run(test_verifier_retries_until_comparisons_pass())
+        print("✓ test_verifier_retries_until_comparisons_pass passed")
+
+        asyncio.run(test_verifier_exhausts_attempts_and_fails())
+        print("✓ test_verifier_exhausts_attempts_and_fails passed")
+
+        asyncio.run(test_unresolved_reference_fails_node())
+        print("✓ test_unresolved_reference_fails_node passed")
+
+        asyncio.run(test_executor_exception_becomes_failed_record())
+        print("✓ test_executor_exception_becomes_failed_record passed")
+
+        test_cycle_rejected()
+        print("✓ test_cycle_rejected passed")
+
+        asyncio.run(test_timeout_cancels_run())
+        print("✓ test_timeout_cancels_run passed")
+
+        asyncio.run(test_delay_node_waits_and_succeeds())
+        print("✓ test_delay_node_waits_and_succeeds passed")
+
+        asyncio.run(test_auth_override_pref_applied())
+        print("✓ test_auth_override_pref_applied passed")
+
+        test_walk_path_and_references()
+        print("✓ test_walk_path_and_references passed")
+
+        test_interpolate_studio_tokens_leaves_backend_tokens()
+        print("✓ test_interpolate_studio_tokens_leaves_backend_tokens passed")
+
+        test_evaluate_comparison_operators()
+        print("✓ test_evaluate_comparison_operators passed")
+
+        test_build_run_csv_orders_and_escapes()
+        print("✓ test_build_run_csv_orders_and_escapes passed")
+
+        test_condense_summary_digest_and_truncation()
+        print("✓ test_condense_summary_digest_and_truncation passed")
+
+        run_mcp_tool_tests()
 
         print("\nAll tests passed successfully!")
     except AssertionError as e:
