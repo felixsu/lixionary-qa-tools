@@ -2,7 +2,7 @@
 
 ## **Overview**
 
-Sessions are seeded by **Browser profiles** — reusable presets of cookies, localStorage, launch settings, and auth hooks managed on the **Browser profiles** page. Web Explorer itself has no cookie/localStorage inputs; everything is configured on the profile.
+Sessions are seeded by **Browser profiles** — reusable presets of cookies, localStorage, launch settings, and auth hooks managed on the **Browser profiles** page. Web Explorer itself has no cookie/localStorage inputs; everything is configured on the profile. For a deeper walkthrough of the profile wizard and auth hook mappings, see the dedicated **Browser Profiles** guide.
 
 ## **Browser Profiles**
 

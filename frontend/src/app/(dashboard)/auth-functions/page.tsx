@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Plus, Trash2, Pencil, X, Clock, CheckCircle2, Circle, RefreshCw, Play } from "lucide-react";
+import { Plus, Trash2, Pencil, X, Clock, CheckCircle2, Circle, RefreshCw, Play, CircleHelp } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext, AuthFunction } from "../../context/AppContext";
 import { useToast } from "../../context/ToastContext";
 import { confirmDialog } from "../../utils/confirmDialog";
+import { Modal } from "../../components/Modal";
 
 const DEFAULT_SCRIPT = `// Call IAM/OAuth endpoint to get token
 const response = fetchToken("https://api.example.com/oauth/token", {
@@ -22,16 +23,63 @@ const PRESETS: { id: string; label: string; description: string; script: string 
   {
     id: "opv2",
     label: "Operator V2",
-    description: "Client-credentials grant against the Operator V2 (OPV2) OAuth endpoint.",
-    script: `const response = fetchToken("https://api.ninjavan.dev/sg/aaa/2.0/oauth/access_token", {
+    description: "Client-credentials grant against the Operator V2 (OPV2) OAuth endpoint, for operator API access.",
+    script: `// operator v2
+const response = fetchToken("https://api.ninjavan.dev/sg/aaa/2.0/oauth/access_token", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ client_id: "opv2_client_id", client_secret: "opv2_client_secret", grant_type: "client_credentials" })
+  body: JSON.stringify({ client_id: "<client_id>", client_secret: "<client_secret>", grant_type: "client_credentials" })
 });
 
 const data = JSON.parse(response);
 
 return data.access_token;`,
+  },
+  {
+    id: "shipper",
+    label: "Shipper",
+    description: "Client-credentials token for shipper APIs, e.g. order creation.",
+    script: `// shipper auth, for order creation
+const response = fetchToken("https://api.ninjavan.dev/sg/aaa/2.0/oauth/access_token", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ client_id: "<client_id>", client_secret: "<client_secret>", grant_type: "client_credentials" })
+});
+
+// Parse output and return token
+const data = JSON.parse(response);
+return data.access_token;`,
+  },
+  {
+    id: "driver",
+    label: "Driver",
+    description: "Username/password login against the Driver API, for driver actions.",
+    script: `// driver auth, for driver actions
+const response = fetchToken("https://api.ninjavan.dev/sg/driver/2.1/login", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "x-nv-app-version": "804600000" },
+  body: JSON.stringify({ username: "<username>", password: "<password>" })
+});
+
+// Parse output and return token
+const data = JSON.parse(response);
+return data.data.access_token;`,
+  },
+  {
+    id: "ninjamart",
+    label: "Ninja Mart",
+    description: "Keycloak password grant for Ninja Mart InterOp. Returns a token object with access and refresh tokens.",
+    script: `// Ninja Mart auth, for interops
+// Body is form-urlencoded: values must be URL-encoded (e.g. @ becomes %40)
+const response = fetchToken("https://sso-qa.ninjamart.com/realms/InterOp/protocol/openid-connect/token", {
+  method: "POST",
+  headers: { "Content-Type": "application/x-www-form-urlencoded; charset=utf-8" },
+  body: "username=<username>&password=<password>&client_id=react-auth&grant_type=password"
+});
+
+// Parse output and return token object
+const data = JSON.parse(response);
+return { access_token: data.access_token, refresh_token: data.refresh_token };`,
   },
   {
     id: "pudo",
@@ -49,11 +97,114 @@ return data.data.access_token;`,
   },
 ];
 
+const HELP_EXAMPLE = `// 1. Call the token endpoint. Secrets are best kept in the
+//    selected environment and read via env.*
+const response = fetchToken("https://api.ninjavan.dev/sg/aaa/2.0/oauth/access_token", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    client_id: env.CLIENT_ID,
+    client_secret: env.CLIENT_SECRET,
+    grant_type: "client_credentials"
+  })
+});
+
+// 2. fetchToken returns the raw response body as a string
+const data = JSON.parse(response);
+
+// 3. Return the token (or an object holding several tokens)
+return data.access_token;`;
+
+function HelpHeading({ children }: { children: React.ReactNode }) {
+  return <h3 className="m-0 font-serif text-[15px] font-medium text-ink">{children}</h3>;
+}
+
+function HelpCode({ children }: { children: string }) {
+  return (
+    <pre className="m-0 p-3.5 bg-ink-900 text-cream rounded-lg font-mono text-[11px] leading-relaxed overflow-x-auto whitespace-pre">
+      {children}
+    </pre>
+  );
+}
+
+function AuthHelpDialog({ onClose }: { onClose: () => void }) {
+  return (
+    <Modal title="How auth functions work" width={720} onClose={onClose}>
+      <div className="max-h-[70vh] overflow-y-auto flex flex-col gap-4 text-[13px] text-graphite leading-relaxed pr-1">
+        <p className="m-0">
+          An auth function is a small sandboxed JavaScript script that fetches an authorization token on demand.
+          The returned token is cached on this device and reused until it expires, then the script runs again
+          automatically.
+        </p>
+
+        <HelpHeading>fetchToken(url, options)</HelpHeading>
+        <p className="m-0">
+          The sandbox provides <code className="font-mono text-[12px]">fetchToken</code> for HTTP calls. It is
+          synchronous — no <code className="font-mono text-[12px]">await</code> needed — and returns the raw
+          response body as a <strong>string</strong>, which is why every example calls{" "}
+          <code className="font-mono text-[12px]">JSON.parse(response)</code>. Options:
+        </p>
+        <ul className="m-0 pl-5 flex flex-col gap-1">
+          <li>
+            <code className="font-mono text-[12px]">method</code> — GET, POST, PUT or DELETE (defaults to GET).
+          </li>
+          <li>
+            <code className="font-mono text-[12px]">headers</code> — object of request headers.
+          </li>
+          <li>
+            <code className="font-mono text-[12px]">body</code> — a string is sent as-is (use this for
+            form-urlencoded payloads); an object is sent as JSON.
+          </li>
+        </ul>
+
+        <HelpHeading>Environment variables</HelpHeading>
+        <p className="m-0">
+          <code className="font-mono text-[12px]">env.MY_VAR</code> reads a variable from the currently selected
+          environment. Store client IDs, secrets and passwords there instead of hardcoding them in the script —
+          the same function then works across environments.
+        </p>
+
+        <HelpHeading>What to return</HelpHeading>
+        <p className="m-0">
+          Return the token string directly (<code className="font-mono text-[12px]">return data.access_token</code>),
+          or an object when you need several values (
+          <code className="font-mono text-[12px]">{"return { access_token, refresh_token }"}</code>). Returning{" "}
+          <code className="font-mono text-[12px]">undefined</code> or <code className="font-mono text-[12px]">null</code>{" "}
+          is an error — check that the field you read exists in the response. Set the <strong>Expires-in</strong>{" "}
+          field to control how long the token is cached; leave it empty for JWTs, whose expiry is detected
+          automatically.
+        </p>
+
+        <HelpHeading>Example</HelpHeading>
+        <HelpCode>{HELP_EXAMPLE}</HelpCode>
+
+        <HelpHeading>Tips</HelpHeading>
+        <ul className="m-0 pl-5 flex flex-col gap-1">
+          <li>
+            Use the <strong>Use a preset...</strong> picker in the create dialog to start from a known Ninja Van
+            service (Operator V2, Shipper, Driver, Ninja Mart, PUDO) — then replace the placeholder credentials.
+          </li>
+          <li>
+            Click <strong>Test script</strong> before saving to run the script against the selected environment and
+            see the token (or the error) immediately.
+          </li>
+          <li>
+            To debug, temporarily <code className="font-mono text-[12px]">return</code> the value you want to
+            inspect (e.g. <code className="font-mono text-[12px]">return response</code>) and run Test script to
+            see it.
+          </li>
+        </ul>
+      </div>
+    </Modal>
+  );
+}
+
 export default function AuthFunctionsPage() {
   const { authFunctions, handleSaveAuthFunc, handleDeleteAuthFunc, apiCall, selectedEnvId } = useAppContext();
   const { showToast } = useToast();
 
   const [showModal, setShowModal] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [script, setScript] = useState("");
@@ -143,7 +294,14 @@ export default function AuthFunctionsPage() {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Action bar */}
-      <div className="h-14 flex items-center justify-end px-6 border-b border-line flex-shrink-0">
+      <div className="h-14 flex items-center justify-end gap-2 px-6 border-b border-line flex-shrink-0">
+        <button
+          onClick={() => setShowHelp(true)}
+          title="How auth functions work"
+          className="h-8 w-8 rounded-lg border border-line flex items-center justify-center text-mute hover:text-clay hover:bg-panel transition-colors"
+        >
+          <CircleHelp className="h-4 w-4" />
+        </button>
         <button
           onClick={openCreate}
           className="h-[38px] px-4 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white flex items-center gap-2 transition-colors"
@@ -222,6 +380,9 @@ export default function AuthFunctionsPage() {
           </div>
         )}
       </div>
+
+      {/* Help dialog */}
+      {showHelp && <AuthHelpDialog onClose={() => setShowHelp(false)} />}
 
       {/* Modal */}
       {showModal && (
