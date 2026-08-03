@@ -63,7 +63,7 @@ Click **Report** (enabled once a run has records) to download `<flowName>-run-<t
 ## **Run Persistence**
 
 * The **last run persists per flow** on this device (browser/app local storage) — after a reload, node badges, the inspector's Last run cards, and the **Report** button are all restored. Only the most recent run is kept, and it is overwritten by the next run.
-* Run results are **not synced** to the cloud, and there is no run history, scheduling, or headless/CLI execution — flows run entirely in the app.
+* Run results are **not synced** to the cloud, and there is no run history or scheduling. UI runs execute entirely in the app; AI agents can additionally run flows headlessly through the sidecar's MCP endpoint — see [MCP Agent Access](mcp-agent-access.md).
 
 > **Caveat**: When persisting, very large payloads/response bodies are truncated at 20,000 characters. A CSV downloaded **after a reload** may therefore contain truncated data; download the report in the same session for the complete record. If a successful node's outputs exceed the limit, the run's resume data is dropped entirely (rather than stored corrupted) and **Retry becomes unavailable after a reload** for that run.
 

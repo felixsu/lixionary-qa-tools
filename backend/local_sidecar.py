@@ -38,6 +38,15 @@ app.include_router(local_store_router)
 app.include_router(local_executor_router)
 app.include_router(local_ai_router)
 
+# MCP endpoint for AI agents (streamable HTTP at /mcp). The `mcp` package
+# needs Python >= 3.10 and is env-marker-gated in sidecar_requirements.txt,
+# so it can legitimately be absent — the sidecar must boot without it.
+try:
+    from mcp_server import mcp as _mcp_server
+except Exception as _mcp_import_error:
+    _mcp_server = None
+    print(f"MCP server unavailable (AI-agent flow runs disabled): {_mcp_import_error}", flush=True)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -46,6 +55,41 @@ app.add_middleware(
     allow_headers=["*"],
     allow_origin_regex=r"(chrome-extension://.*|tauri://.*|http://tauri\.localhost)",
 )
+
+if _mcp_server is not None:
+    import contextlib
+
+    app.mount("/mcp", _mcp_server.streamable_http_app())
+
+    class _McpPathNormalizer:
+        """Serve the exact URL /mcp without a 307 to /mcp/ — Starlette mounts
+        only match with the trailing slash and not every MCP client re-POSTs
+        the request body on a redirect."""
+
+        def __init__(self, asgi_app):
+            self.asgi_app = asgi_app
+
+        async def __call__(self, scope, receive, send):
+            if scope.get("type") == "http" and scope.get("path") == "/mcp":
+                scope = {**scope, "path": "/mcp/", "raw_path": b"/mcp/"}
+            await self.asgi_app(scope, receive, send)
+
+    app.add_middleware(_McpPathNormalizer)
+
+    # Starlette never runs a mounted sub-app's lifespan, and the streamable
+    # HTTP transport requires its session manager to be running. Driving it
+    # from extra on_event handlers (rather than converting the app to
+    # lifespan=) keeps the existing startup_event below intact — passing a
+    # lifespan would silently disable every on_event handler.
+    _mcp_lifecycle = contextlib.AsyncExitStack()
+
+    @app.on_event("startup")
+    async def start_mcp_session_manager():
+        await _mcp_lifecycle.enter_async_context(_mcp_server.session_manager.run())
+
+    @app.on_event("shutdown")
+    async def stop_mcp_session_manager():
+        await _mcp_lifecycle.aclose()
 
 @app.get("/health")
 async def health():
