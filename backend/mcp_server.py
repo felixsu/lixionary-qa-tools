@@ -14,6 +14,7 @@ exercise them without speaking the MCP protocol.
 
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from mcp.server.fastmcp import FastMCP
@@ -38,8 +39,8 @@ mcp = FastMCP(
     streamable_http_path="/",
 )
 
-_RUN_PREF = "flow_run:"
-_LATEST_PREF = "flow_run_latest:"
+# Matches routes/flow_runs.py — the two producers share one retention pool.
+_RETAINED_RUNS = 100
 
 _ENTITY_LABEL = {"flow": "Flow", "environment": "Environment"}
 
@@ -114,26 +115,6 @@ def list_flows_data() -> List[Dict[str, Any]]:
     ]
 
 
-def _persist_run(run_id: str, flow_record: Dict[str, Any], flow_name: str,
-                 environment_id: Optional[str], environment_name: Optional[str],
-                 summary: Dict[str, Any]) -> None:
-    """Keep exactly the latest run per flow in local_prefs — enough for
-    get_run_report after a client-side timeout, without unbounded growth."""
-    flow_local_id = flow_record["localId"]
-    previous = LocalStore.get_pref(_LATEST_PREF + flow_local_id)
-    if previous and previous != run_id:
-        LocalStore.delete_pref(_RUN_PREF + previous)
-    LocalStore.set_pref(_RUN_PREF + run_id, json.dumps({
-        "runId": run_id,
-        "flowLocalId": flow_local_id,
-        "flowName": flow_name,
-        "environmentLocalId": environment_id,
-        "environmentName": environment_name,
-        "summary": shrink_summary(summary),
-    }))
-    LocalStore.set_pref(_LATEST_PREF + flow_local_id, run_id)
-
-
 async def run_flow_impl(flow: str, environment: Optional[str], timeout_seconds: int,
                         executor=None) -> Dict[str, Any]:
     # `executor` is a test seam — None means the real execute_request.
@@ -156,6 +137,39 @@ async def run_flow_impl(flow: str, environment: Optional[str], timeout_seconds: 
     collections = [payload for _, payload in _entities("collection")]
     timeout = min(1800, max(10, int(timeout_seconds or 600)))
 
+    # Insert the 'running' row before the run so the UI's flow-runs poll can
+    # show this agent run in progress (Home table + Studio toolbar pill).
+    run_id = uuid.uuid4().hex[:12]
+    tracked = True
+    try:
+        LocalStore.insert_flow_run(
+            run_id,
+            flow_local_id=flow_record["localId"],
+            flow_name=flow_name,
+            environment_local_id=environment_id,
+            environment_name=environment_name,
+            source="mcp",
+            status="running",
+            node_count=len(flow_payload.get("nodes") or []),
+            started_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except Exception as e:
+        tracked = False
+        warnings.append(f"Run report could not be persisted for get_run_report: {e}")
+
+    def _finalize(status: str, duration_ms: Optional[int], summary_json: Optional[str],
+                  started_at: Optional[str] = None) -> None:
+        if not tracked:
+            return
+        try:
+            LocalStore.finalize_flow_run(
+                run_id, status=status, duration_ms=duration_ms,
+                summary_json=summary_json, started_at=started_at,
+            )
+            LocalStore.prune_flow_runs(_RETAINED_RUNS)
+        except Exception as e:
+            warnings.append(f"Run report could not be persisted for get_run_report: {e}")
+
     try:
         summary = await flow_runner.run_flow(
             flow_payload,
@@ -166,13 +180,18 @@ async def run_flow_impl(flow: str, environment: Optional[str], timeout_seconds: 
             timeout_seconds=timeout,
         )
     except FlowRunError as e:
+        _finalize("failed", None, json.dumps({"status": "failed", "records": [], "error": str(e)}))
         raise ToolError(str(e))
+    except BaseException:
+        _finalize("failed", None, None)
+        raise
 
-    run_id = uuid.uuid4().hex[:12]
-    try:
-        _persist_run(run_id, flow_record, flow_name, environment_id, environment_name, summary)
-    except Exception as e:
-        warnings.append(f"Run report could not be persisted for get_run_report: {e}")
+    _finalize(
+        summary["status"],
+        summary.get("durationMs"),
+        json.dumps(shrink_summary(summary)),
+        started_at=summary.get("startedAt"),
+    )
 
     return {
         "runId": run_id,
@@ -186,16 +205,24 @@ async def run_flow_impl(flow: str, environment: Optional[str], timeout_seconds: 
 
 
 def get_run_report_data(run_id: str, format: str) -> Any:
-    raw = LocalStore.get_pref(_RUN_PREF + (run_id or "").strip())
-    if not raw:
+    row = LocalStore.get_flow_run((run_id or "").strip())
+    if not row or not row.get("summary_json"):
         raise ToolError(
-            f'Run "{run_id}" not found — only the latest run per flow is kept. '
-            "Re-run the flow to produce a fresh report."
+            f'Run "{run_id}" not found — only the most recent {_RETAINED_RUNS} runs '
+            "are retained. Re-run the flow to produce a fresh report."
         )
-    stored = json.loads(raw)
+    summary = json.loads(row["summary_json"])
     if format == "csv":
-        return build_run_csv(stored.get("summary", {}).get("records") or [])
-    return stored
+        return build_run_csv(summary.get("records") or [])
+    return {
+        "runId": row["run_id"],
+        "flowLocalId": row["flow_local_id"],
+        "flowName": row["flow_name"],
+        "environmentLocalId": row["environment_local_id"],
+        "environmentName": row["environment_name"],
+        "source": row["source"],
+        "summary": summary,
+    }
 
 
 @mcp.tool()
@@ -229,8 +256,8 @@ async def run_flow(flow: str, environment: Optional[str] = None, timeout_seconds
 def get_run_report(run_id: str, format: str = "json") -> Any:
     """Fetch the stored report of a past run_flow call by its runId.
     format="json" returns the full record set; format="csv" returns the same
-    CSV text the API Studio UI's Report button downloads. Only the latest run
-    per flow is retained."""
+    CSV text the API Studio UI's Report button downloads. The most recent 100
+    runs (across all flows, agent- and user-triggered) are retained."""
     if format not in ("json", "csv"):
         raise ToolError('format must be "json" or "csv"')
     return get_run_report_data(run_id, format)

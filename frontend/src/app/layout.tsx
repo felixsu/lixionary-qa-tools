@@ -6,6 +6,7 @@ import { AppProvider } from "./context/AppContext";
 import { WebExplorerProvider } from "./context/WebExplorerContext";
 import { BackendStatusProvider } from "./context/BackendStatusContext";
 import { SearchIndexStatusProvider } from "./context/SearchIndexStatusContext";
+import { FlowRunsProvider } from "./context/FlowRunsContext";
 import { ToastProvider } from "./context/ToastContext";
 import TauriOnlyGate from "./components/TauriOnlyGate";
 import GlobalDropGuard from "./components/GlobalDropGuard";
@@ -51,17 +52,19 @@ export default function RootLayout({
         <TauriOnlyGate>
           <BackendStatusProvider>
             <SearchIndexStatusProvider>
-              <ToastProvider>
-                <AppProvider>
-                  {/* Root-level so the live browser session (WebSocket +
-                      screencast) survives navigating between modules. */}
-                  <WebExplorerProvider>
-                    <Suspense fallback={null}>
-                      {children}
-                    </Suspense>
-                  </WebExplorerProvider>
-                </AppProvider>
-              </ToastProvider>
+              <FlowRunsProvider>
+                <ToastProvider>
+                  <AppProvider>
+                    {/* Root-level so the live browser session (WebSocket +
+                        screencast) survives navigating between modules. */}
+                    <WebExplorerProvider>
+                      <Suspense fallback={null}>
+                        {children}
+                      </Suspense>
+                    </WebExplorerProvider>
+                  </AppProvider>
+                </ToastProvider>
+              </FlowRunsProvider>
             </SearchIndexStatusProvider>
           </BackendStatusProvider>
         </TauriOnlyGate>

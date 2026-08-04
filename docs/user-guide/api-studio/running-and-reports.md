@@ -60,10 +60,14 @@ Click **Report** (enabled once a run has records) to download `<flowName>-run-<t
 | `error` | Failure message, if any |
 | `test_results` | The request's test script results (`name: PASS; name: FAIL`) |
 
+## **Run History (Home page)**
+
+The Home page's **Flow executions** table lists the most recent runs across all flows — UI-triggered and agent-triggered alike (the **Source** column shows *User* or *Agent*). Each row shows the flow and environment, node count, status, **duration**, the flow's **average duration** (computed over its successful runs only), when it started, and a **report download** button producing the same CSV as the Studio's Report button. Agent runs still executing in the sidecar appear with a pulsing *Running* status (the API Studio toolbar shows an **Agent running** indicator at the same time). The most recent **100 runs** are kept on this device; older ones are pruned automatically.
+
 ## **Run Persistence**
 
 * The **last run persists per flow** on this device (browser/app local storage) — after a reload, node badges, the inspector's Last run cards, and the **Report** button are all restored. Only the most recent run is kept, and it is overwritten by the next run.
-* Run results are **not synced** to the cloud, and there is no run history or scheduling. UI runs execute entirely in the app; AI agents can additionally run flows headlessly through the sidecar's MCP endpoint — see [MCP Agent Access](mcp-agent-access.md).
+* Every completed run is also recorded in the device-local **run history** shown on the Home page (see above). Run results are **not synced** to the cloud, and there is no scheduling. UI runs execute entirely in the app; AI agents can additionally run flows headlessly through the sidecar's MCP endpoint — see [MCP Agent Access](mcp-agent-access.md).
 
 > **Caveat**: When persisting, very large payloads/response bodies are truncated at 20,000 characters. A CSV downloaded **after a reload** may therefore contain truncated data; download the report in the same session for the complete record. If a successful node's outputs exceed the limit, the run's resume data is dropped entirely (rather than stored corrupted) and **Retry becomes unavailable after a reload** for that run.
 

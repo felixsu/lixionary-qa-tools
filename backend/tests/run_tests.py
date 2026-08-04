@@ -43,6 +43,7 @@ from tests.test_flow_runner import (
     test_condense_summary_digest_and_truncation,
 )
 from tests.test_mcp_tools import run_mcp_tool_tests
+from tests.test_flow_runs import test_flow_runs_store_roundtrip, test_flow_runs_routes
 
 def run():
     print("Running tests...")
@@ -196,6 +197,12 @@ def run():
         print("✓ test_condense_summary_digest_and_truncation passed")
 
         run_mcp_tool_tests()
+
+        test_flow_runs_store_roundtrip()
+        print("✓ test_flow_runs_store_roundtrip passed")
+
+        asyncio.run(test_flow_runs_routes())
+        print("✓ test_flow_runs_routes passed")
 
         print("\nAll tests passed successfully!")
     except AssertionError as e:

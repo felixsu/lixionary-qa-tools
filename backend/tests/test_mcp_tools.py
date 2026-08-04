@@ -18,11 +18,12 @@ except Exception:
 
 
 class FakeStore:
-    """Duck-typed LocalStore stand-in: entity lists + a prefs dict."""
+    """Duck-typed LocalStore stand-in: entity lists + prefs and flow_runs dicts."""
 
     def __init__(self, entities=None):
         self.entities = entities or {}  # entity_type -> [record]
         self.prefs = {}
+        self.flow_runs = {}  # run_id -> row dict (snake_case, like SQLite)
 
     def list(self, entity_type):
         return list(self.entities.get(entity_type, []))
@@ -41,6 +42,38 @@ class FakeStore:
 
     def delete_pref(self, key):
         self.prefs.pop(key, None)
+
+    def insert_flow_run(self, run_id, *, flow_local_id, flow_name, environment_local_id,
+                        environment_name, source, status, node_count, started_at,
+                        duration_ms=None, summary_json=None):
+        self.flow_runs[run_id] = {
+            "run_id": run_id, "flow_local_id": flow_local_id, "flow_name": flow_name,
+            "environment_local_id": environment_local_id, "environment_name": environment_name,
+            "source": source, "status": status, "node_count": node_count,
+            "started_at": started_at, "duration_ms": duration_ms, "summary_json": summary_json,
+        }
+
+    def finalize_flow_run(self, run_id, *, status, duration_ms, summary_json, started_at=None):
+        row = self.flow_runs[run_id]
+        row.update(status=status, duration_ms=duration_ms, summary_json=summary_json)
+        if started_at is not None:
+            row["started_at"] = started_at
+
+    def get_flow_run(self, run_id):
+        return self.flow_runs.get(run_id)
+
+    def list_flow_runs(self, limit=20):
+        rows = sorted(self.flow_runs.values(), key=lambda r: r["started_at"], reverse=True)
+        return [dict(r, has_report=r["summary_json"] is not None, avg_duration_ms=None)
+                for r in rows[:limit]]
+
+    def prune_flow_runs(self, keep=100):
+        rows = sorted(self.flow_runs.values(), key=lambda r: r["started_at"], reverse=True)
+        keepers = {r["run_id"] for r in rows[:keep]}
+        for run_id in list(self.flow_runs):
+            row = self.flow_runs[run_id]
+            if run_id not in keepers and row["status"] != "running":
+                del self.flow_runs[run_id]
 
 
 def _record(local_id, payload, cloud_id=None):
@@ -166,15 +199,35 @@ async def _run_flow_roundtrip():
         assert csv.splitlines()[0].startswith("node_name,node_type")
         assert "getUuid" in csv
 
-        # a second run evicts the first (latest-per-flow retention)
+        # the stored row records the execution source and finalized status
+        row = store.get_flow_run(run_id)
+        assert row["source"] == "mcp"
+        assert row["status"] == "success"
+        assert row["node_count"] == 1
+        assert row["duration_ms"] is not None
+        assert row["summary_json"]
+
+        # a second run does NOT evict the first — both stay retrievable
         second = await mcp_server.run_flow_impl("flow-1", None, 60, executor=fake_executor2)
         assert any("No environment specified" in w for w in second["report"]["warnings"])
+        assert mcp_server.get_run_report_data(run_id, "json")["runId"] == run_id
+        assert mcp_server.get_run_report_data(second["runId"], "json")["runId"] == second["runId"]
+
+        # unknown run id still errors cleanly
         try:
-            mcp_server.get_run_report_data(run_id, "json")
-            raise AssertionError("expected ToolError for evicted run")
+            mcp_server.get_run_report_data("nope", "json")
+            raise AssertionError("expected ToolError for unknown run")
         except ToolError as e:
             assert "not found" in str(e)
-        assert mcp_server.get_run_report_data(second["runId"], "json")["runId"] == second["runId"]
+
+        # a run whose executor blows up finalizes the row as failed
+        async def broken_executor(payload, environment_id):
+            raise RuntimeError("connection refused")
+
+        failed = await mcp_server.run_flow_impl("Smoke Flow", "staging", 60, executor=broken_executor)
+        assert failed["report"]["status"] == "failed"
+        assert store.get_flow_run(failed["runId"])["status"] == "failed"
+        assert store.get_flow_run(failed["runId"])["source"] == "mcp"
     finally:
         mcp_server.LocalStore = original
 

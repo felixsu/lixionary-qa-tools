@@ -2,7 +2,7 @@
 
 The local sidecar exposes an **MCP server** (Model Context Protocol, streamable HTTP) so AI agents on your machine — Claude Code, or any MCP-capable client — can run your saved API Studio flows and read the reports. The agent supplies an environment name and a flow name; the app resolves both, executes the flow headlessly, and returns the run report.
 
-Runs are executed by a Python port of the Studio's flow runner inside the sidecar, so the app window does not need to be open. Agent-triggered runs do **not** appear in the API Studio UI (they don't touch its last-run panel), and UI runs are unaffected.
+Runs are executed by a Python port of the Studio's flow runner inside the sidecar, so the app window does not need to be open. Agent-triggered runs show up in the app: while one is in flight, the Home page's **Flow executions** table shows it as *Running* and the API Studio toolbar shows a pulsing **Agent running** indicator; once finished it appears in the table like any other run, tagged with the **Agent** source. Agent runs don't touch the Studio's last-run panel, and UI runs are unaffected.
 
 ## Connecting
 
@@ -37,7 +37,7 @@ Then, in a session: *"List my API Studio flows and run 'Order Smoke' against the
 
 ### The report
 
-`run_flow` returns a condensed report: overall status, per-status counts, a `failures` digest (`nodeName`, `iteration`/`attempt`, `error`), and the per-node records (one per looper iteration and verifier attempt) with large fields truncated. `get_run_report(runId)` returns the fuller stored version (fields capped at 20,000 characters, like UI persistence). Only the **latest run per flow** is retained.
+`run_flow` returns a condensed report: overall status, per-status counts, a `failures` digest (`nodeName`, `iteration`/`attempt`, `error`), and the per-node records (one per looper iteration and verifier attempt) with large fields truncated. `get_run_report(runId)` returns the fuller stored version (fields capped at 20,000 characters, like UI persistence). The **most recent 100 runs** (across all flows, agent- and user-triggered) are retained.
 
 `timeout_seconds` (default 600, clamped to 10–1800) cancels a stuck run and still returns a proper report with `status: "cancelled"` and `timeoutHit: true`.
 
