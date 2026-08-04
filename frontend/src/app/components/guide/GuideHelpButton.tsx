@@ -87,8 +87,14 @@ export default function GuideHelpButton({
                 />
               </div>
             ) : failed || !guide ? (
-              <div className="py-10 text-center text-[13px] text-mute">
-                This guide isn&apos;t available yet.
+              <div className="py-10 text-center text-[13px] text-mute flex flex-col gap-2">
+                <span>This guide isn&apos;t available yet.</span>
+                {slug && (
+                  <span>
+                    An admin can attach content here by creating a User Guide with slug{" "}
+                    <code className="font-mono text-[12px] text-graphite">{slug}</code>.
+                  </span>
+                )}
               </div>
             ) : (
               <GuideBlockRenderer blocks={guide.blocks || []} />
