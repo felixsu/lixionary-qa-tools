@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Home, Send, Globe, Database, Key, LogOut, ChevronDown, PanelLeftClose, PanelLeftOpen, Shield, Users, BookOpen, NotebookPen, Fingerprint, Cloud, CloudOff, RefreshCw, AlertTriangle, Workflow, ExternalLink, Settings } from "lucide-react";
+import { Home, Send, Globe, Database, Key, LogOut, ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen, Search, Shield, Users, BookOpen, NotebookPen, Fingerprint, Cloud, CloudOff, RefreshCw, AlertTriangle, Workflow, ExternalLink, Settings } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import Dropdown from "../components/Dropdown";
 import UpdateBanner from "../components/UpdateBanner";
@@ -15,13 +15,13 @@ import { useAppVersion } from "../utils/useAppVersion";
 import { useUpdateChecker } from "../utils/useUpdateChecker";
 import { isTauri } from "../utils/tauri";
 import { formatRelativeTime } from "../utils/formatRelativeTime";
-import { buildGuideTree, flattenGuideTree } from "../utils/guideTree";
+import { buildGuideTree, flattenGuideTree, getAncestorIds, isVisibleUnderExpansion, filterGuidesByQuery } from "../utils/guideTree";
 import GuideHelpButton from "../components/guide/GuideHelpButton";
 
 type NavEntry =
   | { type: "section"; label: string }
   | { type: "item"; href: string; icon: typeof Send; label: string; badge?: "env" }
-  | { type: "group"; href: string; icon: typeof Send; label: string; children: { href: string; label: string; depth?: number }[] };
+  | { type: "group"; href: string; icon: typeof Send; label: string; children: { href: string; label: string; depth?: number; id?: string; hasChildren?: boolean }[] };
 
 const NAV: NavEntry[] = [
   { type: "section", label: "Home" },
@@ -100,6 +100,36 @@ export default function DashboardLayout({
       router.replace("/login");
     }
   }, [token, isLoadingAuth, router]);
+
+  // Guide tree in the sidebar is collapsed by default; navigating to a guide
+  // expands its ancestor chain (and itself, so its children show).
+  const [guideExpandedIds, setGuideExpandedIds] = useState<Set<string>>(new Set());
+  const [guideFilter, setGuideFilter] = useState("");
+  const guideById = useMemo(() => new Map(userGuides.map((g) => [g.id, g])), [userGuides]);
+
+  const activeGuideId = pathname === "/user-guides/detail" ? searchParams.get("id") : null;
+  useEffect(() => {
+    if (!activeGuideId) return;
+    // Additive so manual expansions survive navigation and the user can still
+    // re-collapse an ancestor of the active guide afterwards.
+    const toAdd = [activeGuideId, ...getAncestorIds(activeGuideId, guideById)];
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- responds to navigation, no-op guarded
+    setGuideExpandedIds((prev) => {
+      if (toAdd.every((id) => prev.has(id))) return prev;
+      const next = new Set(prev);
+      toAdd.forEach((id) => next.add(id));
+      return next;
+    });
+  }, [activeGuideId, guideById]);
+
+  const toggleGuideExpanded = (id: string) => {
+    setGuideExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   // Drives the "Synced Xm ago" label.
   const nowTick = useNowTick(15000);
@@ -182,6 +212,8 @@ export default function DashboardLayout({
         href: `/user-guides/detail?id=${g.id}`,
         label: g.title,
         depth: g.depth,
+        id: g.id,
+        hasChildren: g.children.length > 0,
       })),
     },
   ];
@@ -243,6 +275,17 @@ export default function DashboardLayout({
               const Icon = entry.icon;
               const active = isActive(entry.href);
               const expanded = pathname.startsWith(entry.href);
+              const q = guideFilter.trim();
+              const filtering = q.length >= 1;
+              const matchedIds = filtering
+                ? new Set(filterGuidesByQuery(userGuides, q).map((g) => g.id))
+                : null;
+              const shownChildren = matchedIds
+                ? entry.children.filter((c) => c.id && matchedIds.has(c.id))
+                : entry.children.filter((c) => {
+                    const guide = c.id ? guideById.get(c.id) : undefined;
+                    return !guide || isVisibleUnderExpansion(guide, guideById, guideExpandedIds);
+                  });
               return (
                 <div key={entry.href} className="flex flex-col gap-0.5">
                   <Link
@@ -267,26 +310,64 @@ export default function DashboardLayout({
                       </>
                     )}
                   </Link>
+                  {expanded && !collapsed && entry.children.length > 0 && (
+                    <div className="py-1 pr-2" style={{ paddingLeft: 14 }}>
+                      <div className="relative">
+                        <Search className="h-3 w-3 text-mute absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          placeholder="Filter guides…"
+                          value={guideFilter}
+                          onChange={(e) => setGuideFilter(e.target.value)}
+                          className="w-full h-[26px] bg-cream border border-line rounded-md pl-7 pr-2 text-[11px] text-graphite outline-none focus:border-clay"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {expanded && !collapsed && filtering && shownChildren.length === 0 && (
+                    <div className="py-1 text-[11px] text-mute" style={{ paddingLeft: 34 }}>
+                      No matches
+                    </div>
+                  )}
                   {expanded && !collapsed &&
-                    entry.children.map((child) => {
+                    shownChildren.map((child) => {
                       const childActive = child.href.includes("?")
                         ? (pathname === child.href.split("?")[0] && searchParams.get("id") === new URLSearchParams(child.href.split("?")[1]).get("id"))
                         : pathname === child.href;
+                      const childExpanded = child.id ? guideExpandedIds.has(child.id) : false;
                       return (
-                        <Link
+                        <div
                           key={child.href}
-                          href={child.href}
-                          className="flex items-center rounded-lg py-1.5 pr-2 transition-colors hover:bg-panel"
-                          style={{
-                            background: childActive ? "var(--color-hover)" : "transparent",
-                            borderLeft: `3px solid ${childActive ? "var(--color-clay)" : "transparent"}`,
-                            paddingLeft: 34 + ((child.depth ?? 1) - 1) * 12,
-                          }}
+                          className="flex items-center"
+                          style={{ paddingLeft: filtering ? 30 : 14 + ((child.depth ?? 1) - 1) * 12 }}
                         >
-                          <span className={`text-[12.5px] truncate ${childActive ? "font-medium text-clay" : "text-stone"}`}>
-                            {child.label}
-                          </span>
-                        </Link>
+                          {!filtering && (
+                            <button
+                              onClick={() => child.id && toggleGuideExpanded(child.id)}
+                              disabled={!child.hasChildren}
+                              className="h-5 w-4 flex items-center justify-center flex-shrink-0 rounded hover:bg-hover transition-colors disabled:opacity-0 disabled:pointer-events-none"
+                              title={childExpanded ? "Collapse" : "Expand"}
+                            >
+                              {childExpanded ? (
+                                <ChevronDown className="h-3 w-3 text-stone" />
+                              ) : (
+                                <ChevronRight className="h-3 w-3 text-stone" />
+                              )}
+                            </button>
+                          )}
+                          <Link
+                            href={child.href}
+                            className="flex-1 min-w-0 flex items-center rounded-lg py-1.5 pr-2 pl-1 transition-colors hover:bg-panel"
+                            style={{
+                              background: childActive ? "var(--color-hover)" : "transparent",
+                              borderLeft: `3px solid ${childActive ? "var(--color-clay)" : "transparent"}`,
+                            }}
+                          >
+                            <span className={`text-[12.5px] truncate ${childActive ? "font-medium text-clay" : "text-stone"}`}>
+                              {child.label}
+                            </span>
+                          </Link>
+                        </div>
                       );
                     })}
                 </div>

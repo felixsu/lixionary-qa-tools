@@ -70,3 +70,48 @@ export function subtreeHeight(node: GuideTreeNode): number {
   if (node.children.length === 0) return 1;
   return 1 + Math.max(...node.children.map(subtreeHeight));
 }
+
+// Ancestor ids of guideId, nearest-parent first. Walks raw summaries, which
+// may contain legacy cycles buildGuideTree repairs but this walk would not —
+// hence the seen-set guard. Unknown ids and missing parents yield []/partial.
+export function getAncestorIds(
+  guideId: string | null | undefined,
+  byId: ReadonlyMap<string, UserGuideSummary>,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  let current = guideId ? byId.get(guideId)?.parentId : undefined;
+  while (current && byId.has(current) && !seen.has(current)) {
+    seen.add(current);
+    out.push(current);
+    current = byId.get(current)!.parentId;
+  }
+  return out;
+}
+
+// True when every ancestor is expanded (roots always visible). Used by the
+// collapsed-by-default trees; the admin studio keeps its inverted
+// collapsedIds logic and does not use this.
+export function isVisibleUnderExpansion(
+  guide: UserGuideSummary,
+  byId: ReadonlyMap<string, UserGuideSummary>,
+  expandedIds: ReadonlySet<string>,
+): boolean {
+  const seen = new Set<string>();
+  let parentId = guide.parentId;
+  while (parentId && byId.has(parentId) && !seen.has(parentId)) {
+    if (!expandedIds.has(parentId)) return false;
+    seen.add(parentId);
+    parentId = byId.get(parentId)!.parentId;
+  }
+  return true;
+}
+
+// Case-insensitive substring match over title + description.
+export function filterGuidesByQuery<T extends UserGuideSummary>(guides: T[], query: string): T[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return guides;
+  return guides.filter(
+    (g) => g.title.toLowerCase().includes(q) || (g.description ?? "").toLowerCase().includes(q),
+  );
+}
