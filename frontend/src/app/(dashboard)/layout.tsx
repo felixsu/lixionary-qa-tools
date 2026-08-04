@@ -160,8 +160,13 @@ export default function DashboardLayout({
 
   // A guide slugged "page-<route>" (e.g. "page-api-studio") surfaces a help
   // icon next to that page's header title — no per-page wiring needed.
+  // Routes that place their own GuideHelpButton in the module action bar
+  // (same slug) are skipped so the helper appears exactly once.
+  const INLINE_HELP_ROUTES = new Set(["/auth-functions", "/browser-profiles"]);
   const pageHelpSlug = `page${pathname.replace(/\//g, "-")}`;
-  const pageHelpGuide = userGuides.find((g) => g.slug === pageHelpSlug);
+  const pageHelpGuide = INLINE_HELP_ROUTES.has(pathname)
+    ? undefined
+    : userGuides.find((g) => g.slug === pageHelpSlug);
 
   const showEnvPill = pathname === "/api-explorer" || pathname === "/api-studio" || pathname === "/web-explorer";
   const userInitial = (user?.name || user?.email || "D").charAt(0).toUpperCase();

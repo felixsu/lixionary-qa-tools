@@ -7,6 +7,7 @@ import { useToast } from "../../context/ToastContext";
 import Dropdown from "../../components/Dropdown";
 import { isTauri } from "../../utils/tauri";
 import { confirmDialog } from "../../utils/confirmDialog";
+import GuideHelpButton from "../../components/guide/GuideHelpButton";
 
 const LOCAL_API_URL = process.env.NEXT_PUBLIC_LOCAL_API_URL || "http://localhost:8484";
 
@@ -509,7 +510,12 @@ export default function BrowserProfilesPage() {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Action bar */}
-      <div className="h-14 flex items-center justify-end px-6 border-b border-line flex-shrink-0">
+      <div className="h-14 flex items-center justify-end gap-2 px-6 border-b border-line flex-shrink-0">
+        <GuideHelpButton
+          slug="page-browser-profiles"
+          title="How browser profiles work"
+          className="h-8 w-8 rounded-lg border border-line flex items-center justify-center text-mute hover:text-clay hover:bg-panel transition-colors"
+        />
         <button
           onClick={openCreate}
           className="h-[38px] px-4 bg-clay hover:bg-clay-dark rounded-lg text-[13px] font-medium text-white flex items-center gap-2 transition-colors"
