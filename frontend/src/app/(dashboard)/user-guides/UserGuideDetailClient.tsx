@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { ArrowLeft, BookOpen, ChevronRight } from "lucide-react";
 import { useAppContext, UserGuideSummary } from "../../context/AppContext";
 import GuideBlockRenderer, { GuideBlock } from "../../components/guide/GuideBlockRenderer";
-import { buildGuideTree, flattenGuideTree } from "../../utils/guideTree";
+import { buildGuideTree, flattenGuideTree, getAncestorIds } from "../../utils/guideTree";
 
 interface UserGuideDetail {
   id: string;
@@ -30,14 +30,9 @@ export default function UserGuideDetailPage() {
   // sidebar already fetched. Both are empty until userGuides loads — fine.
   const { ancestors, childPages } = useMemo(() => {
     const byId = new Map(userGuides.map((g) => [g.id, g]));
-    const ancestors: UserGuideSummary[] = [];
-    const seen = new Set<string>();
-    let parentId = guideId ? byId.get(guideId)?.parentId : null;
-    while (parentId && byId.has(parentId) && !seen.has(parentId)) {
-      seen.add(parentId);
-      ancestors.unshift(byId.get(parentId)!);
-      parentId = byId.get(parentId)!.parentId;
-    }
+    const ancestors: UserGuideSummary[] = getAncestorIds(guideId, byId)
+      .map((id) => byId.get(id)!)
+      .reverse();
     const node = flattenGuideTree(buildGuideTree(userGuides)).find((n) => n.id === guideId);
     return { ancestors, childPages: node?.children ?? [] };
   }, [userGuides, guideId]);
