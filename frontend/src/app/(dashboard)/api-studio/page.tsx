@@ -136,9 +136,6 @@ function StudioEditor() {
     llmSettings,
   } = useAppContext();
   const { activeRuns, registerRun } = useFlowRuns();
-  // MCP-triggered runs execute in the sidecar — surface them here since the
-  // canvas has no other trace of an agent run in progress.
-  const agentRuns = activeRuns.filter((r) => r.source === "mcp");
 
   const [selectedFlowId, setSelectedFlowId] = useState<string>("");
   const [nodes, setNodes, onNodesChange] = useNodesState<StudioNode>([]);
@@ -188,6 +185,10 @@ function StudioEditor() {
     if (!selectedFlow) return false;
     return flowSignature(serializeNodes(nodes), serializeEdges(edges)) !== savedSignature;
   }, [nodes, edges, savedSignature, selectedFlow]);
+
+  // MCP-triggered runs execute in the sidecar — surface them here since the
+  // canvas has no other trace of an agent run in progress.
+  const agentRuns = activeRuns.filter((r) => r.source === "mcp");
 
   // Load a flow into the canvas (statuses from its stored last run, dimmed as "idle").
   const loadFlow = useCallback((flow: Flow) => {
