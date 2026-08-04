@@ -46,6 +46,10 @@ _ENTITY_COLUMNS = [
 _SYNC_STATE_COLUMNS = [
     "local_id", "cloud_id", "version", "base_version", "deleted", "device_id", "updated_at",
 ]
+_FLOW_RUN_META_COLUMNS = [
+    "run_id", "flow_local_id", "flow_name", "environment_local_id", "environment_name",
+    "source", "status", "node_count", "started_at", "duration_ms",
+]
 
 
 class LocalStore:
@@ -117,6 +121,27 @@ class LocalStore:
             );
             CREATE INDEX IF NOT EXISTS idx_request_index_collection ON request_index(collection_local_id);
             CREATE INDEX IF NOT EXISTS idx_request_index_status ON request_index(embedding_status);
+
+            -- Flow-run history for the Home "Flow executions" table and the MCP
+            -- get_run_report tool. Device-local, never synced. `summary_json` is
+            -- the shrunk camelCase FlowRunSummary (context dropped, fields capped
+            -- by services/flow_report.py); NULL while the run is in flight.
+            CREATE TABLE IF NOT EXISTS flow_runs (
+                run_id               TEXT PRIMARY KEY,
+                flow_local_id        TEXT NOT NULL,
+                flow_name            TEXT NOT NULL,
+                environment_local_id TEXT,
+                environment_name     TEXT,
+                source               TEXT NOT NULL,   -- 'user' | 'mcp'
+                status               TEXT NOT NULL,   -- 'running' | 'success' | 'failed' | 'cancelled'
+                node_count           INTEGER NOT NULL DEFAULT 0,
+                started_at           TEXT NOT NULL,
+                duration_ms          INTEGER,
+                summary_json         TEXT,
+                created_at           TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_flow_runs_started ON flow_runs(started_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_flow_runs_flow ON flow_runs(flow_local_id, status);
             """
         )
         cls._conn.execute(
@@ -422,3 +447,92 @@ class LocalStore:
             (escaped + "%",),
         ), ["key", "value"])
         return {r["key"]: r["value"] for r in rows}
+
+    # Flow-run history — written by the MCP server (agent runs, inserted as
+    # 'running' then finalized) and by POST /api/flow-runs (UI runs, inserted
+    # already-completed). Device-local like prefs: no sync bookkeeping.
+
+    @classmethod
+    def insert_flow_run(
+        cls, run_id: str, *, flow_local_id: str, flow_name: str,
+        environment_local_id: Optional[str], environment_name: Optional[str],
+        source: str, status: str, node_count: int, started_at: str,
+        duration_ms: Optional[int] = None, summary_json: Optional[str] = None,
+    ) -> None:
+        cls._conn.execute(
+            """
+            INSERT INTO flow_runs
+                (run_id, flow_local_id, flow_name, environment_local_id, environment_name,
+                 source, status, node_count, started_at, duration_ms, summary_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (run_id, flow_local_id, flow_name, environment_local_id, environment_name,
+             source, status, node_count, started_at, duration_ms, summary_json, cls._now()),
+        )
+
+    @classmethod
+    def finalize_flow_run(
+        cls, run_id: str, *, status: str, duration_ms: Optional[int],
+        summary_json: Optional[str], started_at: Optional[str] = None,
+    ) -> None:
+        # started_at correction: the MCP path pre-inserts a row a few ms before
+        # the runner stamps the summary's own startedAt; keep the summary's.
+        cls._conn.execute(
+            """
+            UPDATE flow_runs
+            SET status = ?, duration_ms = ?, summary_json = ?,
+                started_at = COALESCE(?, started_at)
+            WHERE run_id = ?
+            """,
+            (status, duration_ms, summary_json, started_at, run_id),
+        )
+
+    @classmethod
+    def list_flow_runs(cls, limit: int = 20) -> List[Dict[str, Any]]:
+        """Newest-first run metadata (summary_json intentionally excluded — it
+        can be hundreds of KB per row). avg_duration_ms is the per-flow average
+        over successful runs only."""
+        columns = _FLOW_RUN_META_COLUMNS + ["has_report", "avg_duration_ms"]
+        return _dict_rows(cls._conn.execute(
+            f"""
+            SELECT {', '.join('r.' + c for c in _FLOW_RUN_META_COLUMNS)},
+                   r.summary_json IS NOT NULL AS has_report,
+                   a.avg_duration_ms
+            FROM flow_runs r
+            LEFT JOIN (
+                SELECT flow_local_id, CAST(AVG(duration_ms) AS INTEGER) AS avg_duration_ms
+                FROM flow_runs WHERE status = 'success' GROUP BY flow_local_id
+            ) a ON a.flow_local_id = r.flow_local_id
+            ORDER BY r.started_at DESC LIMIT ?
+            """,
+            (limit,),
+        ), columns)
+
+    @classmethod
+    def get_flow_run(cls, run_id: str) -> Optional[Dict[str, Any]]:
+        columns = _FLOW_RUN_META_COLUMNS + ["summary_json"]
+        return _dict_row(cls._conn.execute(
+            f"SELECT {', '.join(columns)} FROM flow_runs WHERE run_id = ?",
+            (run_id,),
+        ), columns)
+
+    @classmethod
+    def prune_flow_runs(cls, keep: int = 100) -> None:
+        # Running rows are never pruned — a concurrent MCP run must survive to
+        # be finalized even if a burst of other runs pushes it past `keep`.
+        cls._conn.execute(
+            """
+            DELETE FROM flow_runs
+            WHERE status != 'running' AND run_id NOT IN (
+                SELECT run_id FROM flow_runs ORDER BY started_at DESC LIMIT ?
+            )
+            """,
+            (keep,),
+        )
+
+    @classmethod
+    def fail_stale_flow_runs(cls) -> None:
+        """Sidecar startup: any row still 'running' was orphaned by a restart
+        mid-run. duration_ms/summary_json stay NULL (UI shows a dash, report
+        disabled)."""
+        cls._conn.execute("UPDATE flow_runs SET status = 'failed' WHERE status = 'running'")

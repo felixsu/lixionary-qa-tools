@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAppContext } from "../../context/AppContext";
+import { useFlowRuns } from "../../context/FlowRunsContext";
 import type { Collection } from "../../context/AppContext";
 import { useToast } from "../../context/ToastContext";
 import Dropdown from "../../components/Dropdown";
@@ -134,6 +135,10 @@ function StudioEditor() {
     environments, selectedEnvId,
     llmSettings,
   } = useAppContext();
+  const { activeRuns, registerRun } = useFlowRuns();
+  // MCP-triggered runs execute in the sidecar — surface them here since the
+  // canvas has no other trace of an agent run in progress.
+  const agentRuns = activeRuns.filter((r) => r.source === "mcp");
 
   const [selectedFlowId, setSelectedFlowId] = useState<string>("");
   const [nodes, setNodes, onNodesChange] = useNodesState<StudioNode>([]);
@@ -587,6 +592,14 @@ function StudioEditor() {
       const summary = await handle.done;
       setLastSummary(summary);
       persistLastRun(flow.id, summary);
+      void registerRun({
+        flowLocalId: flow.id,
+        flowName: flow.name,
+        environmentLocalId: selectedEnvId || null,
+        environmentName: environments.find((e) => e.id === selectedEnvId)?.name ?? null,
+        nodeCount: flow.nodes.length,
+        summary,
+      });
       showToast(
         summary.status === "success"
           ? `Run finished — ${summary.records.length} steps in ${summary.durationMs} ms`
@@ -645,6 +658,15 @@ function StudioEditor() {
       const merged = mergeRetrySummary(prior, next);
       setLastSummary(merged);
       persistLastRun(flow.id, merged);
+      // A retry lands as one new history entry holding the merged run.
+      void registerRun({
+        flowLocalId: flow.id,
+        flowName: flow.name,
+        environmentLocalId: selectedEnvId || null,
+        environmentName: environments.find((e) => e.id === selectedEnvId)?.name ?? null,
+        nodeCount: flow.nodes.length,
+        summary: merged,
+      });
       showToast(
         next.status === "success"
           ? `Retry finished — ${next.records.length} steps re-run in ${next.durationMs} ms`
@@ -911,6 +933,16 @@ function StudioEditor() {
 
         <div className="flex-1" />
 
+        {agentRuns.length > 0 && (
+          <span
+            className="flex items-center gap-1.5 h-8 px-3 bg-clay/10 border border-clay/40 rounded-md text-[11px] font-medium text-clay max-w-[280px] truncate"
+            title={agentRuns.map((r) => r.flowName).join(", ")}
+          >
+            <span className="h-2 w-2 rounded-full bg-clay animate-pulse flex-shrink-0" />
+            Agent running: {agentRuns[0].flowName}
+            {agentRuns.length > 1 ? ` +${agentRuns.length - 1} more` : ""}
+          </span>
+        )}
         {validationError ? (
           <span className="flex items-center gap-1.5 text-[11px] text-amber-700 max-w-[320px] truncate" title={validationError}>
             <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" /> {validationError}

@@ -31,12 +31,14 @@ from db.local_store import LocalStore
 from routes.local_store import router as local_store_router
 from routes.local_executor import router as local_executor_router
 from routes.local_ai import router as local_ai_router
+from routes.flow_runs import router as flow_runs_router
 from services.search_indexer import start_background_worker
 
 app = FastAPI(title="Lixionary Local Automation Explorer Sidecar")
 app.include_router(local_store_router)
 app.include_router(local_executor_router)
 app.include_router(local_ai_router)
+app.include_router(flow_runs_router)
 
 # MCP endpoint for AI agents (streamable HTTP at /mcp). The `mcp` package
 # needs Python >= 3.10 and is env-marker-gated in sidecar_requirements.txt,
@@ -307,6 +309,15 @@ def setup_local_venv():
 async def startup_event():
     # Local SQLite store for offline-first config data — fast, do inline.
     LocalStore.connect()
+    try:
+        # Any run still 'running' was orphaned by a restart mid-MCP-run.
+        LocalStore.fail_stale_flow_runs()
+        # One-time purge of the pre-flow_runs-table report blobs (mcp_server
+        # used to keep exactly one run per flow in local_prefs).
+        for key in list(LocalStore.list_prefs("flow_run:")) + list(LocalStore.list_prefs("flow_run_latest:")):
+            LocalStore.delete_pref(key)
+    except Exception as e:
+        print(f"WARNING: flow-run history cleanup failed: {e}", flush=True)
     # Backfill/refresh the request search index in the background (also picks
     # up any collections whose descriptions changed while the app was closed).
     asyncio.create_task(start_background_worker())
