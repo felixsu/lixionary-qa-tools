@@ -1,0 +1,52 @@
+{
+  "name": "zip_latch",
+  "description": "A single-value input (the auth token) is latched and reused for every item of the streaming input, so it is fetched once and paired with all three items.",
+  "collections": [
+    {
+      "id": "col",
+      "requests": [
+        { "id": "AUTH", "method": "GET", "url": "http://test/auth", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": ["token"] },
+        { "id": "R", "method": "GET", "url": "http://test/{{x}}/{{t}}", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": [] }
+      ]
+    }
+  ],
+  "flow": {
+    "id": "flow", "name": "zip_latch", "schemaVersion": 2,
+    "nodes": [
+      { "id": "emit", "name": "emit", "type": "arrayEmit", "position": { "x": 0, "y": 0 }, "config": { "staticItems": { "type": "json", "value": "[\"a\",\"b\",\"c\"]" } } },
+      { "id": "auth", "name": "auth", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "AUTH", "staticInputs": {} } },
+      { "id": "r", "name": "r", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "R", "staticInputs": {} } }
+    ],
+    "edges": [
+      { "id": "e1", "source": "emit", "target": "r", "sourceHandle": "out:item", "targetHandle": "in:x" },
+      { "id": "e2", "source": "auth", "target": "r", "sourceHandle": "out:token", "targetHandle": "in:t" }
+    ]
+  },
+  "executorScript": {
+    "AUTH": [{ "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "token": "tok-1" }, "missingOutputs": [] }],
+    "R": [
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": {}, "missingOutputs": [] },
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": {}, "missingOutputs": [] },
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": {}, "missingOutputs": [] }
+    ]
+  },
+  "expected": {
+    "status": "success",
+    "recordsByNode": {
+      "auth": [{ "status": "success", "iteration": 0 }],
+      "r": [
+        { "status": "success", "iteration": 0 },
+        { "status": "success", "iteration": 1 },
+        { "status": "success", "iteration": 2 }
+      ]
+    },
+    "bindings": {
+      "R": [
+        { "x": "a", "t": "tok-1" },
+        { "x": "b", "t": "tok-1" },
+        { "x": "c", "t": "tok-1" }
+      ]
+    },
+    "nodeItemCounts": { "auth": { "ok": 1, "failed": 0, "skipped": 0 }, "r": { "ok": 3, "failed": 0, "skipped": 0 } }
+  }
+}

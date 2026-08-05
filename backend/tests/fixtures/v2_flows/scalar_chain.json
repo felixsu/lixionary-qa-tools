@@ -1,0 +1,41 @@
+{
+  "name": "scalar_chain",
+  "description": "Degenerate case: no emitters, so every node runs exactly one item and values pass straight along the connections.",
+  "collections": [
+    {
+      "id": "col",
+      "requests": [
+        { "id": "A", "method": "GET", "url": "http://test/A", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": ["uuid"] },
+        { "id": "B", "method": "GET", "url": "http://test/{{x}}", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": ["val"] },
+        { "id": "C", "method": "GET", "url": "http://test/{{y}}", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": [] }
+      ]
+    }
+  ],
+  "flow": {
+    "id": "flow", "name": "scalar_chain", "schemaVersion": 2,
+    "nodes": [
+      { "id": "a", "name": "a", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "A", "staticInputs": {} } },
+      { "id": "b", "name": "b", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "B", "staticInputs": {} } },
+      { "id": "c", "name": "c", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "C", "staticInputs": {} } }
+    ],
+    "edges": [
+      { "id": "e1", "source": "a", "target": "b", "sourceHandle": "out:uuid", "targetHandle": "in:x" },
+      { "id": "e2", "source": "b", "target": "c", "sourceHandle": "out:val", "targetHandle": "in:y" }
+    ]
+  },
+  "executorScript": {
+    "A": [{ "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "uuid": "u-1" }, "missingOutputs": [] }],
+    "B": [{ "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "val": "v-1" }, "missingOutputs": [] }],
+    "C": [{ "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": {}, "missingOutputs": [] }]
+  },
+  "expected": {
+    "status": "success",
+    "recordsByNode": {
+      "a": [{ "status": "success", "iteration": 0 }],
+      "b": [{ "status": "success", "iteration": 0 }],
+      "c": [{ "status": "success", "iteration": 0 }]
+    },
+    "bindings": { "B": [{ "x": "u-1" }], "C": [{ "y": "v-1" }] },
+    "nodeItemCounts": { "a": { "ok": 1, "failed": 0, "skipped": 0 } }
+  }
+}

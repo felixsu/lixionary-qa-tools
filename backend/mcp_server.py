@@ -24,6 +24,7 @@ from db.local_store import LocalStore
 from services.flow_report import build_run_csv, condense_summary, shrink_summary
 from services.flow_runner import FlowRunError
 from services import flow_runner
+from services import flow_runner_v2
 
 # streamable_http_path="/" because the app is mounted at /mcp — the default
 # "/mcp" would double up to /mcp/mcp.
@@ -108,6 +109,8 @@ def list_flows_data() -> List[Dict[str, Any]]:
             "cloudId": record["cloudId"],
             "name": payload.get("name"),
             "description": payload.get("description") or "",
+            # Flow format: 1 = legacy name-referenced, 2 = port-based (V2).
+            "schemaVersion": payload.get("schemaVersion") or 1,
             "nodeCount": len(payload.get("nodes") or []),
             "nodeNames": [n.get("name") for n in payload.get("nodes") or []],
         }
@@ -170,8 +173,11 @@ async def run_flow_impl(flow: str, environment: Optional[str], timeout_seconds: 
         except Exception as e:
             warnings.append(f"Run report could not be persisted for get_run_report: {e}")
 
+    # V2 flows (schemaVersion 2, port-based) run on the V2 engine; anything
+    # else runs on the legacy name-referenced engine.
+    runner = flow_runner_v2 if flow_payload.get("schemaVersion") == 2 else flow_runner
     try:
-        summary = await flow_runner.run_flow(
+        summary = await runner.run_flow(
             flow_payload,
             environment_id=environment_id,
             collections=collections,

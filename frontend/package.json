@@ -24,6 +24,7 @@
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@xyflow/react": "^12.11.2",
+    "jsonpath-plus": "^10.4.0",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.21.0",
     "mermaid": "^11.16.0",

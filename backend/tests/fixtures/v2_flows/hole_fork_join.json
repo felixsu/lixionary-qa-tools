@@ -1,0 +1,71 @@
+{
+  "name": "hole_fork_join",
+  "description": "The load-bearing continue-on-error case. Three items fork through a duplicator; the left branch fails on item 1 only. Because the failed item keeps its position as a hole, the mux still pairs left[0] with right[0] and left[2] with right[2] — never left[2] with right[1]. The right branch runs all three times; the accumulator drops the holed position.",
+  "collections": [
+    {
+      "id": "col",
+      "requests": [
+        { "id": "LEFT", "method": "GET", "url": "http://test/l/{{x}}", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": ["v"] },
+        { "id": "RIGHT", "method": "GET", "url": "http://test/r/{{x}}", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": ["v"] }
+      ]
+    }
+  ],
+  "flow": {
+    "id": "flow", "name": "hole_fork_join", "schemaVersion": 2,
+    "nodes": [
+      { "id": "emit", "name": "emit", "type": "arrayEmit", "position": { "x": 0, "y": 0 }, "config": { "staticItems": { "type": "json", "value": "[\"a\",\"b\",\"c\"]" } } },
+      { "id": "dup", "name": "dup", "type": "duplicator", "position": { "x": 0, "y": 0 }, "config": { "count": 2 } },
+      { "id": "left", "name": "left", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "LEFT", "staticInputs": {} } },
+      { "id": "right", "name": "right", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "RIGHT", "staticInputs": {} } },
+      { "id": "m", "name": "m", "type": "mux", "position": { "x": 0, "y": 0 }, "config": { "rows": [{ "id": "r1", "field": "l" }, { "id": "r2", "field": "r" }] } },
+      { "id": "acc", "name": "acc", "type": "accumulator", "position": { "x": 0, "y": 0 }, "config": {} }
+    ],
+    "edges": [
+      { "id": "e1", "source": "emit", "target": "dup", "sourceHandle": "out:item", "targetHandle": "in:value" },
+      { "id": "e2", "source": "dup", "target": "left", "sourceHandle": "out:o:0", "targetHandle": "in:x" },
+      { "id": "e3", "source": "dup", "target": "right", "sourceHandle": "out:o:1", "targetHandle": "in:x" },
+      { "id": "e4", "source": "left", "target": "m", "sourceHandle": "out:v", "targetHandle": "in:i:r1" },
+      { "id": "e5", "source": "right", "target": "m", "sourceHandle": "out:v", "targetHandle": "in:i:r2" },
+      { "id": "e6", "source": "m", "target": "acc", "sourceHandle": "out:object", "targetHandle": "in:item" }
+    ]
+  },
+  "executorScript": {
+    "LEFT": [
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "v": "L0" }, "missingOutputs": [] },
+      { "status": 500, "statusText": "Internal Server Error", "headers": {}, "body": null, "outputs": {}, "missingOutputs": [] },
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "v": "L2" }, "missingOutputs": [] }
+    ],
+    "RIGHT": [
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "v": "R0" }, "missingOutputs": [] },
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "v": "R1" }, "missingOutputs": [] },
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "v": "R2" }, "missingOutputs": [] }
+    ]
+  },
+  "expected": {
+    "status": "failed",
+    "recordsByNode": {
+      "left": [
+        { "status": "success", "iteration": 0 },
+        { "status": "failed", "iteration": 1 },
+        { "status": "success", "iteration": 2 }
+      ],
+      "right": [
+        { "status": "success", "iteration": 0 },
+        { "status": "success", "iteration": 1 },
+        { "status": "success", "iteration": 2 }
+      ]
+    },
+    "bindings": {
+      "LEFT": [{ "x": "a" }, { "x": "b" }, { "x": "c" }],
+      "RIGHT": [{ "x": "a" }, { "x": "b" }, { "x": "c" }]
+    },
+    "nodeOutputs": {
+      "acc": { "items": [{ "l": "L0", "r": "R0" }, { "l": "L2", "r": "R2" }], "count": 2, "dropped": 1 }
+    },
+    "nodeItemCounts": {
+      "left": { "ok": 2, "failed": 1, "skipped": 0 },
+      "right": { "ok": 3, "failed": 0, "skipped": 0 },
+      "m": { "ok": 2, "failed": 0, "skipped": 1 }
+    }
+  }
+}

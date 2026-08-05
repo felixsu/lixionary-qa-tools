@@ -16,11 +16,14 @@ export interface StudioNodeData extends Record<string, unknown> {
 
 export type StudioNode = Node<StudioNodeData>;
 
+// "partial" is a V2 streaming status; legacy V1 runs never emit it, but the
+// shared NodeRunStatus union requires an entry.
 const STATUS_DOT: Record<NodeRunStatus, string> = {
   idle: "bg-line",
   pending: "bg-stone/50",
   running: "bg-clay animate-pulse",
   success: "bg-emerald-500",
+  partial: "bg-orange-500",
   failed: "bg-red-500",
   skipped: "bg-amber-400",
 };
@@ -30,6 +33,7 @@ const STATUS_LABEL: Record<NodeRunStatus, string> = {
   pending: "queued",
   running: "running…",
   success: "success",
+  partial: "partial",
   failed: "failed",
   skipped: "skipped",
 };

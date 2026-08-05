@@ -1,0 +1,46 @@
+{
+  "name": "zip_mismatch",
+  "description": "Two emitters of different lengths feeding one node is a hard failure, not a silent truncation — pairing item 2 of one stream with nothing is never what the author meant. Because items are pipelined, the first two positions pair legitimately and reach the downstream node before the mismatch is discovered at position 2; the downstream node is then skipped rather than fed a bogus pairing.",
+  "collections": [
+    {
+      "id": "col",
+      "requests": [
+        { "id": "NEXT", "method": "GET", "url": "http://test/{{v}}", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": [] }
+      ]
+    }
+  ],
+  "flow": {
+    "id": "flow", "name": "zip_mismatch", "schemaVersion": 2,
+    "nodes": [
+      { "id": "e1", "name": "e1", "type": "arrayEmit", "position": { "x": 0, "y": 0 }, "config": { "staticItems": { "type": "json", "value": "[1,2,3]" } } },
+      { "id": "e2", "name": "e2", "type": "arrayEmit", "position": { "x": 0, "y": 0 }, "config": { "staticItems": { "type": "json", "value": "[\"x\",\"y\"]" } } },
+      { "id": "m", "name": "m", "type": "mux", "position": { "x": 0, "y": 0 }, "config": { "rows": [{ "id": "r1", "field": "a" }, { "id": "r2", "field": "b" }] } },
+      { "id": "next", "name": "next", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "NEXT", "staticInputs": {} } }
+    ],
+    "edges": [
+      { "id": "x1", "source": "e1", "target": "m", "sourceHandle": "out:item", "targetHandle": "in:i:r1" },
+      { "id": "x2", "source": "e2", "target": "m", "sourceHandle": "out:item", "targetHandle": "in:i:r2" },
+      { "id": "x3", "source": "m", "target": "next", "sourceHandle": "out:object", "targetHandle": "in:v" }
+    ]
+  },
+  "executorScript": {
+    "NEXT": [
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": {}, "missingOutputs": [] },
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": {}, "missingOutputs": [] }
+    ]
+  },
+  "expected": {
+    "status": "failed",
+    "recordsByNode": {
+      "m": [{ "status": "failed" }],
+      "next": [
+        { "status": "success", "iteration": 0 },
+        { "status": "success", "iteration": 1 },
+        { "status": "skipped" }
+      ]
+    },
+    "bindings": {
+      "NEXT": [{ "v": "{\"a\":1,\"b\":\"x\"}" }, { "v": "{\"a\":2,\"b\":\"y\"}" }]
+    }
+  }
+}

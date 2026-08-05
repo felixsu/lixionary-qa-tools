@@ -1,0 +1,45 @@
+{
+  "name": "emit_accumulate",
+  "description": "The loop, by composition: an emitter releases three items, a request runs per item, an accumulator collects the results back into one array at end-of-stream (no done wiring required).",
+  "collections": [
+    {
+      "id": "col",
+      "requests": [
+        { "id": "R", "method": "GET", "url": "http://test/{{x}}", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": ["id"] }
+      ]
+    }
+  ],
+  "flow": {
+    "id": "flow", "name": "emit_accumulate", "schemaVersion": 2,
+    "nodes": [
+      { "id": "emit", "name": "emit", "type": "arrayEmit", "position": { "x": 0, "y": 0 }, "config": { "staticItems": { "type": "json", "value": "[\"a\",\"b\",\"c\"]" } } },
+      { "id": "r", "name": "r", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "R", "staticInputs": {} } },
+      { "id": "acc", "name": "acc", "type": "accumulator", "position": { "x": 0, "y": 0 }, "config": {} }
+    ],
+    "edges": [
+      { "id": "e1", "source": "emit", "target": "r", "sourceHandle": "out:item", "targetHandle": "in:x" },
+      { "id": "e2", "source": "r", "target": "acc", "sourceHandle": "out:id", "targetHandle": "in:item" }
+    ]
+  },
+  "executorScript": {
+    "R": [
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "id": "id-0" }, "missingOutputs": [] },
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "id": "id-1" }, "missingOutputs": [] },
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "id": "id-2" }, "missingOutputs": [] }
+    ]
+  },
+  "expected": {
+    "status": "success",
+    "recordsByNode": {
+      "r": [
+        { "status": "success", "iteration": 0 },
+        { "status": "success", "iteration": 1 },
+        { "status": "success", "iteration": 2 }
+      ],
+      "acc": [{ "status": "success" }]
+    },
+    "bindings": { "R": [{ "x": "a" }, { "x": "b" }, { "x": "c" }] },
+    "nodeOutputs": { "acc": { "items": ["id-0", "id-1", "id-2"], "count": 3, "dropped": 0 } },
+    "nodeItemCounts": { "r": { "ok": 3, "failed": 0, "skipped": 0 } }
+  }
+}

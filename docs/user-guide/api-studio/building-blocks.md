@@ -1,67 +1,99 @@
 # **Building Blocks & Canvas**
 
-## **Adding Nodes**
+## **Adding Blocks**
 
-The left **Building blocks** panel lists the four node types. Drag a card onto the canvas — or double-click it — to add a node:
+The left **Building blocks** panel lists the seven block types. Drag a card onto the canvas — or double-click it — to add it.
 
-| Block | What it does | Publishes downstream |
+| Block | What it does | Outputs |
 | :---- | :---- | :---- |
-| **Request** | Runs a saved API Explorer request | The request's declared outputs |
-| **Looper** | Repeats its inner request once per item of an array | `results` (array of per-iteration outputs), `count` |
-| **Delay** | Waits a fixed number of milliseconds | — |
-| **Verifier** | Runs its inner request and asserts on the response, retrying up to *Max attempts* | Inner request's outputs + `passed` |
+| **Request** | Runs a saved API Explorer request, optionally verifying and retrying the response | One dot per declared output (+ `passed` when verifying) |
+| **Array Emit** | Turns an array into a stream: emits its elements one at a time | `item`, `index` |
+| **Accumulator** | Collects a whole stream back into a single array | `array`, `count` |
+| **Demux** | Splits one object into several outputs, each with its own JSONPath | One dot per configured path |
+| **Mux** | Combines several inputs into one object | `object` |
+| **Duplicator** | Copies one value to several outputs — how you fan out | One dot per copy |
+| **Delay** | Waits a fixed number of milliseconds | `value` (passthrough) |
 
-New nodes are auto-named after their type (`request`, `looper`, `request_2`, …); rename them in the inspector.
+New blocks are auto-named after their type (`request`, `arrayEmit`, `request_2`, …); rename them in the inspector. Names appear on the block and in run records; duplicates are auto-suffixed when you save.
 
-## **Node Names**
+## **Streams: the core idea**
 
-The node name is an identifier that **namespaces the node's outputs** for downstream references (`orderSearch.order_id`). Edit it in the inspector's **Name** field. Rules:
+A connection does **not** carry one value — it carries an ordered **stream** of items ending with a *done* signal. A single value is simply a stream of length one.
 
-* Must match `^[A-Za-z_][A-Za-z0-9_]*$` (letters, digits, underscore; not starting with a digit).
-* Must be unique within the flow.
-* `env` and `item` are reserved.
+This is why there is no loop block. A loop is just composition:
 
-Violations show inline in red and in the toolbar's validation banner (e.g. *Node "x": Name already used in this flow*), and block **Run**.
+```
+Array Emit ●──● Request ●──● Accumulator ●──● …
+   3 items      runs 3×        one array out
+```
 
-## **Edges & Execution Order**
+The end-of-stream travels with the data, so nothing extra needs wiring — the accumulator flushes automatically when the stream finishes.
 
-* Draw an edge by dragging from a node's right (source) handle to another node's left (target) handle.
-* **Edges define execution order only** — no data travels along a specific edge. Any *upstream* (edge-ancestor) node's outputs are referenceable.
-* Self-edges, duplicate edges, and edges that would create a cycle are silently refused while connecting.
+## **Ports: input & output dots**
 
-## **Canvas Interactions & Shortcuts**
+Every block renders its ports directly on the card, ComfyUI-style:
 
-* **Select / inspect**: Click a node to open the inspector; click empty canvas to close it.
-* **Multi-select**: Drag with the left mouse button to draw a selection box. Pan with the middle or right mouse button; zoom / fit-view buttons sit in the corner controls.
-* **Delete**: Press **Backspace** or **Delete** to remove selected nodes/edges; the inspector also has a **Delete node** button.
-* **Undo delete**: **Cmd/Ctrl+Z** restores the last deletion (up to 20 steps; deletions only — the stack clears when you switch flows).
-* **Copy / paste**: **Cmd/Ctrl+C** copies the selected blocks (and the edges between them); **Cmd/Ctrl+V** pastes them offset, auto-renaming clashes to `name_2` and rewriting internal references and `{{tokens}}` to the new names.
+* **Input dots** (left) — one per `{{input}}` the linked request declares, or per configured row on a Mux. An **unconnected** input shows an inline value box with a **type** (`string`, `number`, `boolean`, `json`); a **connected** input shows a chip naming its source.
+* **Output dots** (right) — one per declared output / configured row.
+* **Trigger diamonds** (header corners) — `after` and `done`. Connect `done → after` to order two blocks **without** passing data. Because `done` only fires when a whole stream has finished, this doubles as a "wait for all of it" barrier.
+
+Port lists are derived live from your collections: editing a saved request updates its blocks immediately. If a port that has connections disappears, the block shows a red struck-through **ghost port** so the connection stays visible; the inspector lists these under **Port problems**, and runs are blocked until they're resolved.
+
+## **Connections are one-to-one**
+
+* Each data output feeds **exactly one** input, and each data input accepts **exactly one** connection. Dropping a second wire on either is refused with a hint.
+* To send one value to several places, add a **Duplicator**. To combine several values, add a **Mux**. Nothing is ever implicitly merged, so every wire has one unambiguous meaning.
+* Trigger diamonds are the exception — they're events, not data, so they may fan in and out freely.
+* Data dots only connect to data dots, diamonds only to diamonds; cycles are refused while dragging.
+* Click a connection to give it an optional **JSONPath** applied to every item (e.g. `$.id` to pass just the id), or to delete it.
+
+## **How several inputs pair up**
+
+When a block has more than one connected input, items pair **positionally**: item 1 with item 1, item 2 with item 2. An input whose stream turns out to be a **single value is latched** and reused for every item — which is exactly what you want for an auth token:
+
+```
+Array Emit ●──────● Request     →  runs 3×:
+Get Token  ●─(latched)─┘           (item1, token) (item2, token) (item3, token)
+```
+
+If two genuinely different-length streams meet at one block, the run fails with an explicit error rather than pairing unrelated items. The toolbar warns at edit time when two inputs are driven by different emitters.
+
+## **Failures don't stop the stream**
+
+If one item fails — an HTTP error that exhausts its retries, a JSONPath that matches nothing — that item drops out and **the remaining items keep flowing**. The block finishes with a *partial* status showing how many items failed, and the run is reported as failed.
+
+The failed item keeps its **position** as it travels, so branches that fork through a Duplicator and rejoin at a Mux stay aligned — item 3 on one branch can never end up paired with item 2 on the other. An Accumulator simply leaves failed positions out of its array (and reports how many it dropped).
+
+## **Canvas interactions & shortcuts**
+
+* **Select / inspect**: click a block for the inspector, a connection for its panel, empty canvas to close.
+* **Multi-select**: drag with the left mouse button. Pan with middle/right button; zoom and fit-view sit in the corner controls.
+* **Delete**: **Backspace** / **Delete**, or the inspector's trash button.
+* **Undo delete**: **Cmd/Ctrl+Z** (up to 20 steps; deletions only, cleared on flow switch).
+* **Copy / paste**: **Cmd/Ctrl+C** copies the selected blocks and the connections between them; **Cmd/Ctrl+V** pastes them offset, auto-renaming clashes.
 * **Save**: **Cmd/Ctrl+S**.
 
-## **Configuring Each Block (Inspector)**
+## **Configuring each block (inspector)**
 
 ### **Request**
 
-* **Request**: Pick a saved API Explorer request via the searchable picker (**Select a request…**; type ≥2 characters to search by name, endpoint, or description — same engine as the API Explorer sidebar search). If the linked request was later deleted, the node shows *Request not found*.
-* **Input mappings**: Wire each of the request's `{{inputs}}` — see [Input Mappings & References](input-mapping-and-references.md). Changing the selected request clears existing mappings.
+* **Request**: pick a saved API Explorer request (type ≥2 characters to search by name, endpoint, or description).
+* **Verify the response** (optional): add checks that each read a value with **JSONPath** over `$.status`, `$.body…`, `$.headers…`, or `$.outputs…` and compare it with `equals`, `not equals`, `contains`, `exists`, `greater than`, or `less than`. All checks must pass; otherwise the item is retried up to **Max attempts** every **Retry interval**. An expected value can be **Static** or come from a **Port** — the check grows its own input dot to receive it. Every item of a stream is verified independently.
 
-### **Looper**
+### **Array Emit**
 
-* **Items (array to iterate)**: Choose **Static JSON array** (edited inline as JSON) or **Reference an upstream output** (`nodeName.output` — must resolve to an array; a JSON-stringified array is parsed automatically).
-* The inner request is configured exactly like a Request node below the items field. Inside its mappings, reference the current element as `item` (the whole element) or `item.field`.
+* **Items**: a static JSON array when the `array` input is unconnected, otherwise whatever arrives on it. A stream of several arrays is flattened in order. An emitter may release at most **100 items** per run.
+
+### **Accumulator**
+
+No configuration. It collects its input stream and emits one array plus a count when the stream ends.
+
+### **Demux / Mux / Duplicator**
+
+* **Demux**: add one output row per **JSONPath** (`$.name`, `$.color`). Each output emits its own extraction from the same object, so one object in becomes several values out. A path that matches nothing holes only *that* output.
+* **Mux**: add one input row per **field name**; each item becomes one object using those names as keys.
+* **Duplicator**: set the number of identical outputs (2–8).
 
 ### **Delay**
 
-* **Delay (ms)**: A single number field (default 1000).
-
-### **Verifier**
-
-* Configure the inner request first (picker + input mappings).
-* **Verifications (all must pass)**: Add rows via **Add verification**. Each row has:
-  * **Field** — `status`, `body.<path>`, or `outputs.<path>` (a bare path is treated as an outputs path).
-  * **Operator** — `equals`, `not equals`, `contains`, `exists`, `greater than`, `less than`. Numeric comparison is used when both sides are numbers; `contains` checks array membership or substring; `exists` needs no expected value.
-  * **Expected** — a **Static** value or a **Reference** to an upstream node's output.
-* **Max attempts** (default 3) and **Retry interval (ms)** (default 1000) control the retry loop: the verifier re-runs its request until an attempt passes or attempts are exhausted.
-* Verifications are evaluated even when the response has an error status — so you can assert an expected 4xx.
-
-> **Warning**: A verifier with zero verifications **always fails** (the inspector shows an amber reminder). Also note that since a verifier only publishes its outputs when it passes, downstream references to `<verifier>.passed` will always see `true`.
+* **Delay (ms)**. Connect `value` straight through it to pace a stream (one wait per item — handy for rate-limited APIs), or leave it unconnected to simply pause between blocks.

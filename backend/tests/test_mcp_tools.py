@@ -163,7 +163,7 @@ def test_list_tools_shapes():
         flows = mcp_server.list_flows_data()
         assert flows == [{
             "id": "flow-1", "cloudId": "cf-1", "name": "Smoke Flow",
-            "description": "", "nodeCount": 1, "nodeNames": ["getUuid"],
+            "description": "", "schemaVersion": 1, "nodeCount": 1, "nodeNames": ["getUuid"],
         }]
     finally:
         mcp_server.LocalStore = original
@@ -238,6 +238,70 @@ async def fake_executor2(payload, environment_id):
             "outputs": {}, "missingOutputs": []}
 
 
+async def _run_flow_v2_dispatch():
+    """run_flow dispatches by schemaVersion: V2 payloads run on the V2 engine
+    (edge-delivered bindings) and V2 validation errors surface as ToolError."""
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    v2_payload = {
+        "name": "Ports Flow",
+        "schemaVersion": 2,
+        "nodes": [
+            {"id": "a", "name": "a", "type": "request", "position": {"x": 0, "y": 0},
+             "config": {"requestId": "req-a", "staticInputs": {}}},
+            {"id": "b", "name": "b", "type": "request", "position": {"x": 0, "y": 0},
+             "config": {"requestId": "req-b", "staticInputs": {}}},
+        ],
+        "edges": [
+            {"id": "e1", "source": "a", "target": "b",
+             "sourceHandle": "out:uuid", "targetHandle": "in:x"},
+        ],
+    }
+    store = FakeStore({
+        "flow": [_record("flow-v2", v2_payload)],
+        "environment": [],
+        "collection": [_record("col-1", {
+            "id": "col-1",
+            "requests": [
+                {"id": "req-a", "method": "GET", "url": "http://test/a",
+                 "headers": [], "queryParams": [], "bodyType": "none", "body": "",
+                 "authType": "none", "authConfig": {}, "inputs": [], "outputs": ["uuid"]},
+                {"id": "req-b", "method": "GET", "url": "http://test/{{x}}",
+                 "headers": [], "queryParams": [], "bodyType": "none", "body": "",
+                 "authType": "none", "authConfig": {}, "inputs": [], "outputs": []},
+            ],
+        })],
+    })
+    mcp_server, original = _with_fake_store(store)
+
+    seen_bindings = {}
+
+    async def fake_executor(payload, environment_id):
+        seen_bindings[payload["requestId"]] = {b["name"]: b["value"] for b in payload["inputs"]}
+        outputs = {"uuid": "u-9"} if payload["requestId"] == "req-a" else {}
+        return {"status": 200, "statusText": "OK", "headers": {}, "body": None,
+                "outputs": outputs, "missingOutputs": []}
+
+    try:
+        assert mcp_server.list_flows_data()[0]["schemaVersion"] == 2
+
+        result = await mcp_server.run_flow_impl("Ports Flow", None, 60, executor=fake_executor)
+        assert result["report"]["status"] == "success"
+        # The V2 engine delivered a's output along the edge into b's binding.
+        assert seen_bindings["req-b"]["x"] == "u-9"
+
+        # An invalid V2 flow (dangling port) aborts with an actionable error.
+        v2_payload["edges"][0]["sourceHandle"] = "out:gone"
+        store.entities["flow"] = [_record("flow-v2", v2_payload)]
+        try:
+            await mcp_server.run_flow_impl("Ports Flow", None, 60, executor=fake_executor)
+            raise AssertionError("expected ToolError for dangling V2 port")
+        except ToolError as e:
+            assert "missing port" in str(e)
+    finally:
+        mcp_server.LocalStore = original
+
+
 def run_mcp_tool_tests():
     """Entry point for run_tests.py — skips when `mcp` isn't installed."""
     if not MCP_AVAILABLE:
@@ -249,3 +313,5 @@ def run_mcp_tool_tests():
     print("✓ test_list_tools_shapes passed")
     asyncio.run(_run_flow_roundtrip())
     print("✓ test_run_flow_roundtrip passed")
+    asyncio.run(_run_flow_v2_dispatch())
+    print("✓ test_run_flow_v2_dispatch passed")

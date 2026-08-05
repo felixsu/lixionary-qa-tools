@@ -42,6 +42,18 @@ from tests.test_flow_runner import (
     test_build_run_csv_orders_and_escapes,
     test_condense_summary_digest_and_truncation,
 )
+from tests.test_flow_runner_v2 import (
+    test_golden_fixtures,
+    test_json_path_normalization,
+    test_compare_values_operators,
+    test_parse_handle_and_ports,
+    test_parse_static_input_types,
+    test_validate_flow_v2_rules,
+    test_invalid_flow_aborts_before_running,
+    test_done_after_barrier_waits_for_whole_stream,
+    test_cancellation_mid_stream,
+    test_partial_failure_reports_item_counts,
+)
 from tests.test_mcp_tools import run_mcp_tool_tests
 from tests.test_flow_runs import test_flow_runs_store_roundtrip, test_flow_runs_routes
 
@@ -195,6 +207,36 @@ def run():
 
         test_condense_summary_digest_and_truncation()
         print("✓ test_condense_summary_digest_and_truncation passed")
+
+        test_json_path_normalization()
+        print("✓ test_json_path_normalization passed")
+
+        test_compare_values_operators()
+        print("✓ test_compare_values_operators passed")
+
+        test_parse_handle_and_ports()
+        print("✓ test_parse_handle_and_ports passed")
+
+        test_parse_static_input_types()
+        print("✓ test_parse_static_input_types passed")
+
+        test_validate_flow_v2_rules()
+        print("✓ test_validate_flow_v2_rules passed")
+
+        asyncio.run(test_golden_fixtures())
+        print("✓ test_golden_fixtures passed")
+
+        asyncio.run(test_invalid_flow_aborts_before_running())
+        print("✓ test_invalid_flow_aborts_before_running passed")
+
+        asyncio.run(test_done_after_barrier_waits_for_whole_stream())
+        print("✓ test_done_after_barrier_waits_for_whole_stream passed")
+
+        asyncio.run(test_cancellation_mid_stream())
+        print("✓ test_cancellation_mid_stream passed")
+
+        asyncio.run(test_partial_failure_reports_item_counts())
+        print("✓ test_partial_failure_reports_item_counts passed")
 
         run_mcp_tool_tests()
 

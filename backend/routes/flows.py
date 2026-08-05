@@ -16,18 +16,22 @@ from services.sync_versioning import (
 router = APIRouter(prefix="/api/flows", tags=["flows"])
 
 # Nodes/edges are opaque blobs owned by the frontend (like collection request
-# trees) — the server only versions and syncs them.
+# trees) — the server only versions and syncs them. schemaVersion is the flow
+# FORMAT discriminator (absent = V1, 2 = V2 port-based), unrelated to the
+# sync version counter.
 class FlowCreate(BaseModel):
     name: str
     description: str = ""
     nodes: List[Dict[str, Any]] = []
     edges: List[Dict[str, Any]] = []
+    schemaVersion: Optional[int] = None
 
 class FlowUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     nodes: Optional[List[Dict[str, Any]]] = None
     edges: Optional[List[Dict[str, Any]]] = None
+    schemaVersion: Optional[int] = None
     expected_version: Optional[int] = None
     force: bool = False
 
@@ -70,6 +74,7 @@ async def create_flow(
         "description": payload.description,
         "nodes": payload.nodes,
         "edges": payload.edges,
+        **({"schemaVersion": payload.schemaVersion} if payload.schemaVersion is not None else {}),
         **new_version_fields(device_id),
     }
 
@@ -98,6 +103,8 @@ async def update_flow(
         update_fields["nodes"] = payload.nodes
     if payload.edges is not None:
         update_fields["edges"] = payload.edges
+    if payload.schemaVersion is not None:
+        update_fields["schemaVersion"] = payload.schemaVersion
 
     doc = await apply_versioned_update(
         col, ObjectId(id), update_fields,

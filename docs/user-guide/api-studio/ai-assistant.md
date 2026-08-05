@@ -1,5 +1,7 @@
 # **AI Assistant**
 
+> **Temporarily unavailable**: The assistant predates the port-based (V2) editor and is disabled while it learns the new flow format — the toolbar button is greyed out with *"Assistant is not yet available for V2 flows"*. It returns in an upcoming release alongside the legacy-flow converter. The description below reflects its behavior on the previous editor.
+
 Click **Assistant** (the ✦ sparkles button) in the API Studio toolbar to open a chat panel that builds flows with you. Describe what you want — *"get a UUID, wait 500 ms, then echo it"* — and the assistant proposes canvas actions using requests from your API Explorer collections.
 
 > **Requires an AI provider**: add an API key and pick an active provider in **Settings** (bring-your-own-key; requests run through the local sidecar, your key never leaves this machine).

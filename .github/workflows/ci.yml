@@ -39,7 +39,7 @@ jobs:
       # ever be lowered. If your PR trips it, fix warnings (yours or any),
       # then lower the budget to the new count.
       - name: Lint
-        run: npx eslint src --max-warnings 310
+        run: npx eslint src --max-warnings 301
 
       - name: Unit tests
         run: npm test
