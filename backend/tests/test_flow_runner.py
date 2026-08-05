@@ -469,7 +469,7 @@ def test_build_run_csv_orders_and_escapes():
     ]
     csv = build_run_csv(records)
     lines = csv.split("\n")
-    assert lines[0].startswith("node_name,node_type,iteration,attempt,status,started_at,duration_ms")
+    assert lines[0].startswith("node_name,node_type,iteration,attempt,scope,status,started_at,duration_ms")
     # sorted by startedAt: a first despite emission order
     assert lines[1].split(",")[0] == "a"
     assert lines[2].split(",")[0] == "b"

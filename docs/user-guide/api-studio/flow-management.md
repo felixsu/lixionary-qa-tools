@@ -2,20 +2,24 @@
 
 ## **Overview**
 
-A **Flow** is a named canvas of nodes and edges. Flows are managed entirely from the toolbar — there is no flow sidebar.
+A **Flow** is a named canvas of nodes and connections. Flows are managed entirely from the toolbar — there is no flow sidebar.
 
 ## **Selecting & Creating Flows**
 
-* The toolbar's flow dropdown (placeholder: **Select flow…**, or **No flows yet**) switches between flows.
-* Click **New** to open the **New flow** modal, enter a name, and click **Create**.
+* The toolbar's flow dropdown (placeholder: **Select flow…**, or **No flows yet**) switches between flows. Flows from the pre-ports editor are suffixed **· Legacy** in the list.
+* Click **New** to open the **New flow** modal, enter a name, and click **Create**. New flows always use the current port-based editor.
 * Empty canvas states guide you: *"Create your first flow with the New button."* when no flows exist, and *"Drag a building block from the left to start this flow."* once a flow is selected.
+
+## **Legacy Flows Are View/Run-Only**
+
+Selecting a legacy flow opens it in a frozen editor with an amber **Legacy · view/run only** badge: Run/Stop/Retry/Report and flow management still work, but nodes can't be added, moved, connected, or reconfigured, and there is no Save. A converter to the port-based format is planned; until then, rebuild the flow in a new (V2) flow if you need to change it.
 
 ## **Rename, Duplicate, Delete**
 
 When a flow is selected, three icon buttons appear next to the dropdown:
 
 * **Rename flow** (pencil): Opens the **Rename flow** modal.
-* **Duplicate flow** (copy): Clones the flow — including any unsaved canvas edits — as "*Name* 2", "*Name* 3", etc., and selects the copy.
+* **Duplicate flow** (copy): Clones the flow — including any unsaved canvas edits — as "*Name* 2", "*Name* 3", etc., and selects the copy. Duplicating a legacy flow produces another legacy flow.
 * **Delete flow** (trash): Asks for confirmation (*"Delete flow «name»? This cannot be undone."*) before deleting.
 
 ## **Saving**

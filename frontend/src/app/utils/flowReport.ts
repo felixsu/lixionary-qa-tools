@@ -8,6 +8,7 @@ const CSV_COLUMNS = [
   "node_type",
   "iteration",
   "attempt",
+  "scope", // V2 loop-body rows: "loopName[iteration]"; empty for V1 runs
   "status",
   "started_at",
   "duration_ms",
@@ -64,6 +65,7 @@ export function buildRunCsv(records: RunRecord[]): string {
       r.nodeType,
       r.iteration !== undefined ? String(r.iteration) : "",
       r.attempt !== undefined ? String(r.attempt) : "",
+      r.scope || "",
       r.status,
       r.startedAt,
       String(r.durationMs),

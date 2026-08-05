@@ -270,23 +270,18 @@ def _execution_result(**overrides) -> Dict[str, Any]:
     return base
 
 
-async def _execute_request_config(
-    cfg: Dict[str, Any],
-    ctx: Dict[str, Any],
-    collections: List[Dict[str, Any]],
+async def execute_resolved_request(
+    request: Dict[str, Any],
+    bindings: Dict[str, Dict[str, Any]],
+    resolved_inputs: Dict[str, str],
     environment_id: Optional[str],
     executor: ExecutorFn,
     get_pref: Callable[[str], Optional[str]],
     state: _RunState,
-    iteration_item: Any = MISSING,
 ) -> Dict[str, Any]:
-    """Resolve mappings + run the linked request once via the executor."""
-    request = find_request(collections, cfg.get("requestId"))
-    if not request:
-        return _execution_result(
-            error="Linked request not found" if cfg.get("requestId") else "No request selected"
-        )
-
+    """Run a saved request once via the executor with fully-resolved input
+    bindings. Shared by the V1 mapping resolver below and the V2 port-based
+    engine (flow_runner_v2.py) — TS twin: executeResolvedRequest."""
     # Auth parity with the API Explorer: HOOK auth bindings are device-local
     # prefs, same override the TS runner applies (flowRunner.ts).
     auth_type = request.get("authType")
@@ -299,28 +294,6 @@ async def _execute_request_config(
             auth_config = parsed.get("authConfig", auth_config)
     except Exception:
         pass  # pref unavailable / malformed override — fall back to saved values
-
-    # Start from the request's own stored bindings; flow mappings override.
-    bindings: Dict[str, Dict[str, Any]] = {}
-    for b in request.get("inputs") or []:
-        bindings[b.get("name")] = b
-
-    resolved_inputs: Dict[str, str] = {}
-    for mapping in cfg.get("mappings") or []:
-        input_name = mapping.get("inputName")
-        if not input_name:
-            continue
-        if mapping.get("source") == "reference":
-            found, ref_value = resolve_reference(mapping.get("value", ""), ctx, iteration_item)
-            if not found:
-                return _execution_result(
-                    error=f'Reference "{mapping.get("value")}" not found for input "{input_name}"'
-                )
-            value = stringify_value(ref_value)
-        else:
-            value = interpolate_studio_tokens(mapping.get("value", ""), ctx, iteration_item)
-        bindings[input_name] = {"name": input_name, "source": "literal", "value": value}
-        resolved_inputs[input_name] = value
 
     auth_config = auth_config or {}
     payload = {
@@ -385,6 +358,50 @@ async def _execute_request_config(
         response=response,
         outputs=outputs,
         raw=result,
+    )
+
+
+async def _execute_request_config(
+    cfg: Dict[str, Any],
+    ctx: Dict[str, Any],
+    collections: List[Dict[str, Any]],
+    environment_id: Optional[str],
+    executor: ExecutorFn,
+    get_pref: Callable[[str], Optional[str]],
+    state: _RunState,
+    iteration_item: Any = MISSING,
+) -> Dict[str, Any]:
+    """Resolve mappings + run the linked request once via the executor."""
+    request = find_request(collections, cfg.get("requestId"))
+    if not request:
+        return _execution_result(
+            error="Linked request not found" if cfg.get("requestId") else "No request selected"
+        )
+
+    # Start from the request's own stored bindings; flow mappings override.
+    bindings: Dict[str, Dict[str, Any]] = {}
+    for b in request.get("inputs") or []:
+        bindings[b.get("name")] = b
+
+    resolved_inputs: Dict[str, str] = {}
+    for mapping in cfg.get("mappings") or []:
+        input_name = mapping.get("inputName")
+        if not input_name:
+            continue
+        if mapping.get("source") == "reference":
+            found, ref_value = resolve_reference(mapping.get("value", ""), ctx, iteration_item)
+            if not found:
+                return _execution_result(
+                    error=f'Reference "{mapping.get("value")}" not found for input "{input_name}"'
+                )
+            value = stringify_value(ref_value)
+        else:
+            value = interpolate_studio_tokens(mapping.get("value", ""), ctx, iteration_item)
+        bindings[input_name] = {"name": input_name, "source": "literal", "value": value}
+        resolved_inputs[input_name] = value
+
+    return await execute_resolved_request(
+        request, bindings, resolved_inputs, environment_id, executor, get_pref, state
     )
 
 

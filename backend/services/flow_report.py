@@ -13,6 +13,7 @@ CSV_COLUMNS = [
     "node_type",
     "iteration",
     "attempt",
+    "scope",  # V2 loop-body rows: "loopName[iteration]"; empty for V1 runs
     "status",
     "started_at",
     "duration_ms",
@@ -74,6 +75,7 @@ def build_run_csv(records: List[Dict[str, Any]]) -> str:
             r.get("nodeType") or "",
             str(r["iteration"]) if r.get("iteration") is not None else "",
             str(r["attempt"]) if r.get("attempt") is not None else "",
+            r.get("scope") or "",
             r.get("status") or "",
             r.get("startedAt") or "",
             str(r.get("durationMs", "")),
@@ -160,6 +162,7 @@ def condense_summary(
                 "nodeName": r.get("nodeName"),
                 **({"iteration": r["iteration"]} if r.get("iteration") is not None else {}),
                 **({"attempt": r["attempt"]} if r.get("attempt") is not None else {}),
+                **({"scope": r["scope"]} if r.get("scope") else {}),
                 "error": r.get("error"),
             })
 
@@ -186,6 +189,10 @@ def condense_summary(
         "failures": failures,
         "records": [shrink_record(r, max_field_chars) for r in kept],
     }
+    # V2 streaming runs: per-node item tallies, so an agent can see "8 of 10
+    # items succeeded here" without counting records itself.
+    if summary.get("nodeItemCounts"):
+        report["nodeItemCounts"] = summary["nodeItemCounts"]
     if summary.get("timeoutHit"):
         report["timeoutHit"] = True
     if omitted:

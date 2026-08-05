@@ -1,0 +1,67 @@
+{
+  "name": "demux_verify_jsonpath",
+  "description": "Demux splits one object across outputs by JSONPath (the inverse of mux), a request re-checks its response until a JSONPath assertion passes, and the documented path dialect is exercised so a library upgrade in either stack fails here first.",
+  "collections": [
+    {
+      "id": "col",
+      "requests": [
+        { "id": "SRC", "method": "GET", "url": "http://test/src", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": ["fruit"] },
+        { "id": "NAME", "method": "GET", "url": "http://test/n/{{v}}", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": [] },
+        { "id": "IDS", "method": "GET", "url": "http://test/i/{{v}}", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": [] },
+        { "id": "POLL", "method": "GET", "url": "http://test/poll", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": [] }
+      ]
+    }
+  ],
+  "flow": {
+    "id": "flow", "name": "demux_verify_jsonpath", "schemaVersion": 2,
+    "nodes": [
+      { "id": "src", "name": "src", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "SRC", "staticInputs": {} } },
+      {
+        "id": "d", "name": "d", "type": "demux", "position": { "x": 0, "y": 0 },
+        "config": { "rows": [{ "id": "r1", "path": "$.name" }, { "id": "r2", "path": "$.items[*].id" }] }
+      },
+      { "id": "n", "name": "n", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "NAME", "staticInputs": {} } },
+      { "id": "i", "name": "i", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "IDS", "staticInputs": {} } },
+      {
+        "id": "poll", "name": "poll", "type": "request", "position": { "x": 0, "y": 0 },
+        "config": {
+          "requestId": "POLL", "staticInputs": {},
+          "verify": {
+            "enabled": true,
+            "checks": [{ "id": "c1", "path": "$.body.state", "operator": "equals", "expectedSource": "static", "expected": "DONE" }],
+            "maxAttempts": 3, "intervalMs": 1
+          }
+        }
+      }
+    ],
+    "edges": [
+      { "id": "e1", "source": "src", "target": "d", "sourceHandle": "out:fruit", "targetHandle": "in:object" },
+      { "id": "e2", "source": "d", "target": "n", "sourceHandle": "out:o:r1", "targetHandle": "in:v" },
+      { "id": "e3", "source": "d", "target": "i", "sourceHandle": "out:o:r2", "targetHandle": "in:v" }
+    ]
+  },
+  "executorScript": {
+    "SRC": [{ "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "fruit": { "name": "apple", "color": "red", "items": [{ "id": "a" }, { "id": "b" }] } }, "missingOutputs": [] }],
+    "NAME": [{ "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": {}, "missingOutputs": [] }],
+    "IDS": [{ "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": {}, "missingOutputs": [] }],
+    "POLL": [
+      { "status": 200, "statusText": "OK", "headers": {}, "body": { "state": "PENDING" }, "outputs": {}, "missingOutputs": [] },
+      { "status": 200, "statusText": "OK", "headers": {}, "body": { "state": "DONE" }, "outputs": {}, "missingOutputs": [] }
+    ]
+  },
+  "expected": {
+    "status": "success",
+    "recordsByNode": {
+      "n": [{ "status": "success", "iteration": 0 }],
+      "i": [{ "status": "success", "iteration": 0 }],
+      "poll": [
+        { "status": "failed", "iteration": 0, "attempt": 1 },
+        { "status": "success", "iteration": 0, "attempt": 2 }
+      ]
+    },
+    "bindings": {
+      "NAME": [{ "v": "apple" }],
+      "IDS": [{ "v": "[\"a\",\"b\"]" }]
+    }
+  }
+}

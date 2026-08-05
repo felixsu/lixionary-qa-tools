@@ -275,7 +275,7 @@ interface AppContextType {
   // API Studio Flows
   flows: Flow[];
   fetchFlows: () => Promise<void>;
-  createFlow: (name: string) => Promise<Flow>;
+  createFlow: (name: string, schemaVersion?: number | null) => Promise<Flow>;
   updateFlow: (id: string, updates: Partial<Pick<Flow, "name" | "description" | "nodes" | "edges">>, baseFlow?: Flow) => Promise<void>;
   deleteFlow: (id: string) => Promise<void>;
 
@@ -1137,6 +1137,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         cloudId: r.cloudId,
         name: r.name,
         description: r.description,
+        schemaVersion: r.schemaVersion,
         nodes: r.nodes || [],
         edges: r.edges || [],
       }));
@@ -1146,10 +1147,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const createFlow = async (name: string): Promise<Flow> => {
+  // New flows default to the V2 port-based format (flowTypesV2.ts); existing
+  // flows without schemaVersion stay legacy V1 (view/run-only). Pass
+  // schemaVersion: null to create an unversioned V1 record (duplicating a
+  // legacy flow must not promote it).
+  const createFlow = async (name: string, schemaVersion: number | null = 2): Promise<Flow> => {
     const record = await apiCall("/api/local-store/flow", {
       method: "POST",
-      body: JSON.stringify({ payload: { name, description: "", nodes: [], edges: [] } }),
+      body: JSON.stringify({
+        payload: {
+          name,
+          description: "",
+          ...(schemaVersion !== null ? { schemaVersion } : {}),
+          nodes: [],
+          edges: [],
+        },
+      }),
     });
     await fetchFlows();
     triggerSync(["flow"]);
@@ -1158,6 +1171,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       cloudId: record.cloudId,
       name: record.name,
       description: record.description,
+      schemaVersion: record.schemaVersion,
       nodes: record.nodes || [],
       edges: record.edges || [],
     };
@@ -1183,6 +1197,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         payload: {
           name: merged.name,
           description: merged.description || "",
+          // Preserve the format discriminator across whole-blob replaces —
+          // dropping it would demote a V2 flow to legacy on next load.
+          ...(merged.schemaVersion !== undefined ? { schemaVersion: merged.schemaVersion } : {}),
           nodes: merged.nodes,
           edges: merged.edges,
         },

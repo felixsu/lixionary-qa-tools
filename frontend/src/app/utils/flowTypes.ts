@@ -77,6 +77,10 @@ export interface Flow {
   cloudId?: string | null; // Mongo _id once synced
   name: string;
   description?: string;
+  // Flow FORMAT discriminator: absent/undefined = this legacy V1 model;
+  // 2 = the port-based V2 model (see flowTypesV2.ts — nodes/edges then
+  // actually hold FlowNodeV2/FlowEdgeV2 shapes; cast via isFlowV2).
+  schemaVersion?: number;
   nodes: FlowNode[];
   edges: FlowEdge[];
 }
@@ -86,7 +90,8 @@ export const NODE_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const RESERVED_NODE_NAMES = new Set(["env", "item"]);
 
 // Returns an error message, or null when the name is valid for this node.
-export const validateNodeName = (name: string, nodes: FlowNode[], selfId: string): string | null => {
+// Structurally typed so V2 nodes (flowTypesV2.ts) can reuse it.
+export const validateNodeName = (name: string, nodes: { id: string; name: string }[], selfId: string): string | null => {
   if (!name) return "Name is required";
   if (!NODE_NAME_RE.test(name)) return "Must be a valid identifier (letters, digits, _; not starting with a digit)";
   if (RESERVED_NODE_NAMES.has(name)) return `"${name}" is a reserved name`;
@@ -95,7 +100,8 @@ export const validateNodeName = (name: string, nodes: FlowNode[], selfId: string
 };
 
 // Derive an identifier-safe unique node name from a human label.
-export const autoNodeName = (label: string, nodes: FlowNode[]): string => {
+// Structurally typed so V2 nodes (flowTypesV2.ts) can reuse it.
+export const autoNodeName = (label: string, nodes: { name: string }[]): string => {
   const words = label.split(/[^A-Za-z0-9]+/).filter(Boolean);
   let base = words
     .map((w, i) => (i === 0 ? w.charAt(0).toLowerCase() + w.slice(1) : w.charAt(0).toUpperCase() + w.slice(1)))

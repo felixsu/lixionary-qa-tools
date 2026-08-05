@@ -20,14 +20,25 @@ import type {
   VerifierComparison,
 } from "./flowTypes";
 
-export type NodeRunStatus = "idle" | "pending" | "running" | "success" | "failed" | "skipped";
+// "partial" is V2-only: a streaming node that finished with some items failed.
+export type NodeRunStatus =
+  | "idle"
+  | "pending"
+  | "running"
+  | "success"
+  | "failed"
+  | "skipped"
+  | "partial";
 
 export interface RunRecord {
   nodeId: string;
   nodeName: string;
-  nodeType: FlowNode["type"];
-  iteration?: number; // looper, 0-based
+  // V1 FlowNodeType or V2 FlowNodeTypeV2 (plain string keeps the two models decoupled).
+  nodeType: string;
+  iteration?: number; // looper/loop, 0-based
   attempt?: number; // verifier, 1-based
+  scope?: string; // V2 loop-body records: "loopName[2]"
+  parentNodeId?: string; // V2 loop-body records: the containing loop node's id
   status: "success" | "failed" | "skipped";
   resolvedInputs: Record<string, string>;
   outputs: Record<string, any> | null;
@@ -59,7 +70,9 @@ export interface FlowRunSummary {
   // Resume metadata — absent on runs persisted before the Retry feature, in
   // which case Retry is unavailable for that stored run.
   context?: RunContext; // final published outputs, incl. entries seeded from a resume
-  nodeStatuses?: Record<string, "success" | "failed" | "skipped">;
+  nodeStatuses?: Record<string, "success" | "failed" | "skipped" | "partial">;
+  // V2 streaming runs: per-node item tallies (absent on V1 runs).
+  nodeItemCounts?: Record<string, { ok: number; failed: number; skipped: number }>;
   runSignature?: string; // structuralSignature of the graph that ran
   contextTruncated?: boolean; // set only by persistLastRun when context was too large to store
 }
@@ -124,7 +137,7 @@ export type RunContext = Record<string, Record<string, any>>;
 // A "*" segment projects over an array: "loop.results.*.uuid" collects the
 // uuid of every iteration into a flat array (elements that don't resolve are
 // dropped, JSONPath-style). Wildcards nest.
-const walkPath = (root: any, segments: string[]): any => {
+export const walkPath = (root: any, segments: string[]): any => {
   let cur = root;
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
@@ -171,7 +184,7 @@ export const resolveReference = (
   return { found: value !== undefined, value };
 };
 
-const stringifyValue = (value: any): string => {
+export const stringifyValue = (value: any): string => {
   if (value === null || value === undefined) return "";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
@@ -199,7 +212,7 @@ const findRequest = (collections: Collection[], requestId: string): RequestItem 
   return null;
 };
 
-interface ExecutionResult {
+export interface ExecutionResult {
   ok: boolean;
   error?: string;
   resolvedInputs: Record<string, string>;
@@ -209,19 +222,19 @@ interface ExecutionResult {
   raw: any | null; // full executor result
 }
 
-class FlowCancelledError extends Error {
+export class FlowCancelledError extends Error {
   constructor() {
     super("Run cancelled");
   }
 }
 
-interface RunState {
+export interface RunState {
   cancelled: boolean;
   abort: AbortController;
   wakers: Set<() => void>;
 }
 
-const cancellableDelay = (ms: number, state: RunState): Promise<void> =>
+export const cancellableDelay = (ms: number, state: RunState): Promise<void> =>
   new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       state.wakers.delete(wake);
@@ -234,27 +247,24 @@ const cancellableDelay = (ms: number, state: RunState): Promise<void> =>
     state.wakers.add(wake);
   });
 
-// Resolve mappings + run the linked request once via /api/executor/run.
-const executeRequestConfig = async (
-  cfg: RequestNodeConfig,
-  ctx: RunContext,
+// Run a saved request once via /api/executor/run with fully-resolved input
+// bindings. Shared by the V1 mapping resolver below and the V2 port-based
+// engine (flowRunnerV2.ts).
+export const executeResolvedRequest = async (
+  request: RequestItem,
+  bindings: Map<string, InputBinding>,
+  resolvedInputs: Record<string, string>,
   deps: FlowRunDeps,
-  state: RunState,
-  iterationItem?: any
+  state: RunState
 ): Promise<ExecutionResult> => {
   const empty: ExecutionResult = {
     ok: false,
-    resolvedInputs: {},
+    resolvedInputs,
     requestPayload: null,
     response: null,
     outputs: {},
     raw: null,
   };
-
-  const request = findRequest(deps.collections, cfg.requestId);
-  if (!request) {
-    return { ...empty, error: cfg.requestId ? "Linked request not found" : "No request selected" };
-  }
 
   // Auth parity with the API Explorer: HOOK auth is kept user-local — the
   // shared collection stores authFunctionId as null and the real binding
@@ -271,27 +281,6 @@ const executeRequestConfig = async (
     }
   } catch {
     // pref unavailable / malformed override — fall back to the saved values
-  }
-
-  // Start from the request's own stored bindings; flow mappings override.
-  const bindings = new Map<string, InputBinding>();
-  for (const b of request.inputs || []) bindings.set(b.name, b);
-
-  const resolvedInputs: Record<string, string> = {};
-  for (const mapping of cfg.mappings || []) {
-    if (!mapping.inputName) continue;
-    let value: string;
-    if (mapping.source === "reference") {
-      const { found, value: refValue } = resolveReference(mapping.value, ctx, iterationItem);
-      if (!found) {
-        return { ...empty, error: `Reference "${mapping.value}" not found for input "${mapping.inputName}"` };
-      }
-      value = stringifyValue(refValue);
-    } else {
-      value = interpolateStudioTokens(mapping.value, ctx, iterationItem);
-    }
-    bindings.set(mapping.inputName, { name: mapping.inputName, source: "literal", value });
-    resolvedInputs[mapping.inputName] = value;
   }
 
   const payload = {
@@ -360,8 +349,56 @@ const executeRequestConfig = async (
   };
 };
 
-const makeRecord = (
-  node: FlowNode,
+// Resolve V1 mappings + run the linked request once via /api/executor/run.
+const executeRequestConfig = async (
+  cfg: RequestNodeConfig,
+  ctx: RunContext,
+  deps: FlowRunDeps,
+  state: RunState,
+  iterationItem?: any
+): Promise<ExecutionResult> => {
+  const fail = (error: string): ExecutionResult => ({
+    ok: false,
+    error,
+    resolvedInputs: {},
+    requestPayload: null,
+    response: null,
+    outputs: {},
+    raw: null,
+  });
+
+  const request = findRequest(deps.collections, cfg.requestId);
+  if (!request) {
+    return fail(cfg.requestId ? "Linked request not found" : "No request selected");
+  }
+
+  // Start from the request's own stored bindings; flow mappings override.
+  const bindings = new Map<string, InputBinding>();
+  for (const b of request.inputs || []) bindings.set(b.name, b);
+
+  const resolvedInputs: Record<string, string> = {};
+  for (const mapping of cfg.mappings || []) {
+    if (!mapping.inputName) continue;
+    let value: string;
+    if (mapping.source === "reference") {
+      const { found, value: refValue } = resolveReference(mapping.value, ctx, iterationItem);
+      if (!found) {
+        return fail(`Reference "${mapping.value}" not found for input "${mapping.inputName}"`);
+      }
+      value = stringifyValue(refValue);
+    } else {
+      value = interpolateStudioTokens(mapping.value, ctx, iterationItem);
+    }
+    bindings.set(mapping.inputName, { name: mapping.inputName, source: "literal", value });
+    resolvedInputs[mapping.inputName] = value;
+  }
+
+  return executeResolvedRequest(request, bindings, resolvedInputs, deps, state);
+};
+
+// Structurally typed on the node so V2 nodes work too; exported for flowRunnerV2.
+export const makeRecord = (
+  node: { id: string; name: string; type: string },
   exec: ExecutionResult | null,
   status: RunRecord["status"],
   startedAt: string,
@@ -615,7 +652,7 @@ export function runFlow(flow: Flow, deps: FlowRunDeps, cb: FlowRunCallbacks, res
 
     // Wraps the status callback to also collect each node's terminal status
     // for the summary's resume metadata.
-    const nodeStatuses: Record<string, "success" | "failed" | "skipped"> = {};
+    const nodeStatuses: Record<string, "success" | "failed" | "skipped" | "partial"> = {};
     const emitStatus: FlowRunCallbacks["onNodeStatus"] = (nodeId, status) => {
       if (status === "success" || status === "failed" || status === "skipped") nodeStatuses[nodeId] = status;
       cb.onNodeStatus(nodeId, status);
