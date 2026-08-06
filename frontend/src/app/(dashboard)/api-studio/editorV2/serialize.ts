@@ -25,6 +25,10 @@ export interface StudioNodeDataV2 extends Record<string, unknown> {
   streamBadge?: string | null;
   // How many items failed here, shown alongside a "partial" status.
   failedItems?: number;
+  // Input port names whose stream was a single value the last run reused for
+  // every item (the scalar latch). Shown on the card so "one route_id across
+  // three orders" is visible rather than inferred.
+  latchedInputs?: string[];
 }
 
 export type StudioNodeV2 = Node<StudioNodeDataV2>;
@@ -35,7 +39,8 @@ export const RF_TYPE: Record<FlowNodeTypeV2, string> = {
   delay: "v2delay",
   arrayEmit: "v2arrayEmit",
   accumulator: "v2accumulator",
-  demux: "v2demux",
+  mapper: "v2mapper",
+  generator: "v2generator",
   mux: "v2mux",
 };
 

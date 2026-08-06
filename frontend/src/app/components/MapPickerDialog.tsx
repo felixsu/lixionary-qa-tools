@@ -3,9 +3,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { Modal } from "../../components/Modal";
-import { useAppContext } from "../../context/AppContext";
-import { useToast } from "../../context/ToastContext";
+import { Modal } from "./Modal";
+import { useAppContext } from "../context/AppContext";
+import { useToast } from "../context/ToastContext";
 
 interface GeoPoint {
   lat: number;

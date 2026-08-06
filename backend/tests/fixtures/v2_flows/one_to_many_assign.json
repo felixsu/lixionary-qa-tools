@@ -1,0 +1,86 @@
+{
+  "name": "one_to_many_assign",
+  "description": "Felix's shape: create a route once, create three orders, then call a one-at-a-time assignment API three times. The single route_id is latched and reused for every tracking_id, so ASSIGN is called three times with the same route and its own tracking id. This is the case people reach for a 'broadcast' node to solve — it needs none.",
+  "collections": [
+    {
+      "id": "col",
+      "requests": [
+        { "id": "ROUTE", "method": "POST", "url": "http://test/routes", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": ["route_id"] },
+        { "id": "ORDER", "method": "POST", "url": "http://test/orders", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": ["tracking_id"] },
+        { "id": "ASSIGN", "method": "POST", "url": "http://test/routes/{{route_id}}/assign/{{tracking_id}}", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": ["assigned"] }
+      ]
+    }
+  ],
+  "flow": {
+    "id": "flow",
+    "name": "one_to_many_assign",
+    "schemaVersion": 2,
+    "nodes": [
+      {
+        "id": "repeat", "name": "repeat", "type": "arrayEmit", "position": { "x": 0, "y": 0 },
+        "config": { "staticItems": { "type": "number", "value": "3" } }
+      },
+      { "id": "route", "name": "route", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "ROUTE", "staticInputs": {} } },
+      {
+        "id": "order", "name": "order", "type": "request", "position": { "x": 0, "y": 0 },
+        "config": { "requestId": "ORDER", "staticInputs": {}, "useEach": true }
+      },
+      { "id": "assign", "name": "assign", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "ASSIGN", "staticInputs": {} } },
+      { "id": "acc", "name": "acc", "type": "accumulator", "position": { "x": 0, "y": 0 }, "config": {} }
+    ],
+    "edges": [
+      { "id": "e1", "source": "repeat", "target": "order", "sourceHandle": "out:index", "targetHandle": "in:ctl:each" },
+      { "id": "e2", "source": "route", "target": "assign", "sourceHandle": "out:route_id", "targetHandle": "in:route_id" },
+      { "id": "e3", "source": "order", "target": "assign", "sourceHandle": "out:tracking_id", "targetHandle": "in:tracking_id" },
+      { "id": "e4", "source": "assign", "target": "acc", "sourceHandle": "out:assigned", "targetHandle": "in:item" }
+    ]
+  },
+  "executorScript": {
+    "ROUTE": [
+      { "status": 201, "statusText": "Created", "headers": {}, "body": null, "outputs": { "route_id": "RT-1" }, "missingOutputs": [] }
+    ],
+    "ORDER": [
+      { "status": 201, "statusText": "Created", "headers": {}, "body": null, "outputs": { "tracking_id": "TRK-A" }, "missingOutputs": [] },
+      { "status": 201, "statusText": "Created", "headers": {}, "body": null, "outputs": { "tracking_id": "TRK-B" }, "missingOutputs": [] },
+      { "status": 201, "statusText": "Created", "headers": {}, "body": null, "outputs": { "tracking_id": "TRK-C" }, "missingOutputs": [] }
+    ],
+    "ASSIGN": [
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "assigned": "TRK-A" }, "missingOutputs": [] },
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "assigned": "TRK-B" }, "missingOutputs": [] },
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "assigned": "TRK-C" }, "missingOutputs": [] }
+    ]
+  },
+  "expected": {
+    "status": "success",
+    "recordsByNode": {
+      "route": [{ "status": "success", "iteration": 0 }],
+      "order": [
+        { "status": "success", "iteration": 0 },
+        { "status": "success", "iteration": 1 },
+        { "status": "success", "iteration": 2 }
+      ],
+      "assign": [
+        { "status": "success", "iteration": 0 },
+        { "status": "success", "iteration": 1 },
+        { "status": "success", "iteration": 2 }
+      ]
+    },
+    "bindings": {
+      "ROUTE": [{}],
+      "ASSIGN": [
+        { "route_id": "RT-1", "tracking_id": "TRK-A" },
+        { "route_id": "RT-1", "tracking_id": "TRK-B" },
+        { "route_id": "RT-1", "tracking_id": "TRK-C" }
+      ]
+    },
+    "nodeLatchedInputs": {
+      "assign": ["route_id"]
+    },
+    "nodeOutputs": {
+      "acc": { "items": ["TRK-A", "TRK-B", "TRK-C"], "count": 3, "dropped": 0 }
+    },
+    "nodeItemCounts": {
+      "assign": { "ok": 3, "failed": 0, "skipped": 0 }
+    }
+  }
+}

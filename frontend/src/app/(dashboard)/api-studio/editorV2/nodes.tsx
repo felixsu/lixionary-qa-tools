@@ -7,13 +7,13 @@
 //                          output ─●        <- one row per data output
 //
 // Every card is the same shell over a derived PortSpec[] (flowTypesV2.nodePorts),
-// so nodes whose ports come from config — demux rows, mux rows, duplicator
+// so nodes whose ports come from config — mapper rows, mux rows, duplicator
 // count — need no bespoke rendering, and React Flow's handle cache is
 // refreshed generically whenever that port list changes.
 
 import React, { createContext, memo, useContext, useEffect, useMemo } from "react";
 import { Handle, Position, useEdges, useUpdateNodeInternals, type NodeProps } from "@xyflow/react";
-import { AlertCircle, Combine, Layers, Rows3, Send, ShieldCheck, Split, Timer } from "lucide-react";
+import { AlertCircle, Combine, Layers, Rows3, Send, ShieldCheck, Split, Timer, Wand2 } from "lucide-react";
 import type { NodeRunStatus } from "../../../utils/flowRunner";
 import {
   parseHandle,
@@ -21,6 +21,7 @@ import {
   TRIGGER_IN,
   TRIGGER_OUT,
   type PortSpec,
+  type GeneratorNodeConfigV2,
   type RequestNodeConfigV2,
   type StaticInputType,
   type StaticInputV2,
@@ -112,10 +113,12 @@ function InputPortRow({
   nodeId,
   port,
   staticInput,
+  latched,
 }: {
   nodeId: string;
   port: PortSpec;
   staticInput: StaticInputV2 | undefined;
+  latched?: boolean;
 }) {
   const edges = useEdges();
   const incoming = edges.find((e) => e.target === nodeId && e.targetHandle === port.id);
@@ -128,12 +131,22 @@ function InputPortRow({
         {portLabel(port)}
       </span>
       {incoming ? (
-        <span
-          className="ml-auto max-w-[110px] truncate rounded bg-clay/10 px-1.5 py-0.5 font-mono text-[9px] text-clay"
-          title={connectionTitle(sourcePort?.name, (incoming.data as EdgeDataV2 | undefined)?.path)}
-        >
-          ⟵ {sourcePort?.name || "connected"}
-        </span>
+        <>
+          {latched && (
+            <span
+              className="flex-shrink-0 rounded bg-clay/10 px-1 py-0.5 text-[9px] text-clay"
+              title="One value arrived here and was reused for every item of the other inputs"
+            >
+              reused
+            </span>
+          )}
+          <span
+            className="ml-auto max-w-[110px] truncate rounded bg-clay/10 px-1.5 py-0.5 font-mono text-[9px] text-clay"
+            title={connectionTitle(sourcePort?.name, (incoming.data as EdgeDataV2 | undefined)?.path)}
+          >
+            ⟵ {sourcePort?.name || "connected"}
+          </span>
+        </>
       ) : port.widget === "typed" ? (
         <TypedValueWidget nodeId={nodeId} portName={port.name} input={staticInput || { type: "string", value: "" }} />
       ) : (
@@ -209,7 +222,7 @@ function NodeShellV2({
   const { missingIn, missingOut } = useMissingHandles(id, data.ports);
 
   // React Flow caches handle positions — refresh whenever the port list changes
-  // (a request re-picked, a demux/mux row added, the duplicator count edited).
+  // (a request re-picked, a mapper/mux row added, the duplicator count edited).
   const portsSignature = [...data.ports.map((p) => p.id), ...missingIn, ...missingOut].join("|");
   useEffect(() => {
     updateNodeInternals(id);
@@ -254,7 +267,13 @@ function NodeShellV2({
       {(inputs.length > 0 || missingIn.length > 0) && (
         <div className="border-b border-line/60 py-0.5">
           {inputs.map((p) => (
-            <InputPortRow key={p.id} nodeId={id} port={p} staticInput={staticInputs[p.name]} />
+            <InputPortRow
+              key={p.id}
+              nodeId={id}
+              port={p}
+              staticInput={staticInputs[p.name]}
+              latched={(data.latchedInputs || []).includes(p.name)}
+            />
           ))}
           {missingIn.map((h) => (
             <MissingPortRow key={h} handleId={h} direction="in" />
@@ -313,14 +332,21 @@ const ArrayEmitNodeV2 = shell(
   }
 );
 const AccumulatorNodeV2 = shell("AccumulatorNodeV2", Layers, () => "accumulator");
-const DemuxNodeV2 = shell("DemuxNodeV2", Split, () => "demux · split");
+const MapperNodeV2 = shell("MapperNodeV2", Split, () => "mapper · split");
 const MuxNodeV2 = shell("MuxNodeV2", Combine, () => "mux · combine");
+const GeneratorNodeV2 = shell(
+  "GeneratorNodeV2",
+  Wand2,
+  () => "generator",
+  (d) => (d.flowNode.config as GeneratorNodeConfigV2).token || null
+);
 
 export const studioNodeTypesV2 = {
   v2request: RequestNodeV2,
   v2delay: DelayNodeV2,
   v2arrayEmit: ArrayEmitNodeV2,
   v2accumulator: AccumulatorNodeV2,
-  v2demux: DemuxNodeV2,
+  v2mapper: MapperNodeV2,
+  v2generator: GeneratorNodeV2,
   v2mux: MuxNodeV2,
 };

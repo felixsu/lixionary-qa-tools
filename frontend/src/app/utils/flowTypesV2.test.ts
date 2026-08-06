@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   dataInHandle,
   dataOutHandle,
-  demuxOutName,
+  mapperOutName,
   edgeKindV2,
   EMIT_MAX_ITEMS,
   flowErrorsV2,
@@ -63,6 +63,11 @@ const node = (id: string, type: FlowNodeV2["type"], config: FlowNodeV2["config"]
   config,
 });
 
+/** A node whose stored type this version no longer declares — retired names
+ * (e.g. "demux") and types that never existed, as migration input. */
+const retiredNode = (id: string, type: string, config: FlowNodeV2["config"]): FlowNodeV2 =>
+  ({ ...node(id, "mux", config), type: type as FlowNodeV2["type"] });
+
 const requestNode = (id: string, requestId = "req1", extra: Record<string, unknown> = {}) =>
   node(id, "request", { requestId, staticInputs: {}, ...extra });
 
@@ -98,7 +103,7 @@ describe("handle grammar", () => {
   });
 
   it("keeps row ids intact inside config-derived port names", () => {
-    expect(parseHandle(dataOutHandle(demuxOutName("abc-123")))?.name).toBe("o:abc-123");
+    expect(parseHandle(dataOutHandle(mapperOutName("abc-123")))?.name).toBe("o:abc-123");
     expect(parseHandle(dataInHandle(muxInName("abc-123")))?.name).toBe("i:abc-123");
     expect(parseHandle(dataInHandle(verifyCheckPortName("c1")))?.name).toBe("cmp:c1");
   });
@@ -185,8 +190,8 @@ describe("nodePorts", () => {
     expect(ports.map((p) => p.id)).toEqual(["after", "done", "in:value", "out:value"]);
   });
 
-  it("derives one demux output per row, labelled by its path", () => {
-    const n = node("d", "demux", { rows: [{ id: "r1", path: "$.name" }, { id: "r2", path: "$.color" }] });
+  it("derives one mapper output per row, labelled by its path", () => {
+    const n = node("d", "mapper", { rows: [{ id: "r1", path: "$.name" }, { id: "r2", path: "$.color" }] });
     const ports = nodePorts(n, collections).filter((p) => p.direction === "out" && p.kind === "data");
     expect(ports.map((p) => p.id)).toEqual(["out:o:r1", "out:o:r2"]);
     expect(ports.map((p) => portLabel(p))).toEqual(["$.name", "$.color"]);
@@ -288,8 +293,8 @@ describe("validateFlowV2 — per-type config", () => {
     expect(errors(flow).some((m) => m.includes(`over the maximum of ${EMIT_MAX_ITEMS}`))).toBe(true);
   });
 
-  it("requires demux rows to have paths", () => {
-    const flow = makeFlow([node("d", "demux", { rows: [{ id: "r1", path: "" }] })], []);
+  it("requires mapper rows to have paths", () => {
+    const flow = makeFlow([node("d", "mapper", { rows: [{ id: "r1", path: "" }] })], []);
     expect(errors(flow).some((m) => m.includes("output with no path"))).toBe(true);
   });
 
@@ -412,6 +417,38 @@ describe("migrateFlowV2", () => {
   it("leaves requests without an each connection alone", () => {
     const migrated = migrateFlowV2([requestNode("r")], []);
     expect((migrated.nodes[0].config as { useEach?: boolean }).useEach).toBeUndefined();
+  });
+
+  it("renames a saved demux to mapper, keeping its rows and connections", () => {
+    const rows = [{ id: "r1", path: "$.name" }, { id: "r2", path: "$.color" }];
+    const nodes = [
+      retiredNode("d", "demux", { rows }),
+      node("m", "mux", { rows: [{ id: "i1", field: "n" }, { id: "i2", field: "c" }] }),
+    ];
+    const edges = [
+      edge("e1", "d", `out:${mapperOutName("r1")}`, "m", `in:${muxInName("i1")}`),
+      edge("e2", "d", `out:${mapperOutName("r2")}`, "m", `in:${muxInName("i2")}`),
+    ];
+
+    const migrated = migrateFlowV2(nodes, edges);
+    const renamed = migrated.nodes.find((n) => n.id === "d")!;
+    expect(renamed.type).toBe("mapper");
+    expect(renamed.config).toEqual({ rows });
+    // handle ids are unchanged, so the connection is untouched and still resolves
+    expect(migrated.edges).toEqual(edges);
+    expect(nodePorts(renamed, collections).map((p) => p.id)).toContain(`out:${mapperOutName("r1")}`);
+    expect(flowErrorsV2(validateFlowV2(makeFlow(migrated.nodes, migrated.edges), collections))).toEqual([]);
+  });
+
+  it("does not count a rename as a rewritten block", () => {
+    // `changed` drives the "we rewrote your flow" toast — a rename is not that.
+    expect(migrateFlowV2([retiredNode("d", "demux", { rows: [{ id: "r1", path: "$.a" }] })], []).changed).toBe(0);
+  });
+
+  it("still drops a block whose type this version has never known", () => {
+    const migrated = migrateFlowV2([retiredNode("x", "teleporter", {})], []);
+    expect(migrated.nodes).toEqual([]);
+    expect(migrated.changed).toBe(1);
   });
 });
 

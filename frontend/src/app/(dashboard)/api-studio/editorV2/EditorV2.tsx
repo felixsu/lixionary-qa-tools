@@ -21,8 +21,10 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   AlertCircle, Combine, Copy, Download, Layers, Pencil, Play, Plus, Repeat2, Rows3, Save, Send,
-  ShieldCheck, Sparkles, Split, Square, Timer, Trash2, X,
+  ShieldCheck, Sparkles, Split, Square, Timer, Trash2, Wand2, X,
 } from "lucide-react";
+import { GeneratorBindingButton } from "../../../components/GeneratorMenu";
+import { isKnownGeneratorToken } from "../../../utils/generatorsV2";
 import Editor from "@monaco-editor/react";
 import { useAppContext, type Collection } from "../../../context/AppContext";
 import { useFlowRuns } from "../../../context/FlowRunsContext";
@@ -53,7 +55,8 @@ import {
   validateFlowV2,
   type ArrayEmitNodeConfigV2,
   type DelayNodeConfigV2,
-  type DemuxNodeConfigV2,
+  type GeneratorNodeConfigV2,
+  type MapperNodeConfigV2,
   type FlowEdgeV2,
   type FlowNodeTypeV2,
   type FlowNodeV2,
@@ -83,8 +86,9 @@ const PALETTE: { type: FlowNodeTypeV2; label: string; icon: typeof Send; hint: s
   { type: "request", label: "Request", icon: Send, hint: "Run a saved API request — wire a stream to `each` to repeat it; optionally verify and retry" },
   { type: "arrayEmit", label: "Array Emit", icon: Rows3, hint: "Turn an array — or a repeat count — into a stream, one item at a time" },
   { type: "accumulator", label: "Accumulator", icon: Layers, hint: "Collect a whole stream back into one array" },
-  { type: "demux", label: "Demux", icon: Split, hint: "Split an object into separate outputs by JSONPath" },
+  { type: "mapper", label: "Mapper", icon: Split, hint: "Split an object into separate outputs by JSONPath" },
   { type: "mux", label: "Mux", icon: Combine, hint: "Combine several inputs into one object" },
+  { type: "generator", label: "Generator", icon: Wand2, hint: "Emit a generated value — date, random number, name, email or location" },
   { type: "delay", label: "Delay", icon: Timer, hint: "Wait a fixed number of ms — pace a stream or just pause" },
 ];
 
@@ -530,7 +534,12 @@ function StudioEditorV2({ selectedFlow, onSelectFlow }: EditorV2Props) {
       setNodes((prev) =>
         prev.map((n) => ({
           ...n,
-          data: { ...n.data, streamBadge: null, failedItems: summary.nodeItemCounts?.[n.id]?.failed || 0 },
+          data: {
+            ...n.data,
+            streamBadge: null,
+            failedItems: summary.nodeItemCounts?.[n.id]?.failed || 0,
+            latchedInputs: summary.nodeLatchedInputs?.[n.id] || [],
+          },
         }))
       );
       void registerRun({
@@ -843,6 +852,7 @@ function StudioEditorV2({ selectedFlow, onSelectFlow }: EditorV2Props) {
             collections={collections}
             records={selectedNodeRecords}
             itemCounts={lastSummary?.nodeItemCounts?.[selectedNode.id]}
+            latchedInputs={lastSummary?.nodeLatchedInputs?.[selectedNode.id]}
             onChange={(patch) => updateFlowNodeV2(selectedNode.id, patch)}
             onClose={() => setSelectedNodeId(null)}
             onDelete={() => {
@@ -928,6 +938,52 @@ const dedupeName = (base: string, taken: Set<string>): string => {
 
 // ---- inspector ----------------------------------------------------------------
 
+/** Generator block config: pick a token from the same catalog API Explorer
+ * offers, and optionally repeat per driving item. */
+function GeneratorConfigV2({
+  cfg,
+  onChange,
+}: {
+  cfg: GeneratorNodeConfigV2;
+  onChange: (config: GeneratorNodeConfigV2) => void;
+}) {
+  const token = (cfg.token || "").trim();
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-1.5">
+        <label className="text-xs font-medium text-stone">Value</label>
+        <div className="flex items-center gap-1.5">
+          <GeneratorBindingButton value={token} onChange={(t) => onChange({ ...cfg, token: t })} />
+        </div>
+        <span className="text-[11px] text-mute">
+          Emitted on <span className="font-mono">value</span>. One output can feed several inputs, so every consumer
+          sees the <em>same</em> generated value — that is what a token typed into each request separately cannot do.
+        </span>
+        {!!token && !isKnownGeneratorToken(token) && (
+          <span className="text-[11px] text-amber-700">
+            This build doesn&apos;t know <span className="font-mono">{token}</span>, so the block will fail at run time.
+          </span>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-1.5 pt-3 border-t border-line">
+        <label className="flex items-center gap-2 text-xs font-medium text-stone">
+          <input
+            type="checkbox"
+            checked={!!cfg.useEach}
+            onChange={(e) => onChange({ ...cfg, useEach: e.target.checked })}
+          />
+          <Repeat2 className="h-3.5 w-3.5 text-clay" /> Repeat with an `each` input
+        </label>
+        <span className="text-[11px] text-mute">
+          Off, this emits one value that every consumer reuses. On, it produces a fresh value per item of the stream
+          you connect — a unique email per order, say.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 const MAX_VISIBLE_RECORDS = 50;
 
 function InspectorV2({
@@ -936,6 +992,7 @@ function InspectorV2({
   collections,
   records,
   itemCounts,
+  latchedInputs,
   onChange,
   onClose,
   onDelete,
@@ -945,6 +1002,7 @@ function InspectorV2({
   collections: Collection[];
   records: RunRecord[];
   itemCounts?: { ok: number; failed: number; skipped: number };
+  latchedInputs?: string[];
   onChange: (patch: Partial<FlowNodeV2>) => void;
   onClose: () => void;
   onDelete: () => void;
@@ -1090,14 +1148,21 @@ function InspectorV2({
           </span>
         )}
 
-        {fn.type === "demux" && (
+        {fn.type === "generator" && (
+          <GeneratorConfigV2
+            cfg={fn.config as GeneratorNodeConfigV2}
+            onChange={(config) => updateConfig(config)}
+          />
+        )}
+
+        {fn.type === "mapper" && (
           <RowsEditorV2
             title="Outputs (one per JSONPath)"
             addLabel="Add output"
-            rows={(fn.config as DemuxNodeConfigV2).rows || []}
+            rows={(fn.config as MapperNodeConfigV2).rows || []}
             valueOf={(r) => r.path}
             placeholder="$.name"
-            onChange={(rows) => updateConfig({ rows } as DemuxNodeConfigV2)}
+            onChange={(rows) => updateConfig({ rows } as MapperNodeConfigV2)}
             makeRow={() => ({ id: crypto.randomUUID(), path: "" })}
             setValue={(row, value) => ({ ...row, path: value })}
             hint="Each output emits its own extraction from the same object, so one object in becomes several values out."
@@ -1171,6 +1236,13 @@ function InspectorV2({
                 </span>
               )}
             </label>
+            {!!latchedInputs?.length && (
+              <span className="text-[11px] text-mute">
+                {latchedInputs.map((n) => `"${n}"`).join(", ")} produced a single value, reused for
+                {" "}
+                {itemCounts ? itemCounts.ok + itemCounts.failed + itemCounts.skipped : "every"} item(s).
+              </span>
+            )}
             {records.length > visibleRecords.length && (
               <span className="text-[11px] text-mute">
                 +{records.length - visibleRecords.length} earlier item(s) — download the report for all of them

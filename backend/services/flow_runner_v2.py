@@ -19,6 +19,7 @@ import json
 import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
+from services.executor import _resolve_dynamic_token, is_known_dynamic_token
 from services.flow_runner import (
     ExecutorFn,
     FlowCancelledError,
@@ -41,7 +42,7 @@ EMIT_MAX_ITEMS = 100
 TRIGGER_IN = "after"
 TRIGGER_OUT = "done"
 
-FLOW_NODE_TYPES_V2 = ("request", "delay", "arrayEmit", "accumulator", "demux", "mux")
+FLOW_NODE_TYPES_V2 = ("request", "delay", "arrayEmit", "accumulator", "mapper", "mux", "generator")
 
 _TOKEN_RE = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 
@@ -115,7 +116,7 @@ def data_out_handle(name: str) -> str:
     return f"out:{name}"
 
 
-def demux_out_name(row_id: str) -> str:
+def mapper_out_name(row_id: str) -> str:
     return f"o:{row_id}"
 
 
@@ -306,14 +307,24 @@ def node_ports(node: Dict[str, Any], collections: List[Dict[str, Any]]) -> List[
             _port(data_out_handle("count"), "count", "data", "out", "number"),
         ]
 
-    if node_type == "demux":
+    if node_type == "generator":
+        each = (
+            [_port(data_in_handle(EACH_PORT_NAME), EACH_PORT_NAME, "data", "in", label="each")]
+            if cfg.get("useEach")
+            else []
+        )
+        return _trigger_ports() + each + [
+            _port(data_out_handle("value"), "value", "data", "out"),
+        ]
+
+    if node_type == "mapper":
         rows = cfg.get("rows") or []
         return _trigger_ports() + [
             _port(data_in_handle("object"), "object", "data", "in", "json"),
         ] + [
             _port(
-                data_out_handle(demux_out_name(r.get("id") or "")),
-                demux_out_name(r.get("id") or ""),
+                data_out_handle(mapper_out_name(r.get("id") or "")),
+                mapper_out_name(r.get("id") or ""),
                 "data",
                 "out",
                 label=r.get("path") or "(unset)",
@@ -456,7 +467,13 @@ def validate_flow_v2(flow: Dict[str, Any], collections: List[Dict[str, Any]]) ->
                         f'"{name}" emits {len(value)} items, over the maximum of {EMIT_MAX_ITEMS}',
                         nodeId=node["id"],
                     )
-        elif node_type == "demux":
+        elif node_type == "generator":
+            token = (cfg.get("token") or "").strip()
+            if not token:
+                error(f'"{name}" has no generator selected', nodeId=node["id"])
+            elif not is_known_dynamic_token(token):
+                error(f'"{name}": "{token}" is not a generator this version knows', nodeId=node["id"])
+        elif node_type == "mapper":
             rows = cfg.get("rows") or []
             if not rows:
                 error(f'"{name}" has no outputs configured', nodeId=node["id"])
@@ -572,6 +589,13 @@ def migrate_flow_v2(
         else {**n, "config": {**(n.get("config") or {}), "useEach": True}}
         for n in nodes
     ]
+
+    # "demux" was renamed to "mapper". This MUST stay ahead of the unknown-type
+    # sweep below, which would otherwise dissolve every saved Demux block
+    # instead of renaming it. Config and handle ids ("out:o:<rowId>") are
+    # unchanged, so connections survive — and a pure rename is not a rewritten
+    # block, so it deliberately does not count towards `changed`.
+    nodes = [{**n, "type": "mapper"} if n.get("type") == "demux" else n for n in nodes]
 
     legacy = [n for n in nodes if n.get("type") not in FLOW_NODE_TYPES_V2]
     if not legacy:
@@ -697,6 +721,11 @@ class _Joiner:
     def input_count(self) -> int:
         return len(self.inputs)
 
+    def latched_inputs(self) -> List[str]:
+        """Inputs carrying a single value that is reused for every tuple. Only
+        meaningful once consumed — latching is discovered when an input ends."""
+        return [s["name"] for s in self.inputs if s["latched"] is not None]
+
     async def next(self, state: _RunState) -> Dict[str, Any]:
         i = self.index
         values: Dict[str, Dict[str, Any]] = {}
@@ -789,6 +818,7 @@ async def run_flow(
     records: List[Dict[str, Any]] = []
     node_statuses: Dict[str, str] = {}
     node_item_counts: Dict[str, Dict[str, int]] = {}
+    node_latched_inputs: Dict[str, List[str]] = {}
 
     def emit(record: Dict[str, Any]) -> None:
         records.append(record)
@@ -1138,12 +1168,28 @@ async def run_flow(
                         accumulated.append(value["value"])
                         counts["ok"] += 1
 
-                elif node_type == "demux":
+                elif node_type == "generator":
+                    if incoming_hole:
+                        counts["skipped"] += 1
+                        push_hole("value", "", incoming_hole)
+                    else:
+                        token = (cfg.get("token") or "").strip()
+                        generated = _resolve_dynamic_token(token) if token.startswith("$") else None
+                        if generated is None:
+                            message = f'"{token}" produced no value'
+                            counts["failed"] += 1
+                            push_hole("value", message)
+                            emit(_make_record(node, None, "failed", _iso_now(), 0, iteration=index, error=message))
+                        else:
+                            counts["ok"] += 1
+                            push_item("value", generated)
+
+                elif node_type == "mapper":
                     rows = cfg.get("rows") or []
                     if incoming_hole:
                         counts["skipped"] += 1
                         for r in rows:
-                            push_hole(demux_out_name(r.get("id") or ""), "", incoming_hole)
+                            push_hole(mapper_out_name(r.get("id") or ""), "", incoming_hole)
                     else:
                         value = values.get("object")
                         source = value["value"] if value and value.get("kind") == "item" else static_value("object")[1]
@@ -1151,11 +1197,11 @@ async def run_flow(
                         for r in rows:
                             found, extracted, _ = eval_json_path(r.get("path") or "", source)
                             if found:
-                                push_item(demux_out_name(r.get("id") or ""), extracted)
+                                push_item(mapper_out_name(r.get("id") or ""), extracted)
                             else:
                                 any_miss = True
                                 message = f'Path "{r.get("path")}" matched nothing'
-                                push_hole(demux_out_name(r.get("id") or ""), message)
+                                push_hole(mapper_out_name(r.get("id") or ""), message)
                                 emit(_make_record(
                                     node, None, "failed", _iso_now(), 0, iteration=index, error=message,
                                 ))
@@ -1180,6 +1226,11 @@ async def run_flow(
                         push_item("object", obj)
 
                 index += 1
+
+            # Latching is only known once the streams have ended, so record it here.
+            latched = [n for n in joiner.latched_inputs() if not is_control_port_name(n)]
+            if latched:
+                node_latched_inputs[node["id"]] = latched
 
             if node_type == "accumulator":
                 push_item("array", accumulated)
@@ -1222,6 +1273,7 @@ async def run_flow(
         "durationMs": int(_now_ms() - run_start),
         "nodeStatuses": node_statuses,
         "nodeItemCounts": node_item_counts,
+        "nodeLatchedInputs": node_latched_inputs,
     }
     if state.timeout_hit:
         summary["timeoutHit"] = True

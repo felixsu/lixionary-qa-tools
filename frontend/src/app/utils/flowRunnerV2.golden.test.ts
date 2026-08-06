@@ -100,6 +100,40 @@ describe("V2 golden fixtures", () => {
         expect(last?.outputs, `outputs of ${nodeName}`).toEqual(expectedOutputs);
       }
 
+      // Generated values are nondeterministic, so fixtures assert their shape.
+      // Patterns stay to constructs Python's `re` and JS RegExp read identically.
+      for (const [requestId, expectedCalls] of Object.entries(fixture.expected.bindingPatterns || {})) {
+        const seen = bindingsSeen.get(requestId) || [];
+        expect(seen.length, `call count for ${requestId}`).toBe((expectedCalls as unknown[]).length);
+        (expectedCalls as Record<string, string>[]).forEach((expectedBindings, call) => {
+          for (const [name, pattern] of Object.entries(expectedBindings)) {
+            expect(String(seen[call]?.[name]), `${requestId} call ${call} input ${name}`)
+              .toMatch(new RegExp(pattern));
+          }
+        });
+      }
+
+      // One generated value shared by several requests — the point of the block.
+      for (const rule of (fixture.expected.sameBindingAcross || []) as
+        { requests: string[]; call?: number; input: string }[]) {
+        const values = rule.requests.map((rid) => (bindingsSeen.get(rid) || [])[rule.call ?? 0]?.[rule.input]);
+        expect(new Set(values).size, `${rule.requests.join(" and ")} share ${rule.input}: ${values.join(", ")}`).toBe(1);
+      }
+
+      // A fresh value per item — every call must differ.
+      for (const rule of (fixture.expected.distinctBindings || []) as { request: string; input: string }[]) {
+        const values = (bindingsSeen.get(rule.request) || []).map((call) => call?.[rule.input]);
+        expect(new Set(values).size, `${rule.request} repeated ${rule.input}: ${values.join(", ")}`)
+          .toBe(values.length);
+      }
+
+      // Inputs that carried a single value and were reused for every item.
+      for (const [nodeName, expectedLatched] of Object.entries(fixture.expected.nodeLatchedInputs || {})) {
+        const nodeId = fixture.flow.nodes.find((n: { name: string; id: string }) => n.name === nodeName)?.id;
+        expect([...(summary.nodeLatchedInputs?.[nodeId] || [])].sort(), `latched inputs of ${nodeName}`)
+          .toEqual([...(expectedLatched as string[])].sort());
+      }
+
       // Per-node item tallies.
       for (const [nodeName, expectedCounts] of Object.entries(fixture.expected.nodeItemCounts || {})) {
         const nodeId = fixture.flow.nodes.find((n: { name: string; id: string }) => n.name === nodeName)?.id;

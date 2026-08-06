@@ -11,6 +11,7 @@ across nodes is nondeterministic, but each node's own sequence is not.
 
 import asyncio
 import json
+import re
 from pathlib import Path
 
 from services.flow_runner import FlowRunError
@@ -96,6 +97,43 @@ async def _replay_fixture(fixture):
         last = next(r for r in reversed(summary["records"]) if r["nodeName"] == node_name)
         assert last["outputs"] == expected_outputs, (
             f'{name}: outputs of {node_name} = {last["outputs"]!r}, expected {expected_outputs!r}'
+        )
+
+    # Generated values are nondeterministic, so fixtures assert their shape.
+    # Patterns stay to constructs `re` and JS RegExp read identically.
+    for rid, expected_calls in (expected.get("bindingPatterns") or {}).items():
+        seen = bindings_seen.get(rid) or []
+        assert len(seen) == len(expected_calls), (
+            f'{name}: {rid} called {len(seen)} times, expected {len(expected_calls)}'
+        )
+        for call, expected_bindings in enumerate(expected_calls):
+            for key, pattern in expected_bindings.items():
+                actual = seen[call].get(key)
+                assert actual is not None and re.match(pattern, str(actual)), (
+                    f'{name}: {rid} call {call} input {key} = {actual!r}, expected to match {pattern!r}'
+                )
+
+    # One generated value shared by several requests — the point of the block.
+    for rule in expected.get("sameBindingAcross") or []:
+        call, key = rule.get("call", 0), rule["input"]
+        values = [(bindings_seen.get(rid) or [])[call].get(key) for rid in rule["requests"]]
+        assert len(set(values)) == 1, (
+            f'{name}: {rule["requests"]} received different {key} values: {values!r}'
+        )
+
+    # A fresh value per item — every call must differ.
+    for rule in expected.get("distinctBindings") or []:
+        key = rule["input"]
+        values = [call.get(key) for call in (bindings_seen.get(rule["request"]) or [])]
+        assert len(set(values)) == len(values), (
+            f'{name}: {rule["request"]} repeated a {key} value across items: {values!r}'
+        )
+
+    for node_name, expected_latched in (expected.get("nodeLatchedInputs") or {}).items():
+        node_id = next(n["id"] for n in fixture["flow"]["nodes"] if n["name"] == node_name)
+        actual_latched = (summary.get("nodeLatchedInputs") or {}).get(node_id) or []
+        assert sorted(actual_latched) == sorted(expected_latched), (
+            f'{name}: latched inputs of {node_name} = {actual_latched!r}, expected {expected_latched!r}'
         )
 
     for node_name, expected_counts in (expected.get("nodeItemCounts") or {}).items():
@@ -185,6 +223,58 @@ def test_json_path_normalization():
     assert found is False and err == "empty path"
 
 
+def test_generator_token_grammar():
+    """Parity with frontend/src/app/utils/generatorsV2.test.ts — the two engines
+    must read the same token the same way. Date cases pin an exact instant by
+    comparing against the same arithmetic, since the backend has no clock hook."""
+    from datetime import datetime, timedelta, timezone
+
+    from services.executor import _resolve_dynamic_token, is_known_dynamic_token
+
+    now = datetime.now(timezone.utc)
+    # Default format and offsets, computed the same way the caller would.
+    assert _resolve_dynamic_token("$date") == now.strftime("%Y-%m-%d")
+    assert _resolve_dynamic_token("$date:+1d") == (now + timedelta(days=1)).strftime("%Y-%m-%d")
+    assert _resolve_dynamic_token("$date:-7d") == (now - timedelta(days=7)).strftime("%Y-%m-%d")
+    assert _resolve_dynamic_token("$date:DD/MM/YY") == now.strftime("%d/%m/%y")
+    # An offset chain applies before the format.
+    shifted = now + timedelta(days=1, hours=-2)
+    assert _resolve_dynamic_token("$date:+1d-2h:YYYY-MM-DD HH:mm") == shifted.strftime("%Y-%m-%d %H:%M")
+    # Epoch output, seconds and milliseconds.
+    assert abs(int(_resolve_dynamic_token("$date:epoch")) - int(now.timestamp())) <= 1
+    assert len(_resolve_dynamic_token("$date:epochms")) == 13
+    # Every token substituted exactly once.
+    assert re.match(r"^\d{14}$", _resolve_dynamic_token("$date:YYYYMMDDHHmmss"))
+    assert _resolve_dynamic_token("$date:[on] YYYY") == f"[on] {now.strftime('%Y')}"
+
+    for _ in range(40):
+        assert re.match(r"^[1-9]\d{3}$", _resolve_dynamic_token("$randomInt:4"))
+        assert re.match(r"^\d$", _resolve_dynamic_token("$randomInt:1"))
+        assert 5 <= int(_resolve_dynamic_token("$randomInt:5:7")) <= 7
+    assert 0 <= int(_resolve_dynamic_token("$randomInt")) <= 999
+    assert _resolve_dynamic_token("$randomInt:-3:-3") == "-3"
+    for bad in ("$randomInt:abc", "$randomInt:0", "$randomInt:9:2", "$randomInt:1:2:3"):
+        assert _resolve_dynamic_token(bad) is None, bad
+
+    assert re.match(r"^[a-z]+\.[a-z]+\d{1,3}@example\.com$", _resolve_dynamic_token("$randomEmail"))
+    assert re.match(
+        r"^[a-z]+\.[a-z]+\d{1,3}@lixionary\.test$", _resolve_dynamic_token("$randomEmail:lixionary.test")
+    )
+    assert re.match(r"^[A-Z][a-z]+$", _resolve_dynamic_token("$randomFirstName"))
+    assert re.match(r"^[A-Z][a-z]+ [A-Z][a-z]+$", _resolve_dynamic_token("$randomFullName"))
+
+    assert _resolve_dynamic_token("$nope") is None
+    # Generator names are case-insensitive in both engines.
+    assert re.match(r"^[A-Z][a-z]+$", _resolve_dynamic_token("$RANDOMfirstNAME"))
+
+    # Known-token checks look at the NAME only, so a bad argument is a run-time
+    # failure rather than an edit-time rejection — matching isKnownGeneratorToken.
+    for good in ("$date", "$date:+1d:YYYY", "$randomInt:4", "$randomEmail", "$latitude", "$randomInt:abc"):
+        assert is_known_dynamic_token(good) is True, good
+    for bad in ("$teleport", "randomInt:4", ""):
+        assert is_known_dynamic_token(bad) is False, bad
+
+
 def test_compare_values_operators():
     assert compare_values("equals", 200, "200") is True      # numeric coercion
     assert compare_values("not_equals", "a", "b") is True
@@ -210,8 +300,8 @@ def test_parse_handle_and_ports():
     assert [p["id"] for p in node_ports(_req_node("n", "R", useEach=True), collections)] == [
         "after", "done", "in:ctl:each", "in:x", "out:v",
     ]
-    demux = _node("d", "demux", {"rows": [{"id": "r1", "path": "$.a"}, {"id": "r2", "path": "$.b"}]})
-    assert [p["id"] for p in node_ports(demux, []) if p["direction"] == "out" and p["kind"] == "data"] == [
+    mapper = _node("d", "mapper", {"rows": [{"id": "r1", "path": "$.a"}, {"id": "r2", "path": "$.b"}]})
+    assert [p["id"] for p in node_ports(mapper, []) if p["direction"] == "out" and p["kind"] == "data"] == [
         "out:o:r1", "out:o:r2",
     ]
 

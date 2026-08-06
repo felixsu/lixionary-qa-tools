@@ -73,6 +73,9 @@ export interface FlowRunSummary {
   nodeStatuses?: Record<string, "success" | "failed" | "skipped" | "partial">;
   // V2 streaming runs: per-node item tallies (absent on V1 runs).
   nodeItemCounts?: Record<string, { ok: number; failed: number; skipped: number }>;
+  // V2 streaming runs: per-node input names that carried a single value and
+  // were reused for every item (see the scalar latch in streamV2.ts).
+  nodeLatchedInputs?: Record<string, string[]>;
   runSignature?: string; // structuralSignature of the graph that ran
   contextTruncated?: boolean; // set only by persistLastRun when context was too large to store
 }
