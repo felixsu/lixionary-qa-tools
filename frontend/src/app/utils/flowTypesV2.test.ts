@@ -133,7 +133,20 @@ describe("typed hardcoded inputs", () => {
 describe("nodePorts", () => {
   it("derives request ports from the saved request", () => {
     const ports = nodePorts(requestNode("n1"), collections);
-    expect(ports.map((p) => p.id)).toEqual(["after", "done", "in:orderId", "out:uuid"]);
+    expect(ports.map((p) => p.id)).toEqual(["after", "done", "in:ctl:each", "in:orderId", "out:uuid"]);
+  });
+
+  it("gives every request an `each` driver, namespaced so request tokens can't collide", () => {
+    const collides = [
+      { id: "col", requests: [savedRequest("reqEach", { url: "http://test/{{each}}" })] },
+    ] as unknown as Parameters<typeof nodePorts>[1];
+    const ids = nodePorts(requestNode("n1", "reqEach"), collides).map((p) => p.id);
+    // the request's own {{each}} token and the repeat driver are distinct ports
+    expect(ids).toContain("in:each");
+    expect(ids).toContain("in:ctl:each");
+    const driver = nodePorts(requestNode("n2"), collections).find((p) => p.id === "in:ctl:each")!;
+    expect(portLabel(driver)).toBe("each");
+    expect(driver.widget).toBe("none"); // drives execution, never hardcoded
   });
 
   it("adds verify ports only when verification is enabled", () => {

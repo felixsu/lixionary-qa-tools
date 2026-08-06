@@ -80,8 +80,8 @@ import {
 } from "./serialize";
 
 const PALETTE: { type: FlowNodeTypeV2; label: string; icon: typeof Send; hint: string }[] = [
-  { type: "request", label: "Request", icon: Send, hint: "Run a saved API request — optionally verify and retry the response" },
-  { type: "arrayEmit", label: "Array Emit", icon: Rows3, hint: "Turn an array into a stream: one item at a time" },
+  { type: "request", label: "Request", icon: Send, hint: "Run a saved API request — wire a stream to `each` to repeat it; optionally verify and retry" },
+  { type: "arrayEmit", label: "Array Emit", icon: Rows3, hint: "Turn an array — or a repeat count — into a stream, one item at a time" },
   { type: "accumulator", label: "Accumulator", icon: Layers, hint: "Collect a whole stream back into one array" },
   { type: "demux", label: "Demux", icon: Split, hint: "Split an object into separate outputs by JSONPath" },
   { type: "mux", label: "Mux", icon: Combine, hint: "Combine several inputs into one object" },
@@ -1017,34 +1017,70 @@ function InspectorV2({
           />
         )}
 
-        {fn.type === "arrayEmit" && (
+        {fn.type === "arrayEmit" && (() => {
+          const items = (fn.config as ArrayEmitNodeConfigV2).staticItems || { type: "json" as const, value: "[]" };
+          const isCount = items.type === "number";
+          return (
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-stone">Items (max {EMIT_MAX_ITEMS} per run)</label>
             {connectedIn("in:array") ? (
               <span className="text-[11px] text-mute">
-                Items arrive on the <span className="font-mono">array</span> connection. Disconnect it to use a static
-                array instead.
+                Items arrive on the <span className="font-mono">array</span> connection. Disconnect it to set a repeat
+                count or static array instead.
               </span>
             ) : (
-              <div className="h-[120px] rounded-lg overflow-hidden border border-line">
-                <Editor
-                  height="100%"
-                  language="json"
-                  theme="vs-dark"
-                  value={(fn.config as ArrayEmitNodeConfigV2).staticItems?.value || "[]"}
-                  onChange={(val) =>
-                    updateConfig({ staticItems: { type: "json", value: val || "[]" } } as ArrayEmitNodeConfigV2)
+              <>
+                <Dropdown
+                  value={isCount ? "count" : "array"}
+                  onChange={(v) =>
+                    updateConfig({
+                      staticItems: v === "count" ? { type: "number", value: "3" } : { type: "json", value: "[]" },
+                    } as ArrayEmitNodeConfigV2)
                   }
-                  options={{ minimap: { enabled: false }, fontSize: 12, lineNumbers: "off", scrollbar: { vertical: "auto", horizontal: "hidden" } }}
+                  widthClass="w-full"
+                  options={[
+                    { value: "count", label: "Repeat a number of times" },
+                    { value: "array", label: "Static JSON array" },
+                  ]}
                 />
-              </div>
+                {isCount ? (
+                  <input
+                    type="number"
+                    min={1}
+                    max={EMIT_MAX_ITEMS}
+                    value={items.value}
+                    onChange={(e) =>
+                      updateConfig({
+                        staticItems: { type: "number", value: e.target.value },
+                      } as ArrayEmitNodeConfigV2)
+                    }
+                    className={inputCls}
+                  />
+                ) : (
+                  <div className="h-[120px] rounded-lg overflow-hidden border border-line">
+                    <Editor
+                      height="100%"
+                      language="json"
+                      theme="vs-dark"
+                      value={items.value || "[]"}
+                      onChange={(val) =>
+                        updateConfig({ staticItems: { type: "json", value: val || "[]" } } as ArrayEmitNodeConfigV2)
+                      }
+                      options={{ minimap: { enabled: false }, fontSize: 12, lineNumbers: "off", scrollbar: { vertical: "auto", horizontal: "hidden" } }}
+                    />
+                  </div>
+                )}
+              </>
             )}
             <span className="text-[11px] text-mute">
               Emits one item at a time on <span className="font-mono">item</span> (with its position on{" "}
-              <span className="font-mono">index</span>), then fires <span className="font-mono">done</span>.
+              <span className="font-mono">index</span>), then fires <span className="font-mono">done</span>. To repeat a
+              request that takes no inputs, wire <span className="font-mono">index</span> into its{" "}
+              <span className="font-mono">each</span> input.
             </span>
           </div>
-        )}
+          );
+        })()}
 
         {fn.type === "accumulator" && (
           <span className="text-[11px] text-mute">

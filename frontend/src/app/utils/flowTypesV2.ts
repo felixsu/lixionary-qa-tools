@@ -27,6 +27,7 @@
 //   demux output      "out:o:<rowId>"
 //   mux input         "in:i:<rowId>"
 //   verify expected   "in:cmp:<checkId>"
+//   repeat driver     "in:ctl:each"
 
 import type { Collection } from "../context/AppContext";
 import { lookupRequest } from "./flowRunner";
@@ -69,6 +70,12 @@ export const dataOutHandle = (name: string): string => `out:${name}`;
 export const demuxOutName = (rowId: string): string => `o:${rowId}`;
 export const muxInName = (rowId: string): string => `i:${rowId}`;
 export const verifyCheckPortName = (checkId: string): string => `cmp:${checkId}`;
+
+// Ports the engine drives execution with but never passes to the request.
+// Namespaced so a saved request declaring a {{each}} token can't collide.
+export const CONTROL_PORT_PREFIX = "ctl:";
+export const EACH_PORT_NAME = `${CONTROL_PORT_PREFIX}each`;
+export const isControlPortName = (name: string): boolean => name.startsWith(CONTROL_PORT_PREFIX);
 
 export type ParsedHandle =
   | { kind: "data"; direction: "in" | "out"; name: string }
@@ -176,7 +183,9 @@ export interface DelayNodeConfigV2 {
 }
 
 export interface ArrayEmitNodeConfigV2 {
-  // Used when "in:array" is unconnected.
+  // Used when "in:array" is unconnected. Its declared type selects the mode:
+  //   "json"   → emit the elements of this array
+  //   "number" → emit 0, 1, … N-1 (a plain repeat count)
   staticItems?: StaticInputV2;
 }
 
@@ -312,9 +321,21 @@ export const nodePorts = (node: FlowNodeV2, collections: Collection[]): PortSpec
               dataType: "any",
               widget: "none",
             }));
+      // Connecting a stream here runs the request once per item without the
+      // value becoming a request input — the only way to repeat a request that
+      // declares no {{tokens}} of its own.
+      const each: PortSpec = {
+        id: dataInHandle(EACH_PORT_NAME),
+        name: EACH_PORT_NAME,
+        label: "each",
+        kind: "data",
+        direction: "in",
+        dataType: "any",
+        widget: "none",
+      };
       // No "passed" output: an item whose checks never pass is failed and
       // dropped, so such a port could only ever emit `true`.
-      return [...triggerPorts(), ...inputs, ...checkPorts, ...outputs];
+      return [...triggerPorts(), each, ...inputs, ...checkPorts, ...outputs];
     }
     case "delay":
       // The passthrough port is what lets a Delay pace a stream (rate limiting);
@@ -578,16 +599,29 @@ export const validateFlowV2 = (flow: FlowV2, collections: Collection[]): FlowIss
       case "arrayEmit": {
         const cfg = node.config as ArrayEmitNodeConfigV2;
         if (!connectedIn("array")) {
-          const parsed = parseStaticInput(cfg.staticItems || emptyStaticInput("json"));
-          if (!parsed.ok || !Array.isArray(parsed.value))
-            error(`"${node.name}": connect the array input or provide a static JSON array`, {
+          const items = cfg.staticItems || emptyStaticInput("json");
+          const parsed = parseStaticInput(items);
+          if (items.type === "number") {
+            // Count mode: emit 0 … N-1.
+            const count = parsed.ok ? Number(parsed.value) : NaN;
+            if (!Number.isInteger(count) || count < 1)
+              error(`"${node.name}": the repeat count must be a whole number of at least 1`, {
+                nodeId: node.id,
+              });
+            else if (count > EMIT_MAX_ITEMS)
+              error(`"${node.name}" repeats ${count} times, over the maximum of ${EMIT_MAX_ITEMS}`, {
+                nodeId: node.id,
+              });
+          } else if (!parsed.ok || !Array.isArray(parsed.value)) {
+            error(`"${node.name}": connect the array input, or set a repeat count or static JSON array`, {
               nodeId: node.id,
             });
-          else if (parsed.value.length > EMIT_MAX_ITEMS)
+          } else if (parsed.value.length > EMIT_MAX_ITEMS) {
             error(
               `"${node.name}" emits ${parsed.value.length} items, over the maximum of ${EMIT_MAX_ITEMS}`,
               { nodeId: node.id }
             );
+          }
         }
         break;
       }

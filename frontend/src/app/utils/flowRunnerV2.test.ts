@@ -248,6 +248,58 @@ describe("streams", () => {
   });
 });
 
+describe("repeating a request that takes no inputs", () => {
+  it("runs once per item of whatever drives `each`, sending no extra parameter", async () => {
+    const h = makeHarness({ PING: { handler: () => ok({ seq: "s" }), outputs: ["seq"] } });
+    const f = makeFlow(
+      [emitNode("emit", ["a", "b", "c"]), req("ping", "PING")],
+      [edge("emit", "out:index", "ping", "in:ctl:each")]
+    );
+    const summary = await runFlowV2(f, h.deps, h.cb).done;
+
+    expect(summary.status).toBe("success");
+    expect(h.calls.get("PING")).toBe(3);
+    // the driving value steers execution only — it is not a request input
+    expect(h.inputsOf("PING")).toEqual([{}, {}, {}]);
+    expect(h.recordsOf("ping").map((r) => r.iteration)).toEqual([0, 1, 2]);
+  });
+
+  it("counts from a repeat count without a static array", async () => {
+    const h = makeHarness({ PING: { handler: () => ok(), outputs: [] } });
+    const f = makeFlow(
+      [node("emit", "arrayEmit", { staticItems: { type: "number", value: "4" } }), req("ping", "PING")],
+      [edge("emit", "out:index", "ping", "in:ctl:each")]
+    );
+    const summary = await runFlowV2(f, h.deps, h.cb).done;
+    expect(summary.status).toBe("success");
+    expect(h.calls.get("PING")).toBe(4);
+  });
+
+  it("emits 0…N-1 in count mode", async () => {
+    const h = makeHarness({ SEE: { handler: () => ok(), url: "http://test/{{n}}" } });
+    const f = makeFlow(
+      [node("emit", "arrayEmit", { staticItems: { type: "number", value: "3" } }), req("see", "SEE")],
+      [edge("emit", "out:item", "see", "in:n")]
+    );
+    await runFlowV2(f, h.deps, h.cb).done;
+    expect(h.inputsOf("SEE").map((b) => b.n)).toEqual(["0", "1", "2"]);
+  });
+
+  it("skips the execution when the driving item failed upstream", async () => {
+    const h = makeHarness({
+      SRC: { handler: (c) => (c === 1 ? httpError() : ok({ v: "v" })), url: "http://test/{{x}}", outputs: ["v"] },
+      PING: { handler: () => ok(), outputs: [] },
+    });
+    const f = makeFlow(
+      [emitNode("emit", ["a", "b", "c"]), req("src", "SRC"), req("ping", "PING")],
+      [edge("emit", "out:item", "src", "in:x"), edge("src", "out:v", "ping", "in:ctl:each")]
+    );
+    await runFlowV2(f, h.deps, h.cb).done;
+    expect(h.calls.get("PING")).toBe(2); // the failed item never triggered a call
+    expect(h.recordsOf("ping").map((r) => r.status)).toEqual(["success", "skipped", "success"]);
+  });
+});
+
 describe("zip and latch", () => {
   it("reuses a single value across every item of a stream", async () => {
     const h = makeHarness({
