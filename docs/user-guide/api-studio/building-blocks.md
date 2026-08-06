@@ -6,12 +6,11 @@ The left **Building blocks** panel lists the seven block types. Drag a card onto
 
 | Block | What it does | Outputs |
 | :---- | :---- | :---- |
-| **Request** | Runs a saved API Explorer request, optionally verifying and retrying the response | One dot per declared output (+ `passed` when verifying) |
+| **Request** | Runs a saved API Explorer request, optionally verifying and retrying the response | One dot per declared output |
 | **Array Emit** | Turns an array into a stream: emits its elements one at a time | `item`, `index` |
 | **Accumulator** | Collects a whole stream back into a single array | `array`, `count` |
 | **Demux** | Splits one object into several outputs, each with its own JSONPath | One dot per configured path |
 | **Mux** | Combines several inputs into one object | `object` |
-| **Duplicator** | Copies one value to several outputs — how you fan out | One dot per copy |
 | **Delay** | Waits a fixed number of milliseconds | `value` (passthrough) |
 
 New blocks are auto-named after their type (`request`, `arrayEmit`, `request_2`, …); rename them in the inspector. Names appear on the block and in run records; duplicates are auto-suffixed when you save.
@@ -42,7 +41,7 @@ Port lists are derived live from your collections: editing a saved request updat
 ## **Connections are one-to-one**
 
 * Each data output feeds **exactly one** input, and each data input accepts **exactly one** connection. Dropping a second wire on either is refused with a hint.
-* To send one value to several places, add a **Duplicator**. To combine several values, add a **Mux**. Nothing is ever implicitly merged, so every wire has one unambiguous meaning.
+* To send one value to several places, just drag a second connection from the same output. To combine several values into one, add a **Mux** — values are never implicitly merged, so every input has one unambiguous source.
 * Trigger diamonds are the exception — they're events, not data, so they may fan in and out freely.
 * Data dots only connect to data dots, diamonds only to diamonds; cycles are refused while dragging.
 * Click a connection to give it an optional **JSONPath** applied to every item (e.g. `$.id` to pass just the id), or to delete it.
@@ -62,7 +61,7 @@ If two genuinely different-length streams meet at one block, the run fails with 
 
 If one item fails — an HTTP error that exhausts its retries, a JSONPath that matches nothing — that item drops out and **the remaining items keep flowing**. The block finishes with a *partial* status showing how many items failed, and the run is reported as failed.
 
-The failed item keeps its **position** as it travels, so branches that fork through a Duplicator and rejoin at a Mux stay aligned — item 3 on one branch can never end up paired with item 2 on the other. An Accumulator simply leaves failed positions out of its array (and reports how many it dropped).
+The failed item keeps its **position** as it travels, so branches that fork from one output and rejoin at a Mux stay aligned — item 3 on one branch can never end up paired with item 2 on the other. An Accumulator simply leaves failed positions out of its array (and reports how many it dropped).
 
 ## **Canvas interactions & shortcuts**
 
@@ -88,11 +87,10 @@ The failed item keeps its **position** as it travels, so branches that fork thro
 
 No configuration. It collects its input stream and emits one array plus a count when the stream ends.
 
-### **Demux / Mux / Duplicator**
+### **Demux / Mux**
 
 * **Demux**: add one output row per **JSONPath** (`$.name`, `$.color`). Each output emits its own extraction from the same object, so one object in becomes several values out. A path that matches nothing holes only *that* output.
 * **Mux**: add one input row per **field name**; each item becomes one object using those names as keys.
-* **Duplicator**: set the number of identical outputs (2–8).
 
 ### **Delay**
 

@@ -44,10 +44,9 @@ import { runFlowV2 } from "../../../utils/flowRunnerV2";
 import {
   defaultConfigForTypeV2,
   defaultVerifyConfig,
-  DUPLICATOR_MAX_OUTPUTS,
-  DUPLICATOR_MIN_OUTPUTS,
   EMIT_MAX_ITEMS,
   flowErrorsV2,
+  migrateFlowV2,
   parseHandle,
   portById,
   portLabel,
@@ -55,7 +54,6 @@ import {
   type ArrayEmitNodeConfigV2,
   type DelayNodeConfigV2,
   type DemuxNodeConfigV2,
-  type DuplicatorNodeConfigV2,
   type FlowEdgeV2,
   type FlowNodeTypeV2,
   type FlowNodeV2,
@@ -73,7 +71,6 @@ import { NodeActionsContext, studioNodeTypesV2, type NodeActions } from "./nodes
 import {
   decorateV2,
   flowSignatureV2,
-  partitionUnknownNodes,
   serializeEdgesV2,
   serializeNodesV2,
   toRfEdgeV2,
@@ -88,7 +85,6 @@ const PALETTE: { type: FlowNodeTypeV2; label: string; icon: typeof Send; hint: s
   { type: "accumulator", label: "Accumulator", icon: Layers, hint: "Collect a whole stream back into one array" },
   { type: "demux", label: "Demux", icon: Split, hint: "Split an object into separate outputs by JSONPath" },
   { type: "mux", label: "Mux", icon: Combine, hint: "Combine several inputs into one object" },
-  { type: "duplicator", label: "Duplicator", icon: Copy, hint: "Send one output to several places" },
   { type: "delay", label: "Delay", icon: Timer, hint: "Wait a fixed number of ms — pace a stream or just pause" },
 ];
 
@@ -145,17 +141,18 @@ function StudioEditorV2({ selectedFlow, onSelectFlow }: EditorV2Props) {
       for (const [nodeId, status] of Object.entries(lastRun?.nodeStatuses || {})) {
         statusByNode.set(nodeId, status as NodeRunStatus);
       }
-      // Blocks from the short-lived loop-container shape are stripped rather
-      // than migrated — nothing shipped with them.
-      const cleaned = partitionUnknownNodes(flow.nodes || [], flow.edges || []);
-      if (cleaned.droppedCount) {
+      // Older shapes are rewritten on the way in: a Duplicator becomes direct
+      // fan-out from whatever fed it. Left dirty so the cleanup is saved
+      // deliberately; reloading before saving simply rewrites it again.
+      const migrated = migrateFlowV2(flow.nodes || [], flow.edges || []);
+      if (migrated.changed) {
         showToast(
-          `Removed ${cleaned.droppedCount} unsupported block${cleaned.droppedCount === 1 ? "" : "s"} from an older format — save to keep this cleanup`,
+          `Replaced ${migrated.changed} Duplicator block${migrated.changed === 1 ? "" : "s"} with direct connections — save to keep this`,
           { type: "info" }
         );
       }
-      setNodes(toStudioNodesV2(cleaned.nodes, (id) => statusByNode.get(id) || "idle", collections));
-      setEdges(cleaned.edges.map(toRfEdgeV2));
+      setNodes(toStudioNodesV2(migrated.nodes, (id) => statusByNode.get(id) || "idle", collections));
+      setEdges(migrated.edges.map(toRfEdgeV2));
       setSavedSignature(flowSignatureV2(flow.nodes || [], flow.edges || []));
       setSelectedNodeId(null);
       setSelectedEdgeId(null);
@@ -290,9 +287,7 @@ function StudioEditorV2({ selectedFlow, onSelectFlow }: EditorV2Props) {
       };
       if (!conn.source || !conn.target || !conn.sourceHandle || !conn.targetHandle) return;
       const reason = connectionRejection(conn as Connection, nodes, edges);
-      if (reason === "output-taken")
-        showToast("That output already feeds an input — add a Duplicator to send it to several places", { type: "info" });
-      else if (reason === "input-taken")
+      if (reason === "input-taken")
         showToast("That input is already connected — an input takes exactly one connection", { type: "info" });
       else if (reason === "cycle") showToast("That connection would create a loop in the graph", { type: "info" });
     },
@@ -772,9 +767,9 @@ function StudioEditorV2({ selectedFlow, onSelectFlow }: EditorV2Props) {
           ))}
           <p className="text-[11px] text-mute px-1 mt-2 leading-relaxed">
             A connection carries a <strong>stream</strong> of items, ending with a done signal — so{" "}
-            <span className="font-mono">Array Emit → Request → Accumulator</span> is a loop. Each output feeds exactly
-            one input; use a <strong>Duplicator</strong> to fan out. The small diamonds order blocks without passing
-            data.
+            <span className="font-mono">Array Emit → Request → Accumulator</span> is a loop. An output can feed as many
+            inputs as you like; an input takes one connection (use <strong>Mux</strong> to combine). The small diamonds
+            order blocks without passing data.
           </p>
         </div>
 
@@ -1085,31 +1080,6 @@ function InspectorV2({
             setValue={(row, value) => ({ ...row, field: value })}
             hint="Builds one object per item, using each input's field name as the key."
           />
-        )}
-
-        {fn.type === "duplicator" && (
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-stone">Outputs</label>
-            <input
-              type="number"
-              min={DUPLICATOR_MIN_OUTPUTS}
-              max={DUPLICATOR_MAX_OUTPUTS}
-              value={(fn.config as DuplicatorNodeConfigV2).count}
-              onChange={(e) =>
-                updateConfig({
-                  count: Math.min(
-                    DUPLICATOR_MAX_OUTPUTS,
-                    Math.max(DUPLICATOR_MIN_OUTPUTS, parseInt(e.target.value, 10) || DUPLICATOR_MIN_OUTPUTS)
-                  ),
-                } as DuplicatorNodeConfigV2)
-              }
-              className={inputCls}
-            />
-            <span className="text-[11px] text-mute">
-              Copies each item to every output. This is how a value reaches more than one block — outputs connect
-              one-to-one.
-            </span>
-          </div>
         )}
 
         {/* Ports overview */}

@@ -7,7 +7,6 @@ import type { Collection } from "../../../context/AppContext";
 import { lookupRequest, type NodeRunStatus } from "../../../utils/flowRunner";
 import {
   edgeKindV2,
-  isKnownNodeTypeV2,
   nodePorts,
   type FlowEdgeV2,
   type FlowNodeV2,
@@ -38,7 +37,6 @@ export const RF_TYPE: Record<FlowNodeTypeV2, string> = {
   accumulator: "v2accumulator",
   demux: "v2demux",
   mux: "v2mux",
-  duplicator: "v2duplicator",
 };
 
 export const decorateV2 = (
@@ -83,22 +81,6 @@ export const serializeNodesV2 = (nodes: StudioNodeV2[]): FlowNodeV2[] =>
     ...n.data.flowNode,
     position: { x: n.position.x, y: n.position.y },
   }));
-
-/** Nodes from an older shape of the format (the short-lived loop container).
- * Nothing shipped with those, so the editor strips them on load rather than
- * carrying migration code. */
-export const partitionUnknownNodes = (
-  flowNodes: FlowNodeV2[],
-  edges: FlowEdgeV2[]
-): { nodes: FlowNodeV2[]; edges: FlowEdgeV2[]; droppedCount: number } => {
-  const dropped = new Set(flowNodes.filter((n) => !isKnownNodeTypeV2(n.type)).map((n) => n.id));
-  if (!dropped.size) return { nodes: flowNodes, edges, droppedCount: 0 };
-  return {
-    nodes: flowNodes.filter((n) => !dropped.has(n.id)),
-    edges: edges.filter((e) => !dropped.has(e.source) && !dropped.has(e.target)),
-    droppedCount: dropped.size,
-  };
-};
 
 // ---- edges ------------------------------------------------------------------
 

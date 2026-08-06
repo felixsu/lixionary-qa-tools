@@ -50,7 +50,7 @@ Request **test scripts** do run during flows, but their results appear only in t
 
 ## **CSV Report**
 
-Click **Report** (enabled once a run has records) to download `<flowName>-run-<timestamp>.csv` — one row per record: every request item, every verification attempt, and every skipped step. Plumbing blocks (Demux, Mux, Duplicator, Accumulator, Array Emit) contribute one summary row plus a row per failure, so a long stream doesn't bury the report. Rows are ordered by `started_at`. Columns:
+Click **Report** (enabled once a run has records) to download `<flowName>-run-<timestamp>.csv` — one row per record: every request item, every verification attempt, and every skipped step. Plumbing blocks (Demux, Mux, Accumulator, Array Emit) contribute one summary row plus a row per failure, so a long stream doesn't bury the report. Rows are ordered by `started_at`. Columns:
 
 | Column | Contents |
 | :---- | :---- |

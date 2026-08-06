@@ -44,11 +44,11 @@ import {
 } from "./streamV2";
 import {
   demuxOutName,
-  duplicatorOutName,
   edgeKindV2,
   EMIT_MAX_ITEMS,
   emptyStaticInput,
   flowErrorsV2,
+  migrateFlowV2,
   muxInName,
   parseHandle,
   parseStaticInput,
@@ -57,7 +57,6 @@ import {
   type ArrayEmitNodeConfigV2,
   type DelayNodeConfigV2,
   type DemuxNodeConfigV2,
-  type DuplicatorNodeConfigV2,
   type FlowEdgeV2,
   type FlowNodeConfigV2,
   type FlowNodeV2,
@@ -131,7 +130,14 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
       cb.onRecord(record);
     };
 
-    const issues = flowErrorsV2(validateFlowV2(flow, deps.collections));
+    // Rewrite blocks from older shapes (a Duplicator becomes direct fan-out)
+    // so a stored flow runs the same whether or not it has been re-saved.
+    const migrated = migrateFlowV2(flow.nodes, flow.edges);
+    const graph: FlowV2 = migrated.changed
+      ? { ...flow, nodes: migrated.nodes, edges: migrated.edges }
+      : flow;
+
+    const issues = flowErrorsV2(validateFlowV2(graph, deps.collections));
     if (issues.length) throw new Error(issues.map((i) => i.message).join("; "));
 
     const nodeStatuses: Record<string, "success" | "failed" | "skipped" | "partial"> = {};
@@ -141,8 +147,8 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
       cb.onNodeStatus(nodeId, status);
     };
 
-    const dataEdges = flow.edges.filter((e) => edgeKindV2(e) === "data");
-    const triggerEdges = flow.edges.filter((e) => edgeKindV2(e) === "trigger");
+    const dataEdges = graph.edges.filter((e) => edgeKindV2(e) === "data");
+    const triggerEdges = graph.edges.filter((e) => edgeKindV2(e) === "trigger");
     for (const e of dataEdges) channels.set(e.id, new Channel());
 
     // ---- trigger gates ------------------------------------------------------
@@ -157,7 +163,7 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
       settled: boolean;
     }
     const gates = new Map<string, Gate>();
-    for (const node of flow.nodes) {
+    for (const node of graph.nodes) {
       const remaining = triggerEdges.filter((e) => e.target === node.id).length;
       const gate: Gate = {
         remaining,
@@ -201,12 +207,17 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
       }
       return map;
     };
-    const outputEdgesOf = (nodeId: string): Map<string, FlowEdgeV2> => {
-      const map = new Map<string, FlowEdgeV2>();
+    // An output may feed several inputs; every branch gets the same item at the
+    // same position, which is what keeps forked streams aligned when they rejoin.
+    const outputEdgesOf = (nodeId: string): Map<string, FlowEdgeV2[]> => {
+      const map = new Map<string, FlowEdgeV2[]>();
       for (const e of dataEdges) {
         if (e.source !== nodeId) continue;
         const parsed = parseHandle(e.sourceHandle);
-        if (parsed?.kind === "data") map.set(parsed.name, e); // one edge per output (validated)
+        if (parsed?.kind !== "data") continue;
+        const list = map.get(parsed.name);
+        if (list) list.push(e);
+        else map.set(parsed.name, [e]);
       }
       return map;
     };
@@ -222,22 +233,26 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
       const outCounters = new Map<string, number>();
 
       const push = (portName: string, build: (index: number) => StreamMsg) => {
-        const edge = outEdges.get(portName);
-        if (!edge) return; // nothing listening on this port
+        const portEdges = outEdges.get(portName);
+        if (!portEdges?.length) return; // nothing listening on this port
+        // One counter per PORT, not per connection: every branch sees the same
+        // position, so a hole on one branch lines up with its twin on another.
         const index = outCounters.get(portName) ?? 0;
         outCounters.set(portName, index + 1);
         const msg = build(index);
-        // A per-connection JSONPath projection applies to real items only.
-        if (msg.kind === "item" && edge.path) {
-          const res = evalJsonPath(edge.path, msg.value);
-          channels.get(edge.id)!.push(
-            res.found
-              ? makeItem(index, res.value)
-              : hole(index, { nodeId: node.id, nodeName: node.name }, `Connection path "${edge.path}" matched nothing`)
-          );
-          return;
+        for (const edge of portEdges) {
+          // A per-connection JSONPath projection applies to real items only.
+          if (msg.kind === "item" && edge.path) {
+            const res = evalJsonPath(edge.path, msg.value);
+            channels.get(edge.id)!.push(
+              res.found
+                ? makeItem(index, res.value)
+                : hole(index, { nodeId: node.id, nodeName: node.name }, `Connection path "${edge.path}" matched nothing`)
+            );
+            continue;
+          }
+          channels.get(edge.id)!.push(msg);
         }
-        channels.get(edge.id)!.push(msg);
       };
       const pushItem = (portName: string, value: unknown) => push(portName, (i) => makeItem(i, value));
       const pushHole = (portName: string, error: string, origin?: HoleMsg) =>
@@ -247,12 +262,15 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
             : hole(i, { nodeId: node.id, nodeName: node.name }, error)
         );
       const closeAll = () => {
-        for (const [portName, edge] of outEdges) {
-          channels.get(edge.id)!.push({ kind: "eos", count: outCounters.get(portName) ?? 0 });
+        for (const [portName, portEdges] of outEdges) {
+          const count = outCounters.get(portName) ?? 0;
+          for (const edge of portEdges) channels.get(edge.id)!.push({ kind: "eos", count });
         }
       };
       const abortAll = (reason: string) => {
-        for (const [, edge] of outEdges) channels.get(edge.id)!.push({ kind: "abort", reason });
+        for (const portEdges of outEdges.values()) {
+          for (const edge of portEdges) channels.get(edge.id)!.push({ kind: "abort", reason });
+        }
       };
 
       // Gate on incoming triggers.
@@ -432,10 +450,7 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
               const result = await runRequestItem(index, values);
               if (result.ok) {
                 counts.ok += 1;
-                for (const port of outEdges.keys()) {
-                  if (port === "passed") pushItem(port, true);
-                  else pushItem(port, result.outputs[port]);
-                }
+                for (const port of outEdges.keys()) pushItem(port, result.outputs[port]);
               } else {
                 counts.failed += 1;
                 for (const port of outEdges.keys())
@@ -570,17 +585,6 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
               break;
             }
 
-            case "duplicator": {
-              const count = (cfg as DuplicatorNodeConfigV2).count || 0;
-              const value = soleValue(values, "value");
-              for (let k = 0; k < count; k++) {
-                if (incomingHole) pushHole(duplicatorOutName(k), "", incomingHole);
-                else if (value && value.kind === "item") pushItem(duplicatorOutName(k), value.value);
-              }
-              if (incomingHole) counts.skipped += 1;
-              else counts.ok += 1;
-              break;
-            }
           }
 
           index += 1;
@@ -615,7 +619,7 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
       }
     };
 
-    await Promise.all(flow.nodes.map((node) => runNode(node)));
+    await Promise.all(graph.nodes.map((node) => runNode(node)));
 
     const failed = Object.values(nodeStatuses).some((s) => s === "failed" || s === "partial");
     return {

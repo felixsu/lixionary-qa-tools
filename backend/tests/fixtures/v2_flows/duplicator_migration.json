@@ -1,6 +1,6 @@
 {
-  "name": "hole_fork_join",
-  "description": "The load-bearing continue-on-error case. The emitter's output feeds BOTH branches directly (fan-out); the left branch fails on item 1 only. Because the failed item keeps its position as a hole, the mux still pairs left[0] with right[0] and left[2] with right[2] \u2014 never left[2] with right[1]. The right branch runs all three times; the accumulator drops the holed position.",
+  "name": "duplicator_migration",
+  "description": "A flow saved before outputs could fan out: the emitter feeds a Duplicator whose two outputs drive the branches. Both engines rewrite it to direct fan-out on load, so it must behave exactly like hole_fork_join.",
   "collections": [
     {
       "id": "col",
@@ -40,7 +40,7 @@
   ],
   "flow": {
     "id": "flow",
-    "name": "hole_fork_join",
+    "name": "duplicator_migration",
     "schemaVersion": 2,
     "nodes": [
       {
@@ -114,21 +114,40 @@
           "y": 0
         },
         "config": {}
+      },
+      {
+        "id": "dup",
+        "name": "dup",
+        "type": "duplicator",
+        "position": {
+          "x": 0,
+          "y": 0
+        },
+        "config": {
+          "count": 2
+        }
       }
     ],
     "edges": [
       {
-        "id": "e2",
+        "id": "m1",
         "source": "emit",
-        "target": "left",
+        "target": "dup",
         "sourceHandle": "out:item",
+        "targetHandle": "in:value"
+      },
+      {
+        "id": "m2",
+        "source": "dup",
+        "target": "left",
+        "sourceHandle": "out:o:0",
         "targetHandle": "in:x"
       },
       {
-        "id": "e3",
-        "source": "emit",
+        "id": "m3",
+        "source": "dup",
         "target": "right",
-        "sourceHandle": "out:item",
+        "sourceHandle": "out:o:1",
         "targetHandle": "in:x"
       },
       {

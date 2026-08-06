@@ -210,10 +210,19 @@ def test_parse_handle_and_ports():
     assert [p["id"] for p in node_ports(demux, []) if p["direction"] == "out" and p["kind"] == "data"] == [
         "out:o:r1", "out:o:r2",
     ]
-    dup = _node("dup", "duplicator", {"count": 3})
-    assert [p["id"] for p in node_ports(dup, []) if p["direction"] == "out" and p["kind"] == "data"] == [
-        "out:o:0", "out:o:1", "out:o:2",
-    ]
+
+
+def test_verify_adds_no_passed_output():
+    collections = [{"id": "col", "requests": [_request("R", outputs=["v"])]}]
+    verify = {
+        "enabled": True,
+        "checks": [{"id": "c1", "path": "$.status", "operator": "equals",
+                    "expectedSource": "static", "expected": "200"}],
+        "maxAttempts": 2, "intervalMs": 0,
+    }
+    ids = [p["id"] for p in node_ports(_req_node("r", "R", verify=verify), collections)]
+    assert "out:v" in ids
+    assert "out:passed" not in ids
 
 
 def test_parse_static_input_types():
@@ -231,11 +240,12 @@ def test_validate_flow_v2_rules():
     def errors(flow):
         return [i["message"] for i in validate_flow_v2(flow, collections) if i["level"] == "error"]
 
+    # one output may feed several inputs
     fan_out = _flow(
         [_req_node("a", "R"), _req_node("b", "R"), _req_node("c", "R")],
         [_edge("a", "out:v", "b", "in:x"), _edge("a", "out:v", "c", "in:x")],
     )
-    assert any("add a Duplicator" in m for m in errors(fan_out))
+    assert errors(fan_out) == []
 
     fan_in = _flow(
         [_req_node("a", "R"), _req_node("b", "R"), _req_node("c", "R")],
