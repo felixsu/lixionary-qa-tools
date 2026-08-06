@@ -133,10 +133,10 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
 
     // Rewrite blocks from older shapes (a Duplicator becomes direct fan-out)
     // so a stored flow runs the same whether or not it has been re-saved.
+    // Always adopt the migrated graph: `changed` counts rewritten blocks only,
+    // while the migration also backfills config (e.g. re-enabling `each`).
     const migrated = migrateFlowV2(flow.nodes, flow.edges);
-    const graph: FlowV2 = migrated.changed
-      ? { ...flow, nodes: migrated.nodes, edges: migrated.edges }
-      : flow;
+    const graph: FlowV2 = { ...flow, nodes: migrated.nodes, edges: migrated.edges };
 
     const issues = flowErrorsV2(validateFlowV2(graph, deps.collections));
     if (issues.length) throw new Error(issues.map((i) => i.message).join("; "));

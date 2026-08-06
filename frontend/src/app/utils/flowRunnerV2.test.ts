@@ -252,7 +252,7 @@ describe("repeating a request that takes no inputs", () => {
   it("runs once per item of whatever drives `each`, sending no extra parameter", async () => {
     const h = makeHarness({ PING: { handler: () => ok({ seq: "s" }), outputs: ["seq"] } });
     const f = makeFlow(
-      [emitNode("emit", ["a", "b", "c"]), req("ping", "PING")],
+      [emitNode("emit", ["a", "b", "c"]), req("ping", "PING", { useEach: true })],
       [edge("emit", "out:index", "ping", "in:ctl:each")]
     );
     const summary = await runFlowV2(f, h.deps, h.cb).done;
@@ -267,7 +267,7 @@ describe("repeating a request that takes no inputs", () => {
   it("counts from a repeat count without a static array", async () => {
     const h = makeHarness({ PING: { handler: () => ok(), outputs: [] } });
     const f = makeFlow(
-      [node("emit", "arrayEmit", { staticItems: { type: "number", value: "4" } }), req("ping", "PING")],
+      [node("emit", "arrayEmit", { staticItems: { type: "number", value: "4" } }), req("ping", "PING", { useEach: true })],
       [edge("emit", "out:index", "ping", "in:ctl:each")]
     );
     const summary = await runFlowV2(f, h.deps, h.cb).done;
@@ -291,7 +291,7 @@ describe("repeating a request that takes no inputs", () => {
       PING: { handler: () => ok(), outputs: [] },
     });
     const f = makeFlow(
-      [emitNode("emit", ["a", "b", "c"]), req("src", "SRC"), req("ping", "PING")],
+      [emitNode("emit", ["a", "b", "c"]), req("src", "SRC"), req("ping", "PING", { useEach: true })],
       [edge("emit", "out:item", "src", "in:x"), edge("src", "out:v", "ping", "in:ctl:each")]
     );
     await runFlowV2(f, h.deps, h.cb).done;

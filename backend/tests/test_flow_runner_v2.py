@@ -203,8 +203,11 @@ def test_parse_handle_and_ports():
     assert parse_handle("bogus") is None
 
     collections = [{"id": "col", "requests": [_request("R", url="http://test/{{x}}", outputs=["v"])]}]
-    # every request carries the `each` repeat driver alongside its own inputs
+    # `each` is opt-in, so a plain request exposes only its own inputs
     assert [p["id"] for p in node_ports(_req_node("n", "R"), collections)] == [
+        "after", "done", "in:x", "out:v",
+    ]
+    assert [p["id"] for p in node_ports(_req_node("n", "R", useEach=True), collections)] == [
         "after", "done", "in:ctl:each", "in:x", "out:v",
     ]
     demux = _node("d", "demux", {"rows": [{"id": "r1", "path": "$.a"}, {"id": "r2", "path": "$.b"}]})
@@ -306,7 +309,7 @@ async def test_each_repeats_an_input_less_request():
     flow = _flow(
         [
             _node("emit", "arrayEmit", {"staticItems": {"type": "number", "value": "3"}}),
-            _req_node("ping", "PING"),
+            _req_node("ping", "PING", useEach=True),
         ],
         [_edge("emit", "out:index", "ping", "in:ctl:each")],
     )

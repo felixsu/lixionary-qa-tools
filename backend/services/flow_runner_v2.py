@@ -274,13 +274,17 @@ def node_ports(node: Dict[str, Any], collections: List[Dict[str, Any]]) -> List[
                 for c in verify.get("checks") or []
                 if c.get("expectedSource") == "port"
             ]
-        # Connecting a stream to `each` runs the request once per item without
-        # the value becoming a request input — the only way to repeat a request
-        # that declares no {{tokens}} of its own.
-        each = _port(data_in_handle(EACH_PORT_NAME), EACH_PORT_NAME, "data", "in", label="each")
+        # Opt-in: connecting a stream to `each` runs the request once per item
+        # without the value becoming a request input — the only way to repeat a
+        # request that declares no {{tokens}} of its own.
+        each = (
+            [_port(data_in_handle(EACH_PORT_NAME), EACH_PORT_NAME, "data", "in", label="each")]
+            if cfg.get("useEach")
+            else []
+        )
         # No "passed" output: an item whose checks never pass is failed and
         # dropped, so such a port could only ever emit True.
-        return _trigger_ports() + [each] + inputs + checks + outputs
+        return _trigger_ports() + each + inputs + checks + outputs
 
     if node_type == "delay":
         return _trigger_ports() + [
@@ -557,6 +561,18 @@ def migrate_flow_v2(
     outputs could fan out: a Duplicator was a pure passthrough, so each of its
     outgoing connections becomes a direct connection from whatever fed it.
     Blocks of any other unknown type are dropped with their connections."""
+    # `each` became opt-in after it shipped always-on; a request already wired
+    # to it must keep its port, or the connection would dangle.
+    each_handle = data_in_handle(EACH_PORT_NAME)
+    nodes = [
+        n
+        if n.get("type") != "request"
+        or (n.get("config") or {}).get("useEach")
+        or not any(e.get("target") == n["id"] and e.get("targetHandle") == each_handle for e in edges)
+        else {**n, "config": {**(n.get("config") or {}), "useEach": True}}
+        for n in nodes
+    ]
+
     legacy = [n for n in nodes if n.get("type") not in FLOW_NODE_TYPES_V2]
     if not legacy:
         return nodes, edges, 0

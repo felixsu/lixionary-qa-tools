@@ -20,7 +20,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  AlertCircle, Combine, Copy, Download, Layers, Pencil, Play, Plus, Rows3, Save, Send,
+  AlertCircle, Combine, Copy, Download, Layers, Pencil, Play, Plus, Repeat2, Rows3, Save, Send,
   ShieldCheck, Sparkles, Split, Square, Timer, Trash2, X,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
@@ -1314,6 +1314,21 @@ function RequestConfigV2({
           The request&apos;s <code className="font-mono">{"{{tokens}}"}</code> become input dots and its declared outputs
           become output dots. Unconnected inputs use the value typed on the node, otherwise the request&apos;s own
           default.
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-1.5 pt-3 border-t border-line">
+        <label className="flex items-center gap-2 text-xs font-medium text-stone">
+          <input
+            type="checkbox"
+            checked={!!cfg.useEach}
+            onChange={(e) => onChange({ ...cfg, useEach: e.target.checked })}
+          />
+          <Repeat2 className="h-3.5 w-3.5 text-clay" /> Repeat with an `each` input
+        </label>
+        <span className="text-[11px] text-mute">
+          Adds an <span className="font-mono">each</span> input dot. Connect a stream to it and this request runs once
+          per item, ignoring the value — the way to repeat a request that declares no inputs of its own.
         </span>
       </div>
 

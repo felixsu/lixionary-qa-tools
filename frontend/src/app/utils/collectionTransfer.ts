@@ -1,4 +1,5 @@
 import type { Collection, RequestItem, AuthFunction } from "../context/AppContext";
+import { isOrphanedAuthFunctionRef } from "./authFunctions";
 
 export const COLLECTION_EXPORT_FORMAT = "nv-collection-export";
 export const COLLECTION_EXPORT_VERSION = 1;
@@ -128,13 +129,10 @@ export function prepareImportedCollection(
   collection: CollectionTransferPayload,
   authFunctions: AuthFunction[]
 ): CollectionTransferPayload {
-  const authFunctionExists = (ref: string): boolean =>
-    authFunctions.some((af) => af.id === ref || af.cloudId === ref);
-
   const prepareRequest = (req: any): RequestItem => {
     const { lastResponse, ...rest } = req;
     const authConfig = { ...(rest.authConfig || {}) };
-    if (authConfig.authFunctionId && !authFunctionExists(authConfig.authFunctionId)) {
+    if (isOrphanedAuthFunctionRef(authFunctions, authConfig.authFunctionId)) {
       authConfig.authFunctionId = null;
     }
     return { ...rest, id: `req_${Math.random().toString(36).substring(2, 9)}`, authConfig };

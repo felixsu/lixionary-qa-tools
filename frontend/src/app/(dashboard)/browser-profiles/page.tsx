@@ -6,6 +6,7 @@ import { useAppContext, BrowserProfile } from "../../context/AppContext";
 import { useToast } from "../../context/ToastContext";
 import Dropdown from "../../components/Dropdown";
 import { isTauri } from "../../utils/tauri";
+import { resolveAuthFunctionRef } from "../../utils/authFunctions";
 import { confirmDialog } from "../../utils/confirmDialog";
 import GuideHelpButton from "../../components/guide/GuideHelpButton";
 
@@ -536,9 +537,7 @@ export default function BrowserProfilesPage() {
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 content-start">
             {profiles.map((p) => {
-              // p.authFunctionId may be a local id (set via this device) or a cloud
-              // id (pulled from another device's record) — check both.
-              const linkedAuthFunc = authFunctions.find((f) => f.id === p.authFunctionId || f.cloudId === p.authFunctionId);
+              const linkedAuthFunc = resolveAuthFunctionRef(authFunctions, p.authFunctionId);
               return (
                 <div key={p.id} className="bg-cream border border-line rounded-xl overflow-hidden flex flex-col">
                   <div className="px-5 pt-4 pb-3 flex items-start gap-2">

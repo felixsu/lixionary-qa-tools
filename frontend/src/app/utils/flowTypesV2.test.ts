@@ -12,6 +12,7 @@ import {
   flowErrorsV2,
   isFlowV2,
   isKnownNodeTypeV2,
+  migrateFlowV2,
   muxInName,
   nodePorts,
   parseHandle,
@@ -131,20 +132,22 @@ describe("typed hardcoded inputs", () => {
 });
 
 describe("nodePorts", () => {
-  it("derives request ports from the saved request", () => {
+  it("derives request ports from the saved request, with no `each` driver by default", () => {
     const ports = nodePorts(requestNode("n1"), collections);
-    expect(ports.map((p) => p.id)).toEqual(["after", "done", "in:ctl:each", "in:orderId", "out:uuid"]);
+    expect(ports.map((p) => p.id)).toEqual(["after", "done", "in:orderId", "out:uuid"]);
   });
 
-  it("gives every request an `each` driver, namespaced so request tokens can't collide", () => {
+  it("adds the `each` driver when enabled, namespaced so request tokens can't collide", () => {
     const collides = [
       { id: "col", requests: [savedRequest("reqEach", { url: "http://test/{{each}}" })] },
     ] as unknown as Parameters<typeof nodePorts>[1];
-    const ids = nodePorts(requestNode("n1", "reqEach"), collides).map((p) => p.id);
+    const ids = nodePorts(requestNode("n1", "reqEach", { useEach: true }), collides).map((p) => p.id);
     // the request's own {{each}} token and the repeat driver are distinct ports
     expect(ids).toContain("in:each");
     expect(ids).toContain("in:ctl:each");
-    const driver = nodePorts(requestNode("n2"), collections).find((p) => p.id === "in:ctl:each")!;
+    const driver = nodePorts(requestNode("n2", "req1", { useEach: true }), collections).find(
+      (p) => p.id === "in:ctl:each"
+    )!;
     expect(portLabel(driver)).toBe("each");
     expect(driver.widget).toBe("none"); // drives execution, never hardcoded
   });
@@ -391,6 +394,24 @@ describe("validateFlowV2 — stream arity warnings", () => {
       [edge("x1", "r", "out:uuid", "acc", "in:item")]
     );
     expect(warnings(flow).some((m) => m.includes("accumulates a single value"))).toBe(true);
+  });
+});
+
+describe("migrateFlowV2", () => {
+  it("turns on `each` for a request already wired to it", () => {
+    const nodes = [node("emit", "arrayEmit", { staticItems: { type: "number", value: "2" } }), requestNode("r")];
+    const edges = [edge("e1", "emit", "out:index", "r", "in:ctl:each")];
+    const migrated = migrateFlowV2(nodes, edges);
+    const request = migrated.nodes.find((n) => n.id === "r")!;
+    expect((request.config as { useEach?: boolean }).useEach).toBe(true);
+    // the port is back, so the existing connection still resolves
+    expect(nodePorts(request, collections).map((p) => p.id)).toContain("in:ctl:each");
+    expect(flowErrorsV2(validateFlowV2(makeFlow(migrated.nodes, migrated.edges), collections))).toEqual([]);
+  });
+
+  it("leaves requests without an each connection alone", () => {
+    const migrated = migrateFlowV2([requestNode("r")], []);
+    expect((migrated.nodes[0].config as { useEach?: boolean }).useEach).toBeUndefined();
   });
 });
 

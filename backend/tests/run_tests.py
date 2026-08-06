@@ -59,6 +59,10 @@ from tests.test_flow_runner_v2 import (
 )
 from tests.test_mcp_tools import run_mcp_tool_tests
 from tests.test_flow_runs import test_flow_runs_store_roundtrip, test_flow_runs_routes
+from tests.test_local_store import (
+    test_delete_prefs_with_prefix_escapes_wildcards,
+    test_account_switch_clears_prefs_that_reference_entities,
+)
 
 def run():
     print("Running tests...")
@@ -257,6 +261,12 @@ def run():
 
         asyncio.run(test_flow_runs_routes())
         print("✓ test_flow_runs_routes passed")
+
+        test_delete_prefs_with_prefix_escapes_wildcards()
+        print("✓ test_delete_prefs_with_prefix_escapes_wildcards passed")
+
+        test_account_switch_clears_prefs_that_reference_entities()
+        print("✓ test_account_switch_clears_prefs_that_reference_entities passed")
 
         print("\nAll tests passed successfully!")
     except AssertionError as e:
