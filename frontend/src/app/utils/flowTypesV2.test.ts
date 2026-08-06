@@ -6,14 +6,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   dataInHandle,
   dataOutHandle,
-  mapperOutName,
+  splitterOutName,
   edgeKindV2,
   EMIT_MAX_ITEMS,
   flowErrorsV2,
   isFlowV2,
   isKnownNodeTypeV2,
   migrateFlowV2,
-  muxInName,
+  mixerInName,
   nodePorts,
   parseHandle,
   parseStaticInput,
@@ -66,7 +66,7 @@ const node = (id: string, type: FlowNodeV2["type"], config: FlowNodeV2["config"]
 /** A node whose stored type this version no longer declares — retired names
  * (e.g. "demux") and types that never existed, as migration input. */
 const retiredNode = (id: string, type: string, config: FlowNodeV2["config"]): FlowNodeV2 =>
-  ({ ...node(id, "mux", config), type: type as FlowNodeV2["type"] });
+  ({ ...node(id, "mixer", config), type: type as FlowNodeV2["type"] });
 
 const requestNode = (id: string, requestId = "req1", extra: Record<string, unknown> = {}) =>
   node(id, "request", { requestId, staticInputs: {}, ...extra });
@@ -103,8 +103,8 @@ describe("handle grammar", () => {
   });
 
   it("keeps row ids intact inside config-derived port names", () => {
-    expect(parseHandle(dataOutHandle(mapperOutName("abc-123")))?.name).toBe("o:abc-123");
-    expect(parseHandle(dataInHandle(muxInName("abc-123")))?.name).toBe("i:abc-123");
+    expect(parseHandle(dataOutHandle(splitterOutName("abc-123")))?.name).toBe("o:abc-123");
+    expect(parseHandle(dataInHandle(mixerInName("abc-123")))?.name).toBe("i:abc-123");
     expect(parseHandle(dataInHandle(verifyCheckPortName("c1")))?.name).toBe("cmp:c1");
   });
 
@@ -190,15 +190,15 @@ describe("nodePorts", () => {
     expect(ports.map((p) => p.id)).toEqual(["after", "done", "in:value", "out:value"]);
   });
 
-  it("derives one mapper output per row, labelled by its path", () => {
-    const n = node("d", "mapper", { rows: [{ id: "r1", path: "$.name" }, { id: "r2", path: "$.color" }] });
+  it("derives one splitter output per row, labelled by its path", () => {
+    const n = node("d", "splitter", { rows: [{ id: "r1", path: "$.name" }, { id: "r2", path: "$.color" }] });
     const ports = nodePorts(n, collections).filter((p) => p.direction === "out" && p.kind === "data");
     expect(ports.map((p) => p.id)).toEqual(["out:o:r1", "out:o:r2"]);
     expect(ports.map((p) => portLabel(p))).toEqual(["$.name", "$.color"]);
   });
 
-  it("derives one mux input per row, labelled by its field", () => {
-    const n = node("m", "mux", { rows: [{ id: "r1", field: "name" }, { id: "r2", field: "color" }] });
+  it("derives one mixer input per row, labelled by its field", () => {
+    const n = node("m", "mixer", { rows: [{ id: "r1", field: "name" }, { id: "r2", field: "color" }] });
     const ports = nodePorts(n, collections).filter((p) => p.direction === "in" && p.kind === "data");
     expect(ports.map((p) => p.id)).toEqual(["in:i:r1", "in:i:r2"]);
     expect(ports.map((p) => portLabel(p))).toEqual(["name", "color"]);
@@ -293,17 +293,17 @@ describe("validateFlowV2 — per-type config", () => {
     expect(errors(flow).some((m) => m.includes(`over the maximum of ${EMIT_MAX_ITEMS}`))).toBe(true);
   });
 
-  it("requires mapper rows to have paths", () => {
-    const flow = makeFlow([node("d", "mapper", { rows: [{ id: "r1", path: "" }] })], []);
+  it("requires splitter rows to have paths", () => {
+    const flow = makeFlow([node("d", "splitter", { rows: [{ id: "r1", path: "" }] })], []);
     expect(errors(flow).some((m) => m.includes("output with no path"))).toBe(true);
   });
 
-  it("requires mux to have at least two uniquely-named inputs", () => {
-    const single = makeFlow([node("m", "mux", { rows: [{ id: "r1", field: "a" }] })], []);
+  it("requires mixer to have at least two uniquely-named inputs", () => {
+    const single = makeFlow([node("m", "mixer", { rows: [{ id: "r1", field: "a" }] })], []);
     expect(errors(single).some((m) => m.includes("at least two inputs"))).toBe(true);
 
     const dup = makeFlow(
-      [node("m", "mux", { rows: [{ id: "r1", field: "a" }, { id: "r2", field: "a" }] })],
+      [node("m", "mixer", { rows: [{ id: "r1", field: "a" }, { id: "r2", field: "a" }] })],
       []
     );
     expect(errors(dup).some((m) => m.includes('field name "a" twice'))).toBe(true);
@@ -354,7 +354,7 @@ describe("validateFlowV2 — stream arity warnings", () => {
       [
         node("e1", "arrayEmit", { staticItems: { type: "json", value: "[1,2]" } }),
         node("e2", "arrayEmit", { staticItems: { type: "json", value: "[1,2,3]" } }),
-        node("m", "mux", { rows: [{ id: "r1", field: "a" }, { id: "r2", field: "b" }] }),
+        node("m", "mixer", { rows: [{ id: "r1", field: "a" }, { id: "r2", field: "b" }] }),
       ],
       [
         edge("x1", "e1", "out:item", "m", "in:i:r1"),
@@ -369,7 +369,7 @@ describe("validateFlowV2 — stream arity warnings", () => {
       [
         node("e1", "arrayEmit", { staticItems: { type: "json", value: "[1,2]" } }),
         requestNode("token", "req2"),
-        node("m", "mux", { rows: [{ id: "r1", field: "a" }, { id: "r2", field: "b" }] }),
+        node("m", "mixer", { rows: [{ id: "r1", field: "a" }, { id: "r2", field: "b" }] }),
       ],
       [
         edge("x1", "e1", "out:item", "m", "in:i:r1"),
@@ -383,7 +383,7 @@ describe("validateFlowV2 — stream arity warnings", () => {
     const flow = makeFlow(
       [
         node("e", "arrayEmit", { staticItems: { type: "json", value: "[1,2]" } }),
-        node("m", "mux", { rows: [{ id: "r1", field: "a" }, { id: "r2", field: "b" }] }),
+        node("m", "mixer", { rows: [{ id: "r1", field: "a" }, { id: "r2", field: "b" }] }),
       ],
       [
         edge("x1", "e", "out:item", "m", "in:i:r1"),
@@ -399,6 +399,16 @@ describe("validateFlowV2 — stream arity warnings", () => {
       [edge("x1", "r", "out:uuid", "acc", "in:item")]
     );
     expect(warnings(flow).some((m) => m.includes("accumulates a single value"))).toBe(true);
+  });
+});
+
+describe("duplicate connection ids", () => {
+  it("are refused, because two edges sharing a channel deadlock the run", () => {
+    const flow = makeFlow(
+      [node("e", "arrayEmit", { staticItems: { type: "json", value: '["a"]' } }), requestNode("r")],
+      [edge("dup", "e", "out:item", "r", "in:orderId"), edge("dup", "e", "out:index", "r", "in:orderId")]
+    );
+    expect(errors(flow).some((m) => m.includes('share the id "dup"'))).toBe(true);
   });
 });
 
@@ -419,24 +429,27 @@ describe("migrateFlowV2", () => {
     expect((migrated.nodes[0].config as { useEach?: boolean }).useEach).toBeUndefined();
   });
 
-  it("renames a saved demux to mapper, keeping its rows and connections", () => {
+  // Both hops of the same block's history, resolved in one pass: a flow last
+  // saved in 0.5.x says "demux", one saved in 0.6.0 says "mapper".
+  it.each(["demux", "mapper"])("renames a saved %s to splitter, keeping its rows and connections", (stored) => {
     const rows = [{ id: "r1", path: "$.name" }, { id: "r2", path: "$.color" }];
     const nodes = [
-      retiredNode("d", "demux", { rows }),
-      node("m", "mux", { rows: [{ id: "i1", field: "n" }, { id: "i2", field: "c" }] }),
+      retiredNode("d", stored, { rows }),
+      retiredNode("m", "mux", { rows: [{ id: "i1", field: "n" }, { id: "i2", field: "c" }] }),
     ];
     const edges = [
-      edge("e1", "d", `out:${mapperOutName("r1")}`, "m", `in:${muxInName("i1")}`),
-      edge("e2", "d", `out:${mapperOutName("r2")}`, "m", `in:${muxInName("i2")}`),
+      edge("e1", "d", `out:${splitterOutName("r1")}`, "m", `in:${mixerInName("i1")}`),
+      edge("e2", "d", `out:${splitterOutName("r2")}`, "m", `in:${mixerInName("i2")}`),
     ];
 
     const migrated = migrateFlowV2(nodes, edges);
     const renamed = migrated.nodes.find((n) => n.id === "d")!;
-    expect(renamed.type).toBe("mapper");
+    expect(renamed.type).toBe("splitter");
+    expect(migrated.nodes.find((n) => n.id === "m")!.type).toBe("mixer");
     expect(renamed.config).toEqual({ rows });
     // handle ids are unchanged, so the connection is untouched and still resolves
     expect(migrated.edges).toEqual(edges);
-    expect(nodePorts(renamed, collections).map((p) => p.id)).toContain(`out:${mapperOutName("r1")}`);
+    expect(nodePorts(renamed, collections).map((p) => p.id)).toContain(`out:${splitterOutName("r1")}`);
     expect(flowErrorsV2(validateFlowV2(makeFlow(migrated.nodes, migrated.edges), collections))).toEqual([]);
   });
 

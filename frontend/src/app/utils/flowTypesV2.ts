@@ -24,8 +24,8 @@
 //   "done"        trigger output — fires once when the node's stream ends
 // Config-derived ports use a stable row id inside the name so renaming a
 // JSONPath or field never orphans an edge:
-//   mapper output      "out:o:<rowId>"
-//   mux input         "in:i:<rowId>"
+//   splitter output      "out:o:<rowId>"
+//   mixer input         "in:i:<rowId>"
 //   verify expected   "in:cmp:<checkId>"
 //   repeat driver     "in:ctl:each"
 
@@ -40,8 +40,8 @@ export type FlowNodeTypeV2 =
   | "delay"
   | "arrayEmit"
   | "accumulator"
-  | "mapper"
-  | "mux"
+  | "splitter"
+  | "mixer"
   | "generator";
 
 export const FLOW_NODE_TYPES_V2: readonly FlowNodeTypeV2[] = [
@@ -49,10 +49,21 @@ export const FLOW_NODE_TYPES_V2: readonly FlowNodeTypeV2[] = [
   "delay",
   "arrayEmit",
   "accumulator",
-  "mapper",
-  "mux",
+  "splitter",
+  "mixer",
   "generator",
 ];
+
+/** Node types that shipped under an earlier name, mapped to the current one.
+ * `migrateFlowV2` applies this on load and both engines apply it before
+ * validation, so a stored flow behaves the same whether or not it has been
+ * opened since the rename. Renaming a type means adding a row here — never
+ * just changing the string. */
+export const RENAMED_NODE_TYPES_V2: Record<string, FlowNodeTypeV2> = {
+  demux: "splitter", // 0.5.x → 0.6.0
+  mapper: "splitter", // 0.6.0 → 0.6.1
+  mux: "mixer", // 0.6.0 → 0.6.1
+};
 
 export const isKnownNodeTypeV2 = (type: string): type is FlowNodeTypeV2 =>
   (FLOW_NODE_TYPES_V2 as readonly string[]).includes(type);
@@ -70,8 +81,8 @@ export const TRIGGER_OUT = "done";
 export const dataInHandle = (name: string): string => `in:${name}`;
 export const dataOutHandle = (name: string): string => `out:${name}`;
 
-export const mapperOutName = (rowId: string): string => `o:${rowId}`;
-export const muxInName = (rowId: string): string => `i:${rowId}`;
+export const splitterOutName = (rowId: string): string => `o:${rowId}`;
+export const mixerInName = (rowId: string): string => `i:${rowId}`;
 export const verifyCheckPortName = (checkId: string): string => `cmp:${checkId}`;
 
 // Ports the engine drives execution with but never passes to the request.
@@ -207,23 +218,23 @@ export interface GeneratorNodeConfigV2 {
   useEach?: boolean;
 }
 
-export interface MapperRowV2 {
+export interface SplitterRowV2 {
   id: string;
   path: string; // JSONPath extracted onto this row's output, e.g. "$.color"
 }
 
-export interface MapperNodeConfigV2 {
-  rows: MapperRowV2[];
+export interface SplitterNodeConfigV2 {
+  rows: SplitterRowV2[];
 }
 
-export interface MuxRowV2 {
+export interface MixerRowV2 {
   id: string;
   field: string; // key this input becomes in the emitted object
 }
 
-export interface MuxNodeConfigV2 {
-  rows: MuxRowV2[];
-  staticInputs?: Record<string, StaticInputV2>; // keyed by muxInName(rowId)
+export interface MixerNodeConfigV2 {
+  rows: MixerRowV2[];
+  staticInputs?: Record<string, StaticInputV2>; // keyed by mixerInName(rowId)
 }
 
 export type FlowNodeConfigV2 =
@@ -232,8 +243,8 @@ export type FlowNodeConfigV2 =
   | ArrayEmitNodeConfigV2
   | AccumulatorNodeConfigV2
   | GeneratorNodeConfigV2
-  | MapperNodeConfigV2
-  | MuxNodeConfigV2;
+  | SplitterNodeConfigV2
+  | MixerNodeConfigV2;
 
 // ---- Graph ------------------------------------------------------------------
 
@@ -390,15 +401,15 @@ export const nodePorts = (node: FlowNodeV2, collections: Collection[]): PortSpec
         { id: dataOutHandle("value"), name: "value", kind: "data", direction: "out", dataType: "any" },
       ];
     }
-    case "mapper": {
-      const cfg = node.config as MapperNodeConfigV2;
+    case "splitter": {
+      const cfg = node.config as SplitterNodeConfigV2;
       return [
         ...triggerPorts(),
         { id: dataInHandle("object"), name: "object", kind: "data", direction: "in", dataType: "json", widget: "json" },
         ...(cfg.rows || []).map(
           (r): PortSpec => ({
-            id: dataOutHandle(mapperOutName(r.id)),
-            name: mapperOutName(r.id),
+            id: dataOutHandle(splitterOutName(r.id)),
+            name: splitterOutName(r.id),
             label: r.path || "(unset)",
             kind: "data",
             direction: "out",
@@ -407,14 +418,14 @@ export const nodePorts = (node: FlowNodeV2, collections: Collection[]): PortSpec
         ),
       ];
     }
-    case "mux": {
-      const cfg = node.config as MuxNodeConfigV2;
+    case "mixer": {
+      const cfg = node.config as MixerNodeConfigV2;
       return [
         ...triggerPorts(),
         ...(cfg.rows || []).map(
           (r): PortSpec => ({
-            id: dataInHandle(muxInName(r.id)),
-            name: muxInName(r.id),
+            id: dataInHandle(mixerInName(r.id)),
+            name: mixerInName(r.id),
             label: r.field || "(unset)",
             kind: "data",
             direction: "in",
@@ -458,14 +469,18 @@ export const migrateFlowV2 = (
     return wired ? { ...n, config: { ...cfg, useEach: true } } : n;
   });
 
-  // "demux" was renamed to "mapper". This MUST stay ahead of the unknown-type
-  // sweep below, which would otherwise dissolve every saved Demux block instead
-  // of renaming it. Config and handle ids ("out:o:<rowId>") are unchanged, so
-  // connections survive untouched — and a pure rename is not a rewritten block,
-  // so it deliberately does not count towards `changed`.
-  nextNodes = nextNodes.map((n) =>
-    (n.type as string) === "demux" ? { ...n, type: "mapper" as FlowNodeTypeV2 } : n
-  );
+  // Retired type names, mapped to what they are called now. This MUST stay
+  // ahead of the unknown-type sweep below, which would otherwise dissolve every
+  // block saved under an old name instead of renaming it. Names are resolved in
+  // one hop, so a flow last saved as "demux" (0.5.x) lands on "splitter"
+  // directly. Config and handle ids ("out:o:<rowId>", "in:i:<rowId>") never
+  // changed with the names, so connections survive untouched — and a pure
+  // rename is not a rewritten block, so it deliberately does not count towards
+  // `changed`, which drives the "we rewrote your flow" toast.
+  nextNodes = nextNodes.map((n) => {
+    const renamed = RENAMED_NODE_TYPES_V2[n.type as string];
+    return renamed ? { ...n, type: renamed } : n;
+  });
 
   const legacy = nextNodes.filter((n) => !isKnownNodeTypeV2(n.type));
   if (!legacy.length) return { nodes: nextNodes, edges, changed: 0 };
@@ -684,8 +699,8 @@ export const validateFlowV2 = (flow: FlowV2, collections: Collection[]): FlowIss
           error(`"${node.name}": "${token}" is not a generator this version knows`, { nodeId: node.id });
         break;
       }
-      case "mapper": {
-        const cfg = node.config as MapperNodeConfigV2;
+      case "splitter": {
+        const cfg = node.config as SplitterNodeConfigV2;
         const rows = cfg.rows || [];
         if (!rows.length) error(`"${node.name}" has no outputs configured`, { nodeId: node.id });
         const paths = new Set<string>();
@@ -697,8 +712,8 @@ export const validateFlowV2 = (flow: FlowV2, collections: Collection[]): FlowIss
         }
         break;
       }
-      case "mux": {
-        const cfg = node.config as MuxNodeConfigV2;
+      case "mixer": {
+        const cfg = node.config as MixerNodeConfigV2;
         const rows = cfg.rows || [];
         if (rows.length < 2) error(`"${node.name}" needs at least two inputs`, { nodeId: node.id });
         const fields = new Set<string>();
@@ -727,6 +742,18 @@ export const validateFlowV2 = (flow: FlowV2, collections: Collection[]): FlowIss
 
   // -- edges --
   const dataEdgesPerTarget = new Map<string, number>();
+  // Each edge owns one channel, keyed by its id: two edges sharing an id share
+  // a channel, and a consumer that never sees its end-of-stream hangs the run
+  // forever. The editor mints uuids, but an imported or hand-edited flow can
+  // still carry a collision, so refuse it up front rather than deadlock.
+  const seenEdgeIds = new Set<string>();
+  for (const edge of flow.edges) {
+    if (seenEdgeIds.has(edge.id)) {
+      error(`Two connections share the id "${edge.id}"`, { edgeId: edge.id });
+      continue;
+    }
+    seenEdgeIds.add(edge.id);
+  }
   for (const edge of flow.edges) {
     const source = nodeById.get(edge.source);
     const target = nodeById.get(edge.target);
@@ -826,9 +853,9 @@ export const defaultConfigForTypeV2 = (type: FlowNodeTypeV2): FlowNodeConfigV2 =
       return {};
     case "generator":
       return { token: "$randomInt:4" };
-    case "mapper":
+    case "splitter":
       return { rows: [{ id: crypto.randomUUID(), path: "$." }] };
-    case "mux":
+    case "mixer":
       return {
         rows: [
           { id: crypto.randomUUID(), field: "field1" },

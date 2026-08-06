@@ -39,9 +39,9 @@ export const RF_TYPE: Record<FlowNodeTypeV2, string> = {
   delay: "v2delay",
   arrayEmit: "v2arrayEmit",
   accumulator: "v2accumulator",
-  mapper: "v2mapper",
+  splitter: "v2splitter",
   generator: "v2generator",
-  mux: "v2mux",
+  mixer: "v2mixer",
 };
 
 export const decorateV2 = (

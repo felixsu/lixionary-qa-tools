@@ -43,14 +43,14 @@ Request **test scripts** do run during flows, but their results appear only in t
 
 * **Request**: an item fails on HTTP status ≥ 400, a parser error, missing declared outputs, verification that never passes within *Max attempts*, or a transport error. Other items are unaffected.
 * **Array Emit**: fails the run outright if it would emit more than **100 items**, or if what it receives isn't an array.
-* **Mapper**: a path that matches nothing fails only *that* output for that item; the other outputs still get their values.
+* **Splitter**: a path that matches nothing fails only *that* output for that item; the other outputs still get their values.
 * **Accumulator**: never fails — it simply leaves failed positions out and reports how many it dropped.
 * **Verifier**: fails only when no attempt passes within **Max attempts**; each failed attempt's card shows which verifications failed (*Verification failed: status equals "200" — actual: 404 ✗*).
 * **Delay**: effectively never fails.
 
 ## **CSV Report**
 
-Click **Report** (enabled once a run has records) to download `<flowName>-run-<timestamp>.csv` — one row per record: every request item, every verification attempt, and every skipped step. Plumbing blocks (Mapper, Mux, Accumulator, Array Emit) contribute one summary row plus a row per failure, so a long stream doesn't bury the report. Rows are ordered by `started_at`. Columns:
+Click **Report** (enabled once a run has records) to download `<flowName>-run-<timestamp>.csv` — one row per record: every request item, every verification attempt, and every skipped step. Plumbing blocks (Splitter, Mixer, Accumulator, Array Emit) contribute one summary row plus a row per failure, so a long stream doesn't bury the report. Rows are ordered by `started_at`. Columns:
 
 | Column | Contents |
 | :---- | :---- |

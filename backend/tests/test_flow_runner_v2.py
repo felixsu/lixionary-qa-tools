@@ -300,8 +300,8 @@ def test_parse_handle_and_ports():
     assert [p["id"] for p in node_ports(_req_node("n", "R", useEach=True), collections)] == [
         "after", "done", "in:ctl:each", "in:x", "out:v",
     ]
-    mapper = _node("d", "mapper", {"rows": [{"id": "r1", "path": "$.a"}, {"id": "r2", "path": "$.b"}]})
-    assert [p["id"] for p in node_ports(mapper, []) if p["direction"] == "out" and p["kind"] == "data"] == [
+    splitter = _node("d", "splitter", {"rows": [{"id": "r1", "path": "$.a"}, {"id": "r2", "path": "$.b"}]})
+    assert [p["id"] for p in node_ports(splitter, []) if p["direction"] == "out" and p["kind"] == "data"] == [
         "out:o:r1", "out:o:r2",
     ]
 
@@ -353,6 +353,12 @@ def test_validate_flow_v2_rules():
         [_edge("a", "done", "b", "after"), _edge("a", "done", "c", "after")],
     )
     assert errors(triggers) == []
+
+    # two edges sharing an id share a channel, which deadlocks the run
+    dup_a = _edge("a", "out:v", "b", "in:x")
+    dup_b = dict(_edge("a", "done", "b", "after"), id=dup_a["id"])
+    dupes = _flow([_req_node("a", "R"), _req_node("b", "R")], [dup_a, dup_b])
+    assert any("share the id" in m for m in errors(dupes))
 
     drift = _flow([_req_node("a", "R"), _req_node("b", "R")], [_edge("a", "out:gone", "b", "in:x")])
     assert any("missing port" in m for m in errors(drift))
