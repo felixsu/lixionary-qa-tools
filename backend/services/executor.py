@@ -124,6 +124,18 @@ _DYNAMIC_TOKEN_HANDLERS = {
     "longitude": lambda arg: _geo_coord("lng"),
 }
 
+def is_known_dynamic_token(key: str) -> bool:
+    """True when `key` (a "$name[:arg]" body) names a generator this build has.
+    A NAME check, not a trial resolution: a malformed argument or a location
+    token with no point picked yet must fail at run time, not at edit time —
+    and the frontend twin (isKnownGeneratorToken in generatorsV2.ts) agrees."""
+    if not key.startswith("$"):
+        return False
+    body = key[1:]
+    fn_name = body.split(":", 1)[0] if ":" in body else body
+    return fn_name.lower() in _DYNAMIC_TOKEN_HANDLERS
+
+
 def _resolve_dynamic_token(key: str) -> Optional[str]:
     """
     Resolves a $-prefixed dynamic token (e.g. "$date:YYYY-MM-DD", "$randomInt:4") to its

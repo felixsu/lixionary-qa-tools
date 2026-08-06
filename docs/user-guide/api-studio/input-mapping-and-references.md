@@ -19,7 +19,8 @@ Every connection carries an ordered stream of items terminated by a *done* signa
 | Collect the results | `Request.<output> → Accumulator.item` |
 | Send one value to two places | a second connection from the same output |
 | Build an object from several values | `Mux` |
-| Take an object apart | `Demux` |
+| Take an object apart | `Mapper` |
+| Use one generated value in several requests | `Generator.value → …` (a date, random number, name, email or location) |
 
 The `done` diamond fires once, when a block's whole stream has finished. Wiring `done → after` makes the next block wait for the entire stream (a barrier) — but you never need it just to close a loop, because the data connection already carries the end of the stream.
 
@@ -30,13 +31,14 @@ The `done` diamond fires once, when a block's whole stream has finished. Wiring 
 | Request | The request's declared outputs |
 | Array Emit | `item` (one at a time), `index` (its 0-based position) |
 | Accumulator | `array` (everything collected), `count` |
-| Demux | One output per configured JSONPath |
+| Mapper | One output per configured JSONPath |
 | Mux | `object` |
+| Generator | `value` (one generated value, or one per item with `each` on) |
 | Delay | `value` (whatever it was given, after the wait) |
 
 ## **JSONPath**
 
-Paths are real JSONPath, used in three places: a **connection's** optional projection, **Demux** rows, and **Request verify** checks.
+Paths are real JSONPath, used in three places: a **connection's** optional projection, **Mapper** rows, and **Request verify** checks.
 
 | Expression | Result on `{"name":"apple","items":[{"id":"a"},{"id":"b"}]}` |
 | :---- | :---- |

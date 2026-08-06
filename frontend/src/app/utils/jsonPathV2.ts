@@ -1,4 +1,4 @@
-// JSONPath evaluation for V2 flows (demux rows, request verify checks, and the
+// JSONPath evaluation for V2 flows (mapper rows, request verify checks, and the
 // per-connection projection).
 //
 // JSONPath always yields a LIST of matches, so the list has to be collapsed to

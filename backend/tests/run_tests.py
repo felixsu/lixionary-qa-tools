@@ -45,6 +45,7 @@ from tests.test_flow_runner import (
 from tests.test_flow_runner_v2 import (
     test_golden_fixtures,
     test_json_path_normalization,
+    test_generator_token_grammar,
     test_compare_values_operators,
     test_parse_handle_and_ports,
     test_parse_static_input_types,
@@ -217,6 +218,9 @@ def run():
 
         test_json_path_normalization()
         print("✓ test_json_path_normalization passed")
+
+        test_generator_token_grammar()
+        print("✓ test_generator_token_grammar passed")
 
         test_compare_values_operators()
         print("✓ test_compare_values_operators passed")

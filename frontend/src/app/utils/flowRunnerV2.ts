@@ -31,6 +31,7 @@ import {
   type RunRecord,
   type RunState,
 } from "./flowRunner";
+import { resolveGeneratorToken, type GeoPoint } from "./generatorsV2";
 import { evalJsonPath, verifyTarget } from "./jsonPathV2";
 import {
   Channel,
@@ -43,7 +44,7 @@ import {
   type ValueMsg,
 } from "./streamV2";
 import {
-  demuxOutName,
+  mapperOutName,
   edgeKindV2,
   EMIT_MAX_ITEMS,
   emptyStaticInput,
@@ -57,7 +58,8 @@ import {
   verifyCheckPortName,
   type ArrayEmitNodeConfigV2,
   type DelayNodeConfigV2,
-  type DemuxNodeConfigV2,
+  type GeneratorNodeConfigV2,
+  type MapperNodeConfigV2,
   type FlowEdgeV2,
   type FlowNodeConfigV2,
   type FlowNodeV2,
@@ -143,6 +145,25 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
 
     const nodeStatuses: Record<string, "success" | "failed" | "skipped" | "partial"> = {};
     const nodeItemCounts: Record<string, ItemCounts> = {};
+    const nodeLatchedInputs: Record<string, string[]> = {};
+
+    // $latitude / $longitude read the device-wide point the map picker stored.
+    // Fetched at most once per run, and a failure just leaves those tokens
+    // unresolved — same as the backend when no point was ever picked.
+    let geoPointPromise: Promise<GeoPoint | null> | null = null;
+    const loadGeoPoint = (): Promise<GeoPoint | null> => {
+      geoPointPromise ??= deps
+        .apiCall("/api/local-store/pref/geo_point")
+        .then((res: unknown) => {
+          const raw = (res as { value?: string } | null)?.value;
+          const parsed = raw ? (JSON.parse(raw) as { lat?: unknown; lng?: unknown }) : null;
+          return typeof parsed?.lat === "number" && typeof parsed?.lng === "number"
+            ? { lat: parsed.lat, lng: parsed.lng }
+            : null;
+        })
+        .catch(() => null);
+      return geoPointPromise;
+    };
     const emitStatus = (nodeId: string, status: NodeRunStatus) => {
       if (status !== "pending" && status !== "running" && status !== "idle") nodeStatuses[nodeId] = status;
       cb.onNodeStatus(nodeId, status);
@@ -542,22 +563,47 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
               break;
             }
 
-            case "demux": {
-              const rows = (cfg as DemuxNodeConfigV2).rows || [];
+            case "generator": {
+              if (incomingHole) {
+                counts.skipped += 1;
+                pushHole("value", "", incomingHole);
+                break;
+              }
+              const token = ((cfg as GeneratorNodeConfigV2).token || "").trim();
+              const generated = resolveGeneratorToken(token, { geoPoint: await loadGeoPoint() });
+              if (generated === null) {
+                const message = `"${token}" produced no value`;
+                counts.failed += 1;
+                pushHole("value", message);
+                emit(
+                  makeRecord(node, null, "failed", new Date().toISOString(), 0, {
+                    iteration: index,
+                    error: message,
+                  })
+                );
+                break;
+              }
+              counts.ok += 1;
+              pushItem("value", generated);
+              break;
+            }
+
+            case "mapper": {
+              const rows = (cfg as MapperNodeConfigV2).rows || [];
               const value = soleValue(values, "object");
               if (incomingHole) {
                 counts.skipped += 1;
-                for (const r of rows) pushHole(demuxOutName(r.id), "", incomingHole);
+                for (const r of rows) pushHole(mapperOutName(r.id), "", incomingHole);
                 break;
               }
               const source = value && value.kind === "item" ? value.value : staticValue("object").value;
               let anyMiss = false;
               for (const r of rows) {
                 const res = evalJsonPath(r.path, source);
-                if (res.found) pushItem(demuxOutName(r.id), res.value);
+                if (res.found) pushItem(mapperOutName(r.id), res.value);
                 else {
                   anyMiss = true;
-                  pushHole(demuxOutName(r.id), `Path "${r.path}" matched nothing`);
+                  pushHole(mapperOutName(r.id), `Path "${r.path}" matched nothing`);
                   emit(
                     makeRecord(node, null, "failed", new Date().toISOString(), 0, {
                       iteration: index,
@@ -598,6 +644,10 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
         }
 
         // ---- finalize -------------------------------------------------------
+        // Latching is only known once the streams have ended, so record it here.
+        const latched = joiner.latchedInputs().filter((name) => !isControlPortName(name));
+        if (latched.length) nodeLatchedInputs[node.id] = latched;
+
         if (node.type === "accumulator") {
           pushItem("array", accumulated);
           pushItem("count", accumulated.length);
@@ -636,6 +686,7 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
       durationMs: Date.now() - runStart,
       nodeStatuses,
       nodeItemCounts,
+      nodeLatchedInputs,
     };
   })();
 

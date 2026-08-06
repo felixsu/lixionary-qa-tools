@@ -157,6 +157,14 @@ export class Joiner {
     return this.inputs.length;
   }
 
+  /** Inputs that turned out to carry a single value and are being reused for
+   * every tuple. Only meaningful once the stream has been consumed — latching
+   * is discovered when an input ends, not when it starts. The editor surfaces
+   * this so "one route_id across three orders" is visible rather than inferred. */
+  latchedInputs(): string[] {
+    return this.inputs.filter((s) => s.latched).map((s) => s.name);
+  }
+
   async next(): Promise<TupleResult> {
     const i = this.index;
     const values: Record<string, ValueMsg> = {};

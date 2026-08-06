@@ -1,0 +1,47 @@
+{
+  "name": "mapper_rename_migration",
+  "description": "A flow saved while the block was still called \"demux\". Both engines must rename the stored type to \"mapper\" on load — ahead of the unknown-type sweep, which would otherwise dissolve the block and take its connections with it — so an unopened flow still runs and its rows still resolve.",
+  "collections": [
+    {
+      "id": "col",
+      "requests": [
+        { "id": "SRC", "method": "GET", "url": "http://test/src", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": ["fruit"] },
+        { "id": "NAME", "method": "GET", "url": "http://test/n/{{v}}", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": [] },
+        { "id": "COLOR", "method": "GET", "url": "http://test/c/{{v}}", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": [] }
+      ]
+    }
+  ],
+  "flow": {
+    "id": "flow", "name": "mapper_rename_migration", "schemaVersion": 2,
+    "nodes": [
+      { "id": "src", "name": "src", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "SRC", "staticInputs": {} } },
+      {
+        "id": "d", "name": "d", "type": "demux", "position": { "x": 0, "y": 0 },
+        "config": { "rows": [{ "id": "r1", "path": "$.name" }, { "id": "r2", "path": "$.color" }] }
+      },
+      { "id": "n", "name": "n", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "NAME", "staticInputs": {} } },
+      { "id": "c", "name": "c", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "COLOR", "staticInputs": {} } }
+    ],
+    "edges": [
+      { "id": "e1", "source": "src", "target": "d", "sourceHandle": "out:fruit", "targetHandle": "in:object" },
+      { "id": "e2", "source": "d", "target": "n", "sourceHandle": "out:o:r1", "targetHandle": "in:v" },
+      { "id": "e3", "source": "d", "target": "c", "sourceHandle": "out:o:r2", "targetHandle": "in:v" }
+    ]
+  },
+  "executorScript": {
+    "SRC": [{ "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "fruit": { "name": "apple", "color": "red" } }, "missingOutputs": [] }],
+    "NAME": [{ "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": {}, "missingOutputs": [] }],
+    "COLOR": [{ "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": {}, "missingOutputs": [] }]
+  },
+  "expected": {
+    "status": "success",
+    "recordsByNode": {
+      "n": [{ "status": "success", "iteration": 0 }],
+      "c": [{ "status": "success", "iteration": 0 }]
+    },
+    "bindings": {
+      "NAME": [{ "v": "apple" }],
+      "COLOR": [{ "v": "red" }]
+    }
+  }
+}

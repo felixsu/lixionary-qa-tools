@@ -1,6 +1,6 @@
 {
-  "name": "demux_verify_jsonpath",
-  "description": "Demux splits one object across outputs by JSONPath (the inverse of mux), a request re-checks its response until a JSONPath assertion passes, and the documented path dialect is exercised so a library upgrade in either stack fails here first.",
+  "name": "mapper_verify_jsonpath",
+  "description": "Mapper splits one object across outputs by JSONPath (the inverse of mux), a request re-checks its response until a JSONPath assertion passes, and the documented path dialect is exercised so a library upgrade in either stack fails here first.",
   "collections": [
     {
       "id": "col",
@@ -13,11 +13,11 @@
     }
   ],
   "flow": {
-    "id": "flow", "name": "demux_verify_jsonpath", "schemaVersion": 2,
+    "id": "flow", "name": "mapper_verify_jsonpath", "schemaVersion": 2,
     "nodes": [
       { "id": "src", "name": "src", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "SRC", "staticInputs": {} } },
       {
-        "id": "d", "name": "d", "type": "demux", "position": { "x": 0, "y": 0 },
+        "id": "d", "name": "d", "type": "mapper", "position": { "x": 0, "y": 0 },
         "config": { "rows": [{ "id": "r1", "path": "$.name" }, { "id": "r2", "path": "$.items[*].id" }] }
       },
       { "id": "n", "name": "n", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "NAME", "staticInputs": {} } },

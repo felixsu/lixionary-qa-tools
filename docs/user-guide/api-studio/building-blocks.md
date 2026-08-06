@@ -2,15 +2,16 @@
 
 ## **Adding Blocks**
 
-The left **Building blocks** panel lists the seven block types. Drag a card onto the canvas — or double-click it — to add it.
+The left **Building blocks** panel lists the block types. Drag a card onto the canvas — or double-click it — to add it.
 
 | Block | What it does | Outputs |
 | :---- | :---- | :---- |
 | **Request** | Runs a saved API Explorer request, optionally verifying and retrying the response | One dot per declared output |
 | **Array Emit** | Turns an array — or a plain repeat count — into a stream, one at a time | `item`, `index` |
 | **Accumulator** | Collects a whole stream back into a single array | `array`, `count` |
-| **Demux** | Splits one object into several outputs, each with its own JSONPath | One dot per configured path |
+| **Mapper** | Splits one object into several outputs, each with its own JSONPath | One dot per configured path |
 | **Mux** | Combines several inputs into one object | `object` |
+| **Generator** | Emits a generated value — date, random number, name, email, or location | `value` |
 | **Delay** | Waits a fixed number of milliseconds | `value` (passthrough) |
 
 New blocks are auto-named after their type (`request`, `arrayEmit`, `request_2`, …); rename them in the inspector. Names appear on the block and in run records; duplicates are auto-suffixed when you save.
@@ -58,6 +59,25 @@ Get Token  ●─(latched)─┘           (item1, token) (item2, token) (item3,
 
 If two genuinely different-length streams meet at one block, the run fails with an explicit error rather than pairing unrelated items. The toolbar warns at edit time when two inputs are driven by different emitters.
 
+After a run, a latched input carries a **reused** tag on the block, and the inspector names it under *Last run* — so you can see which value was shared rather than having to infer it.
+
+This is what lets one value fan out across a stream without any extra block:
+
+```
+create route  ──────────────● route_id  ┐
+                                        ├─● assign ●── (runs 3×, same route_id)
+Array Emit ●──● create order ●─ tracking_id ┘
+   3 items         runs 3×
+```
+
+**Worked example — one route, three orders.** The assignment API takes one tracking id per call, so:
+
+1. **Request** *create route* — no inputs, so it runs once and emits a single `route_id`.
+2. **Array Emit** in repeat-count mode (3) wired into **Request** *create order*'s `each` input, so it runs three times and emits three `tracking_id`s.
+3. **Request** *assign* takes both: `route_id` from step 1, `tracking_id` from step 2.
+
+The assign block runs three times — once per tracking id — with the same `route_id` each time, because that input was a single value. No broadcast or copy block is involved.
+
 ## **Failures don't stop the stream**
 
 If one item fails — an HTTP error that exhausts its retries, a JSONPath that matches nothing — that item drops out and **the remaining items keep flowing**. The block finishes with a *partial* status showing how many items failed, and the run is reported as failed.
@@ -90,10 +110,17 @@ The failed item keeps its **position** as it travels, so branches that fork from
 
 No configuration. It collects its input stream and emits one array plus a count when the stream ends.
 
-### **Demux / Mux**
+### **Mapper / Mux**
 
-* **Demux**: add one output row per **JSONPath** (`$.name`, `$.color`). Each output emits its own extraction from the same object, so one object in becomes several values out. A path that matches nothing holes only *that* output.
+* **Mapper**: add one output row per **JSONPath** (`$.name`, `$.color`). Each output emits its own extraction from the same object, so one object in becomes several values out. A path that matches nothing holes only *that* output.
 * **Mux**: add one input row per **field name**; each item becomes one object using those names as keys.
+
+### **Generator**
+
+* **Value**: pick from the same catalog API Explorer offers — **date** (with an offset, a format, or epoch seconds/milliseconds), **random number** (a digit count or a range), **random email / first / last / full name**, and **location** (the point you chose on the map). It is stored as a token such as `$date:+1d:YYYY-MM-DD`.
+* Emits on **`value`**. Because one output can feed many inputs, every consumer receives the **same** generated value — which is the thing typing `{{$randomEmail}}` into two requests separately cannot do, since each request would interpolate its own.
+* **Repeat with an `each` input** (optional): off, the block emits one value that gets reused everywhere it is wired; on, it produces a fresh value per item of the stream you connect — a unique email per order, say.
+* You can still type a token like `{{$randomInt:4}}` directly into a hardcoded input when the value only matters to that one request; the picker is available there too.
 
 ### **Delay**
 

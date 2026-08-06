@@ -24,13 +24,14 @@
 //   "done"        trigger output — fires once when the node's stream ends
 // Config-derived ports use a stable row id inside the name so renaming a
 // JSONPath or field never orphans an edge:
-//   demux output      "out:o:<rowId>"
+//   mapper output      "out:o:<rowId>"
 //   mux input         "in:i:<rowId>"
 //   verify expected   "in:cmp:<checkId>"
 //   repeat driver     "in:ctl:each"
 
 import type { Collection } from "../context/AppContext";
 import { lookupRequest } from "./flowRunner";
+import { isKnownGeneratorToken } from "./generatorsV2";
 import { scanInputNames } from "./requestTokens";
 import type { ComparisonOperator } from "./flowTypes";
 
@@ -39,16 +40,18 @@ export type FlowNodeTypeV2 =
   | "delay"
   | "arrayEmit"
   | "accumulator"
-  | "demux"
-  | "mux";
+  | "mapper"
+  | "mux"
+  | "generator";
 
 export const FLOW_NODE_TYPES_V2: readonly FlowNodeTypeV2[] = [
   "request",
   "delay",
   "arrayEmit",
   "accumulator",
-  "demux",
+  "mapper",
   "mux",
+  "generator",
 ];
 
 export const isKnownNodeTypeV2 = (type: string): type is FlowNodeTypeV2 =>
@@ -67,7 +70,7 @@ export const TRIGGER_OUT = "done";
 export const dataInHandle = (name: string): string => `in:${name}`;
 export const dataOutHandle = (name: string): string => `out:${name}`;
 
-export const demuxOutName = (rowId: string): string => `o:${rowId}`;
+export const mapperOutName = (rowId: string): string => `o:${rowId}`;
 export const muxInName = (rowId: string): string => `i:${rowId}`;
 export const verifyCheckPortName = (checkId: string): string => `cmp:${checkId}`;
 
@@ -194,13 +197,23 @@ export interface ArrayEmitNodeConfigV2 {
 
 export type AccumulatorNodeConfigV2 = Record<string, never>;
 
-export interface DemuxRowV2 {
+export interface GeneratorNodeConfigV2 {
+  // A brace-less dynamic-token body, exactly as input bindings store it
+  // ("$date:+1d:YYYY-MM-DD"). The catalog lives in the backend executor; see
+  // generatorsV2.ts for the engine-side twin.
+  token: string;
+  // Same opt-in repeat driver as Request: off, the block emits one value that
+  // every consumer reuses; on, it produces a fresh value per driving item.
+  useEach?: boolean;
+}
+
+export interface MapperRowV2 {
   id: string;
   path: string; // JSONPath extracted onto this row's output, e.g. "$.color"
 }
 
-export interface DemuxNodeConfigV2 {
-  rows: DemuxRowV2[];
+export interface MapperNodeConfigV2 {
+  rows: MapperRowV2[];
 }
 
 export interface MuxRowV2 {
@@ -218,7 +231,8 @@ export type FlowNodeConfigV2 =
   | DelayNodeConfigV2
   | ArrayEmitNodeConfigV2
   | AccumulatorNodeConfigV2
-  | DemuxNodeConfigV2
+  | GeneratorNodeConfigV2
+  | MapperNodeConfigV2
   | MuxNodeConfigV2;
 
 // ---- Graph ------------------------------------------------------------------
@@ -364,15 +378,27 @@ export const nodePorts = (node: FlowNodeV2, collections: Collection[]): PortSpec
         { id: dataOutHandle("array"), name: "array", kind: "data", direction: "out", dataType: "array" },
         { id: dataOutHandle("count"), name: "count", kind: "data", direction: "out", dataType: "number" },
       ];
-    case "demux": {
-      const cfg = node.config as DemuxNodeConfigV2;
+    case "generator": {
+      const cfg = node.config as GeneratorNodeConfigV2;
+      const each: PortSpec[] = !cfg.useEach
+        ? []
+        : [{ id: dataInHandle(EACH_PORT_NAME), name: EACH_PORT_NAME, label: "each", kind: "data", direction: "in", dataType: "any", widget: "none" }];
+      return [
+        ...triggerPorts(),
+        ...each,
+        // labelled plainly: the card already shows the token as its subtitle
+        { id: dataOutHandle("value"), name: "value", kind: "data", direction: "out", dataType: "any" },
+      ];
+    }
+    case "mapper": {
+      const cfg = node.config as MapperNodeConfigV2;
       return [
         ...triggerPorts(),
         { id: dataInHandle("object"), name: "object", kind: "data", direction: "in", dataType: "json", widget: "json" },
         ...(cfg.rows || []).map(
           (r): PortSpec => ({
-            id: dataOutHandle(demuxOutName(r.id)),
-            name: demuxOutName(r.id),
+            id: dataOutHandle(mapperOutName(r.id)),
+            name: mapperOutName(r.id),
             label: r.path || "(unset)",
             kind: "data",
             direction: "out",
@@ -431,6 +457,15 @@ export const migrateFlowV2 = (
     );
     return wired ? { ...n, config: { ...cfg, useEach: true } } : n;
   });
+
+  // "demux" was renamed to "mapper". This MUST stay ahead of the unknown-type
+  // sweep below, which would otherwise dissolve every saved Demux block instead
+  // of renaming it. Config and handle ids ("out:o:<rowId>") are unchanged, so
+  // connections survive untouched — and a pure rename is not a rewritten block,
+  // so it deliberately does not count towards `changed`.
+  nextNodes = nextNodes.map((n) =>
+    (n.type as string) === "demux" ? { ...n, type: "mapper" as FlowNodeTypeV2 } : n
+  );
 
   const legacy = nextNodes.filter((n) => !isKnownNodeTypeV2(n.type));
   if (!legacy.length) return { nodes: nextNodes, edges, changed: 0 };
@@ -641,8 +676,16 @@ export const validateFlowV2 = (flow: FlowV2, collections: Collection[]): FlowIss
         }
         break;
       }
-      case "demux": {
-        const cfg = node.config as DemuxNodeConfigV2;
+      case "generator": {
+        const cfg = node.config as GeneratorNodeConfigV2;
+        const token = (cfg.token || "").trim();
+        if (!token) error(`"${node.name}" has no generator selected`, { nodeId: node.id });
+        else if (!isKnownGeneratorToken(token))
+          error(`"${node.name}": "${token}" is not a generator this version knows`, { nodeId: node.id });
+        break;
+      }
+      case "mapper": {
+        const cfg = node.config as MapperNodeConfigV2;
         const rows = cfg.rows || [];
         if (!rows.length) error(`"${node.name}" has no outputs configured`, { nodeId: node.id });
         const paths = new Set<string>();
@@ -781,7 +824,9 @@ export const defaultConfigForTypeV2 = (type: FlowNodeTypeV2): FlowNodeConfigV2 =
       return { staticItems: { type: "json", value: "[]" } };
     case "accumulator":
       return {};
-    case "demux":
+    case "generator":
+      return { token: "$randomInt:4" };
+    case "mapper":
       return { rows: [{ id: crypto.randomUUID(), path: "$." }] };
     case "mux":
       return {

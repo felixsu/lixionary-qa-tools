@@ -1,0 +1,48 @@
+{
+  "name": "generator_latched",
+  "description": "A Generator block with no `each` connection emits exactly one value, which the scalar latch then hands to every consumer — so both requests receive the SAME generated number. This is the thing a token typed into each request separately cannot do: those would each interpolate their own value.",
+  "collections": [
+    {
+      "id": "col",
+      "requests": [
+        { "id": "A", "method": "GET", "url": "http://test/a/{{ref}}", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": [] },
+        { "id": "B", "method": "GET", "url": "http://test/b/{{ref}}", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": [] }
+      ]
+    }
+  ],
+  "flow": {
+    "id": "flow",
+    "name": "generator_latched",
+    "schemaVersion": 2,
+    "nodes": [
+      { "id": "gen", "name": "gen", "type": "generator", "position": { "x": 0, "y": 0 }, "config": { "token": "$randomInt:6" } },
+      { "id": "a", "name": "a", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "A", "staticInputs": {} } },
+      { "id": "b", "name": "b", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "B", "staticInputs": {} } }
+    ],
+    "edges": [
+      { "id": "e1", "source": "gen", "target": "a", "sourceHandle": "out:value", "targetHandle": "in:ref" },
+      { "id": "e2", "source": "gen", "target": "b", "sourceHandle": "out:value", "targetHandle": "in:ref" }
+    ]
+  },
+  "executorScript": {
+    "A": [{ "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": {}, "missingOutputs": [] }],
+    "B": [{ "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": {}, "missingOutputs": [] }]
+  },
+  "expected": {
+    "status": "success",
+    "recordsByNode": {
+      "a": [{ "status": "success", "iteration": 0 }],
+      "b": [{ "status": "success", "iteration": 0 }]
+    },
+    "bindingPatterns": {
+      "A": [{ "ref": "^[1-9]\\d{5}$" }],
+      "B": [{ "ref": "^[1-9]\\d{5}$" }]
+    },
+    "sameBindingAcross": [
+      { "requests": ["A", "B"], "call": 0, "input": "ref" }
+    ],
+    "nodeItemCounts": {
+      "gen": { "ok": 1, "failed": 0, "skipped": 0 }
+    }
+  }
+}

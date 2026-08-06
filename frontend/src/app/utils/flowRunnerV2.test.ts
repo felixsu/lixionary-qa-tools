@@ -420,7 +420,7 @@ describe("continue on error", () => {
   });
 });
 
-describe("demux and mux", () => {
+describe("mapper and mux", () => {
   it("splits an object into one output per configured path", async () => {
     const h = makeHarness({
       SRC: { handler: () => ok({ fruit: { name: "apple", color: "red" } }), outputs: ["fruit"] },
@@ -430,7 +430,7 @@ describe("demux and mux", () => {
     const f = makeFlow(
       [
         req("src", "SRC"),
-        node("d", "demux", { rows: [{ id: "r1", path: "$.name" }, { id: "r2", path: "$.color" }] }),
+        node("d", "mapper", { rows: [{ id: "r1", path: "$.name" }, { id: "r2", path: "$.color" }] }),
         req("n", "NAME"),
         req("c", "COLOR"),
       ],
@@ -455,7 +455,7 @@ describe("demux and mux", () => {
     const f = makeFlow(
       [
         req("src", "SRC"),
-        node("d", "demux", { rows: [{ id: "r1", path: "$.name" }, { id: "r2", path: "$.color" }] }),
+        node("d", "mapper", { rows: [{ id: "r1", path: "$.name" }, { id: "r2", path: "$.color" }] }),
         req("n", "NAME"),
         req("c", "COLOR"),
       ],
