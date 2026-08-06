@@ -21,10 +21,19 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   AlertCircle, Combine, Copy, Download, Layers, Pencil, Play, Plus, Repeat2, Rows3, Save, Send,
-  ShieldCheck, Sparkles, Split, Square, Timer, Trash2, Wand2, X,
+  FileDown, ShieldCheck, Sparkles, Split, Square, Timer, Trash2, Upload, Wand2, X,
 } from "lucide-react";
 import { GeneratorBindingButton } from "../../../components/GeneratorMenu";
 import { isKnownGeneratorToken } from "../../../utils/generatorsV2";
+import {
+  downloadText,
+  flowExportFilename,
+  parseFlowImport,
+  prepareImportedFlow,
+  serializeFlowForExport,
+  type FlowExportFileFormat,
+  type FlowImportSummary,
+} from "../../../utils/flowTransfer";
 import Editor from "@monaco-editor/react";
 import { useAppContext, type Collection } from "../../../context/AppContext";
 import { useFlowRuns } from "../../../context/FlowRunsContext";
@@ -132,7 +141,10 @@ function StudioEditorV2({ selectedFlow, onSelectFlow }: EditorV2Props) {
 
   const [showNewFlowModal, setShowNewFlowModal] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [importSummary, setImportSummary] = useState<FlowImportSummary | null>(null);
   const [flowNameDraft, setFlowNameDraft] = useState("");
+  const importFileRef = useRef<HTMLInputElement>(null);
 
   const agentRuns = activeRuns.filter((r) => r.source === "mcp");
 
@@ -634,6 +646,56 @@ function StudioEditorV2({ selectedFlow, onSelectFlow }: EditorV2Props) {
     }
   };
 
+  const onExportFlow = (format: FlowExportFileFormat) => {
+    if (!selectedFlow) return;
+    // Export what's on the canvas, saved or not — same as Duplicate.
+    const current: FlowV2 = {
+      ...selectedFlow,
+      nodes: serializeNodesV2(nodes),
+      edges: serializeEdgesV2(edges),
+    };
+    const text = serializeFlowForExport(current, collections, format);
+    downloadText(
+      text,
+      flowExportFilename(selectedFlow.name, format),
+      format === "json" ? "application/json" : "application/yaml"
+    );
+    setShowExportModal(false);
+    showToast("Flow exported", { type: "success" });
+  };
+
+  const onImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const input = event.target;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const parsed = parseFlowImport(await file.text());
+      const prepared = prepareImportedFlow(parsed, flows.map((f) => f.name), collections);
+      const created = await createFlow(prepared.name);
+      await updateFlow(
+        created.id,
+        {
+          description: prepared.description,
+          nodes: prepared.nodes as unknown as FlowNode[],
+          edges: prepared.edges as unknown as Flow["edges"],
+        },
+        created
+      );
+      onSelectFlow(created.id);
+      const { summary } = prepared;
+      if (summary.autoLinked.length || summary.missing.length) {
+        setImportSummary(summary);
+      } else {
+        showToast(`Imported "${prepared.name}" — all ${summary.matched} request(s) matched`, { type: "success" });
+      }
+    } catch (err) {
+      showToast(asMessage(err), { type: "error" });
+    } finally {
+      // Re-picking the same file must re-fire the change event.
+      input.value = "";
+    }
+  };
+
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) || null;
   const selectedEdge = edges.find((e) => e.id === selectedEdgeId) || null;
   const selectedNodeRecords = useMemo(
@@ -662,6 +724,20 @@ function StudioEditorV2({ selectedFlow, onSelectFlow }: EditorV2Props) {
         >
           <Plus className="h-3.5 w-3.5" /> New
         </button>
+        <input
+          ref={importFileRef}
+          type="file"
+          accept=".yaml,.yml,.json,application/json"
+          onChange={onImportFile}
+          className="hidden"
+        />
+        <button
+          onClick={() => importFileRef.current?.click()}
+          title="Import a flow from a YAML or JSON export"
+          className="h-8 px-2.5 flex items-center gap-1.5 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors"
+        >
+          <Upload className="h-3.5 w-3.5" /> Import
+        </button>
         {selectedFlow && (
           <>
             <button
@@ -680,6 +756,13 @@ function StudioEditorV2({ selectedFlow, onSelectFlow }: EditorV2Props) {
               className="h-8 w-8 flex items-center justify-center bg-cream border border-line rounded-md text-graphite hover:bg-panel transition-colors"
             >
               <Copy className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => setShowExportModal(true)}
+              title="Export flow to a file"
+              className="h-8 w-8 flex items-center justify-center bg-cream border border-line rounded-md text-graphite hover:bg-panel transition-colors"
+            >
+              <FileDown className="h-3.5 w-3.5" />
             </button>
             <button
               onClick={onDeleteFlow}
@@ -898,6 +981,82 @@ function StudioEditorV2({ selectedFlow, onSelectFlow }: EditorV2Props) {
             />
             <ModalFooter onCancel={() => setShowNewFlowModal(false)} submitLabel="Create" />
           </form>
+        </Modal>
+      )}
+      {showExportModal && selectedFlow && (
+        <Modal title="Export flow" onClose={() => setShowExportModal(false)}>
+          <div className="flex flex-col gap-3">
+            <p className="text-xs text-mute">
+              Writes <span className="font-mono">{flowExportFilename(selectedFlow.name, "yaml")}</span> with the graph
+              and an <em>interface snapshot</em> of every referenced request (name, method, URL, inputs, outputs) —
+              never headers, bodies, or scripts. Anyone importing it without those requests will be told exactly what
+              to recreate.
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => onExportFlow("yaml")}
+                className="h-9 flex-1 bg-clay hover:bg-clay-dark rounded-md text-xs font-medium text-white transition-colors"
+              >
+                YAML (recommended)
+              </button>
+              <button
+                onClick={() => onExportFlow("json")}
+                className="h-9 flex-1 bg-cream border border-line rounded-md text-xs font-medium text-graphite hover:bg-panel transition-colors"
+              >
+                JSON
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {importSummary && (
+        <Modal title="Flow imported" onClose={() => setImportSummary(null)}>
+          <div className="flex flex-col gap-4 text-xs">
+            {importSummary.matched > 0 && (
+              <p className="text-mute">{importSummary.matched} request(s) matched by id.</p>
+            )}
+            {importSummary.autoLinked.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                <span className="font-medium text-stone">Auto-linked by name and method — double-check these:</span>
+                {importSummary.autoLinked.map((a, i) => (
+                  <div key={i} className="px-3 py-2 rounded-lg border border-line bg-cream font-mono text-[11px]">
+                    {a.nodeName} → {a.method} {a.requestName}
+                  </div>
+                ))}
+              </div>
+            )}
+            {importSummary.missing.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                <span className="font-medium text-amber-700">
+                  Missing here — create each request in API Explorer, then select it on the block:
+                </span>
+                {importSummary.missing.map((m, i) => (
+                  <div key={i} className="px-3 py-2 rounded-lg border border-amber-200 bg-amber-50/60 text-[11px]">
+                    {m.snapshot ? (
+                      <>
+                        <div className="font-mono text-ink">
+                          {m.snapshot.method} {m.snapshot.name}
+                        </div>
+                        <div className="font-mono text-mute truncate">{m.snapshot.url}</div>
+                        <div className="text-mute">
+                          inputs: {m.snapshot.inputs.length ? m.snapshot.inputs.join(", ") : "—"} · outputs:{" "}
+                          {m.snapshot.outputs.length ? m.snapshot.outputs.join(", ") : "—"}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="text-mute">Block &quot;{m.nodeName}&quot; names no known request and carries no snapshot.</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            <button
+              onClick={() => setImportSummary(null)}
+              className="h-9 bg-clay hover:bg-clay-dark rounded-md text-xs font-medium text-white transition-colors"
+            >
+              Got it
+            </button>
+          </div>
         </Modal>
       )}
       {showRenameModal && (
@@ -1379,7 +1538,8 @@ function RequestConfigV2({
         <label className="text-xs font-medium text-stone">Request</label>
         <RequestPicker
           value={cfg.requestId}
-          onChange={(requestId) => onChange({ ...cfg, requestId })}
+          // Picking a request supersedes an imported-era snapshot — clear it.
+          onChange={(requestId) => onChange({ ...cfg, requestId, expected: undefined })}
           collections={collections}
         />
         <span className="text-[11px] text-mute">
@@ -1387,6 +1547,23 @@ function RequestConfigV2({
           become output dots. Unconnected inputs use the value typed on the node, otherwise the request&apos;s own
           default.
         </span>
+        {!!cfg.expected && !lookupRequest(collections, cfg.requestId) && (
+          <div className="mt-1 px-3 py-2.5 rounded-lg border border-amber-200 bg-amber-50/60 flex flex-col gap-1 text-[11px]">
+            <span className="flex items-start gap-1.5 font-medium text-amber-700">
+              <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-px" />
+              This block expects a request that doesn&apos;t exist here.
+            </span>
+            <span className="font-mono text-ink">
+              {cfg.expected.method} {cfg.expected.name}
+            </span>
+            <span className="font-mono text-mute break-all">{cfg.expected.url}</span>
+            <span className="text-mute">
+              inputs: {cfg.expected.inputs.length ? cfg.expected.inputs.join(", ") : "—"} · outputs:{" "}
+              {cfg.expected.outputs.length ? cfg.expected.outputs.join(", ") : "—"}
+            </span>
+            <span className="text-mute">Create it in API Explorer, then select it above.</span>
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col gap-1.5 pt-3 border-t border-line">

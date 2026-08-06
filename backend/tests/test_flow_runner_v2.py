@@ -300,6 +300,18 @@ def test_parse_handle_and_ports():
     assert [p["id"] for p in node_ports(_req_node("n", "R", useEach=True), collections)] == [
         "after", "done", "in:ctl:each", "in:x", "out:v",
     ]
+    # an imported node whose request is missing derives ports from its snapshot
+    # (config.expected, written by the flow importer) — twin of the TS case
+    snapshot = {"name": "Create order", "method": "POST", "url": "http://x/orders",
+                "inputs": ["seq"], "outputs": ["tracking_id"]}
+    assert [p["id"] for p in node_ports(_req_node("n", "GONE", expected=snapshot), collections)] == [
+        "after", "done", "in:seq", "out:tracking_id",
+    ]
+    # a stale snapshot is ignored once the request resolves
+    assert [p["id"] for p in node_ports(_req_node("n", "R", expected=snapshot), collections)] == [
+        "after", "done", "in:x", "out:v",
+    ]
+
     splitter = _node("d", "splitter", {"rows": [{"id": "r1", "path": "$.a"}, {"id": "r2", "path": "$.b"}]})
     assert [p["id"] for p in node_ports(splitter, []) if p["direction"] == "out" and p["kind"] == "data"] == [
         "out:o:r1", "out:o:r2",

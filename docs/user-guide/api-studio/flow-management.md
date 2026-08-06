@@ -16,10 +16,11 @@ Selecting a legacy flow opens it in a frozen editor with an amber **Legacy · vi
 
 ## **Rename, Duplicate, Delete**
 
-When a flow is selected, three icon buttons appear next to the dropdown:
+When a flow is selected, four icon buttons appear next to the dropdown:
 
 * **Rename flow** (pencil): Opens the **Rename flow** modal.
 * **Duplicate flow** (copy): Clones the flow — including any unsaved canvas edits — as "*Name* 2", "*Name* 3", etc., and selects the copy. Duplicating a legacy flow produces another legacy flow.
+* **Export flow** (file-down): Writes the flow to a shareable file — see **Export & Import** below.
 * **Delete flow** (trash): Asks for confirmation (*"Delete flow «name»? This cannot be undone."*) before deleting.
 
 ## **Saving**
@@ -33,4 +34,12 @@ When a flow is selected, three icon buttons appear next to the dropdown:
 
 Flows sync to the cloud exactly like collections: local-first storage, pushed after each save, and pulled on app load, window focus, every 5 minutes, or via the **Sync now** control in the left navigation rail. Concurrent-edit conflicts surface in the same keep-local/keep-cloud dialog.
 
-> **Note**: There is no flow import/export file format — the only data that leaves API Studio is the run CSV (**Report**). To share a flow with a teammate, rely on cloud sync.
+## **Export & Import**
+
+* **Export** (file-down icon next to Duplicate) writes the current canvas — unsaved edits included — to `<name>.flow.yaml` (recommended) or `.flow.json`. The file carries the graph plus an **interface snapshot** of every referenced request: its name, method, URL, input names, and output names. It never includes headers, bodies, or scripts, so no secret can travel in a shared file.
+* **Import** (next to **New**) reads either format and creates a **new** flow (the name is suffixed if taken). Each request block is matched against your collections:
+  1. by its exact request id;
+  2. failing that, by a **unique name + method** match anywhere in your collections — these are auto-linked and listed in the import summary so you can double-check them;
+  3. otherwise the block is marked **missing**. It keeps its full expected interface — the snapshot's inputs and outputs render as real dots, so nothing disconnects — but the flow can't run until resolved. The block's card reads *Missing: POST Create order*, and the inspector shows the expected name, method, URL, inputs, and outputs with a hint: create the request in **API Explorer**, then select it on the block. Picking a request clears the snapshot.
+* Two same-name+method candidates are never guessed between — the block is marked missing instead.
+* Legacy (V1) flows have no export; only V2 files can be imported.

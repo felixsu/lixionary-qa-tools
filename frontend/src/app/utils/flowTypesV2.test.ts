@@ -157,6 +157,22 @@ describe("nodePorts", () => {
     expect(driver.widget).toBe("none"); // drives execution, never hardcoded
   });
 
+  it("derives ports from the expected snapshot when the request is missing", () => {
+    const expected = { name: "Create order", method: "POST", url: "http://x/orders", inputs: ["seq"], outputs: ["tracking_id"] };
+    const ids = nodePorts(requestNode("n1", "req_gone", { expected }), collections).map((p) => p.id);
+    expect(ids).toEqual(["after", "done", "in:seq", "out:tracking_id"]);
+    // still an error — the snapshot describes the request, it can't run it
+    const flow = makeFlow([requestNode("n1", "req_gone", { expected })], []);
+    expect(errors(flow).some((m) => m.includes("linked request not found"))).toBe(true);
+  });
+
+  it("ignores a stale snapshot once the request resolves", () => {
+    const expected = { name: "old", method: "GET", url: "http://x", inputs: ["stale"], outputs: ["gone"] };
+    const ids = nodePorts(requestNode("n1", "req1", { expected }), collections).map((p) => p.id);
+    // the saved request wins: its real ports, none of the snapshot's
+    expect(ids).toEqual(["after", "done", "in:orderId", "out:uuid"]);
+  });
+
   it("adds verify ports only when verification is enabled", () => {
     const verify = {
       enabled: true,

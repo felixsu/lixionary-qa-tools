@@ -59,7 +59,12 @@ export const decorateV2 = (
   }
   const req = lookupRequest(collections, cfg.requestId);
   if (!req) {
-    return { flowNode: fn, status, requestLabel: "Linked request not found", requestMissing: true, ports };
+    // An imported node carries a snapshot of the request it expects — name it,
+    // so the card says what to recreate instead of just that something's gone.
+    const label = cfg.expected
+      ? `Missing: ${cfg.expected.method} ${cfg.expected.name}`
+      : "Linked request not found";
+    return { flowNode: fn, status, requestLabel: label, requestMissing: true, ports };
   }
   return { flowNode: fn, status, requestLabel: `${req.method} ${req.name}`, requestMissing: false, ports };
 };
