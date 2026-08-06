@@ -306,8 +306,10 @@ const ArrayEmitNodeV2 = shell(
   Rows3,
   () => "array emit",
   (d) => {
-    const raw = (d.flowNode.config as { staticItems?: StaticInputV2 }).staticItems?.value || "";
-    return raw ? `static ${raw.slice(0, 28)}${raw.length > 28 ? "…" : ""}` : null;
+    const items = (d.flowNode.config as { staticItems?: StaticInputV2 }).staticItems;
+    if (!items?.value) return null;
+    if (items.type === "number") return `repeat × ${items.value}`;
+    return `static ${items.value.slice(0, 28)}${items.value.length > 28 ? "…" : ""}`;
   }
 );
 const AccumulatorNodeV2 = shell("AccumulatorNodeV2", Layers, () => "accumulator");

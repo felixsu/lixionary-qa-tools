@@ -7,7 +7,7 @@ The left **Building blocks** panel lists the seven block types. Drag a card onto
 | Block | What it does | Outputs |
 | :---- | :---- | :---- |
 | **Request** | Runs a saved API Explorer request, optionally verifying and retrying the response | One dot per declared output |
-| **Array Emit** | Turns an array into a stream: emits its elements one at a time | `item`, `index` |
+| **Array Emit** | Turns an array — or a plain repeat count — into a stream, one at a time | `item`, `index` |
 | **Accumulator** | Collects a whole stream back into a single array | `array`, `count` |
 | **Demux** | Splits one object into several outputs, each with its own JSONPath | One dot per configured path |
 | **Mux** | Combines several inputs into one object | `object` |
@@ -33,14 +33,15 @@ The end-of-stream travels with the data, so nothing extra needs wiring — the a
 Every block renders its ports directly on the card, ComfyUI-style:
 
 * **Input dots** (left) — one per `{{input}}` the linked request declares, or per configured row on a Mux. An **unconnected** input shows an inline value box with a **type** (`string`, `number`, `boolean`, `json`); a **connected** input shows a chip naming its source.
+* **`each`** (on Request blocks) — connect any stream here and the request runs **once per item**, ignoring the value. This is how you repeat a request that declares no inputs of its own.
 * **Output dots** (right) — one per declared output / configured row.
 * **Trigger diamonds** (header corners) — `after` and `done`. Connect `done → after` to order two blocks **without** passing data. Because `done` only fires when a whole stream has finished, this doubles as a "wait for all of it" barrier.
 
 Port lists are derived live from your collections: editing a saved request updates its blocks immediately. If a port that has connections disappears, the block shows a red struck-through **ghost port** so the connection stays visible; the inspector lists these under **Port problems**, and runs are blocked until they're resolved.
 
-## **Connections are one-to-one**
+## **How connections work**
 
-* Each data output feeds **exactly one** input, and each data input accepts **exactly one** connection. Dropping a second wire on either is refused with a hint.
+* Each data input accepts **exactly one** connection — a second wire onto it is refused with a hint, so a value is never ambiguously merged. An **output** has no such limit: it may feed as many inputs as you like.
 * To send one value to several places, just drag a second connection from the same output. To combine several values into one, add a **Mux** — values are never implicitly merged, so every input has one unambiguous source.
 * Trigger diamonds are the exception — they're events, not data, so they may fan in and out freely.
 * Data dots only connect to data dots, diamonds only to diamonds; cycles are refused while dragging.
@@ -76,12 +77,13 @@ The failed item keeps its **position** as it travels, so branches that fork from
 
 ### **Request**
 
-* **Request**: pick a saved API Explorer request (type ≥2 characters to search by name, endpoint, or description).
+* **Request**: pick a saved API Explorer request (type ≥2 characters to search by name, endpoint, or description). To run it more than once, connect a stream to its **`each`** input — it fires once per item and the value is discarded.
 * **Verify the response** (optional): add checks that each read a value with **JSONPath** over `$.status`, `$.body…`, `$.headers…`, or `$.outputs…` and compare it with `equals`, `not equals`, `contains`, `exists`, `greater than`, or `less than`. All checks must pass; otherwise the item is retried up to **Max attempts** every **Retry interval**. An expected value can be **Static** or come from a **Port** — the check grows its own input dot to receive it. Every item of a stream is verified independently.
 
 ### **Array Emit**
 
-* **Items**: a static JSON array when the `array` input is unconnected, otherwise whatever arrives on it. A stream of several arrays is flattened in order. An emitter may release at most **100 items** per run.
+* **Items**: when the `array` input is unconnected, pick either a **repeat count** — a plain number N, emitting `0…N-1` — or a **static JSON array**. When it *is* connected, whatever arrives wins, and a stream of several arrays is flattened in order. An emitter may release at most **100 items** per run.
+* To run something a fixed number of times, set a repeat count and wire `index` into the target's `each` input.
 
 ### **Accumulator**
 

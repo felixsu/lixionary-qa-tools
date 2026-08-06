@@ -48,6 +48,7 @@ import {
   EMIT_MAX_ITEMS,
   emptyStaticInput,
   flowErrorsV2,
+  isControlPortName,
   migrateFlowV2,
   muxInName,
   parseHandle,
@@ -346,7 +347,9 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
           resolvedInputs[name] = text;
         }
         for (const [name, msg] of Object.entries(values)) {
-          if (name.startsWith("cmp:")) continue; // verify expectations, not request inputs
+          // Verify expectations and the `each` repeat driver steer execution;
+          // neither is a request parameter.
+          if (name.startsWith("cmp:") || isControlPortName(name)) continue;
           if (msg.kind !== "item") continue;
           const text = stringifyValue(msg.value);
           bindings.set(name, { name, source: "literal", value: text });
@@ -485,10 +488,14 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
               if (src && src.kind === "item") {
                 raw = src.value;
               } else {
-                const parsed = parseStaticInput(
-                  (cfg as ArrayEmitNodeConfigV2).staticItems || emptyStaticInput("json")
-                );
-                raw = parsed.ok ? parsed.value : null;
+                const items = (cfg as ArrayEmitNodeConfigV2).staticItems || emptyStaticInput("json");
+                const parsed = parseStaticInput(items);
+                // A numeric static value is a repeat count: emit 0 … N-1.
+                raw = !parsed.ok
+                  ? null
+                  : items.type === "number"
+                    ? Array.from({ length: Math.max(0, Number(parsed.value)) }, (_, i) => i)
+                    : parsed.value;
               }
               if (typeof raw === "string") {
                 try {

@@ -51,6 +51,8 @@ from tests.test_flow_runner_v2 import (
     test_verify_adds_no_passed_output,
     test_validate_flow_v2_rules,
     test_invalid_flow_aborts_before_running,
+    test_each_repeats_an_input_less_request,
+    test_count_mode_emits_zero_to_n_minus_one,
     test_done_after_barrier_waits_for_whole_stream,
     test_cancellation_mid_stream,
     test_partial_failure_reports_item_counts,
@@ -232,6 +234,12 @@ def run():
 
         asyncio.run(test_invalid_flow_aborts_before_running())
         print("✓ test_invalid_flow_aborts_before_running passed")
+
+        asyncio.run(test_each_repeats_an_input_less_request())
+        print("✓ test_each_repeats_an_input_less_request passed")
+
+        asyncio.run(test_count_mode_emits_zero_to_n_minus_one())
+        print("✓ test_count_mode_emits_zero_to_n_minus_one passed")
 
         asyncio.run(test_done_after_barrier_waits_for_whole_stream())
         print("✓ test_done_after_barrier_waits_for_whole_stream passed")

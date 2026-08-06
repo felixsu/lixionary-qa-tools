@@ -203,8 +203,9 @@ def test_parse_handle_and_ports():
     assert parse_handle("bogus") is None
 
     collections = [{"id": "col", "requests": [_request("R", url="http://test/{{x}}", outputs=["v"])]}]
+    # every request carries the `each` repeat driver alongside its own inputs
     assert [p["id"] for p in node_ports(_req_node("n", "R"), collections)] == [
-        "after", "done", "in:x", "out:v",
+        "after", "done", "in:ctl:each", "in:x", "out:v",
     ]
     demux = _node("d", "demux", {"rows": [{"id": "r1", "path": "$.a"}, {"id": "r2", "path": "$.b"}]})
     assert [p["id"] for p in node_ports(demux, []) if p["direction"] == "out" and p["kind"] == "data"] == [
@@ -269,6 +270,14 @@ def test_validate_flow_v2_rules():
     )
     assert any("cycle" in m for m in errors(cycle))
 
+    bad_count = _flow([_node("e", "arrayEmit", {"staticItems": {"type": "number", "value": "0"}})], [])
+    assert any("whole number of at least 1" in m for m in errors(bad_count))
+
+    over_count = _flow(
+        [_node("e", "arrayEmit", {"staticItems": {"type": "number", "value": str(EMIT_MAX_ITEMS + 1)}})], []
+    )
+    assert any(f"over the maximum of {EMIT_MAX_ITEMS}" in m for m in errors(over_count))
+
     big = json.dumps(list(range(EMIT_MAX_ITEMS + 1)))
     over_cap = _flow([_node("e", "arrayEmit", {"staticItems": {"type": "json", "value": big}})], [])
     assert any(f"maximum of {EMIT_MAX_ITEMS}" in m for m in errors(over_cap))
@@ -287,6 +296,40 @@ async def test_invalid_flow_aborts_before_running():
     except FlowRunError as e:
         assert "missing port" in str(e)
     assert not calls
+
+
+async def test_each_repeats_an_input_less_request():
+    """A request with no {{tokens}} runs once per item arriving on `each`, and
+    the driving value never becomes a request parameter."""
+    collections = [{"id": "col", "requests": [_request("PING", outputs=["seq"])]}]
+    executor, calls, bindings_seen = scripted_executor({"PING": [_ok({"seq": "s"})] * 3})
+    flow = _flow(
+        [
+            _node("emit", "arrayEmit", {"staticItems": {"type": "number", "value": "3"}}),
+            _req_node("ping", "PING"),
+        ],
+        [_edge("emit", "out:index", "ping", "in:ctl:each")],
+    )
+    summary = await run(flow, collections, executor)
+    assert summary["status"] == "success"
+    assert calls["PING"] == 3
+    assert bindings_seen["PING"] == [{}, {}, {}]
+    assert summary["nodeItemCounts"]["ping"] == {"ok": 3, "failed": 0, "skipped": 0}
+
+
+async def test_count_mode_emits_zero_to_n_minus_one():
+    collections = [{"id": "col", "requests": [_request("SEE", url="http://test/{{n}}")]}]
+    executor, _, bindings_seen = scripted_executor({"SEE": [_ok(), _ok(), _ok()]})
+    flow = _flow(
+        [
+            _node("emit", "arrayEmit", {"staticItems": {"type": "number", "value": "3"}}),
+            _req_node("see", "SEE"),
+        ],
+        [_edge("emit", "out:item", "see", "in:n")],
+    )
+    summary = await run(flow, collections, executor)
+    assert summary["status"] == "success"
+    assert [b["n"] for b in bindings_seen["SEE"]] == ["0", "1", "2"]
 
 
 async def test_done_after_barrier_waits_for_whole_stream():

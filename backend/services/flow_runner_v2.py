@@ -127,6 +127,16 @@ def verify_check_port_name(check_id: str) -> str:
     return f"cmp:{check_id}"
 
 
+# Ports the engine drives execution with but never passes to the request.
+# Namespaced so a saved request declaring an {{each}} token can't collide.
+CONTROL_PORT_PREFIX = "ctl:"
+EACH_PORT_NAME = f"{CONTROL_PORT_PREFIX}each"
+
+
+def is_control_port_name(name: str) -> bool:
+    return name.startswith(CONTROL_PORT_PREFIX)
+
+
 def parse_handle(handle: Optional[str]) -> Optional[Dict[str, Any]]:
     if not handle:
         return None
@@ -264,9 +274,13 @@ def node_ports(node: Dict[str, Any], collections: List[Dict[str, Any]]) -> List[
                 for c in verify.get("checks") or []
                 if c.get("expectedSource") == "port"
             ]
+        # Connecting a stream to `each` runs the request once per item without
+        # the value becoming a request input — the only way to repeat a request
+        # that declares no {{tokens}} of its own.
+        each = _port(data_in_handle(EACH_PORT_NAME), EACH_PORT_NAME, "data", "in", label="each")
         # No "passed" output: an item whose checks never pass is failed and
         # dropped, so such a port could only ever emit True.
-        return _trigger_ports() + inputs + checks + outputs
+        return _trigger_ports() + [each] + inputs + checks + outputs
 
     if node_type == "delay":
         return _trigger_ports() + [
@@ -413,9 +427,26 @@ def validate_flow_v2(flow: Dict[str, Any], collections: List[Dict[str, Any]]) ->
                         )
         elif node_type == "arrayEmit":
             if not connected_in("array"):
-                ok, value, _ = parse_static_input(cfg.get("staticItems") or {"type": "json", "value": ""})
-                if not ok or not isinstance(value, list):
-                    error(f'"{name}": connect the array input or provide a static JSON array', nodeId=node["id"])
+                items = cfg.get("staticItems") or {"type": "json", "value": ""}
+                ok, value, _ = parse_static_input(items)
+                if items.get("type") == "number":
+                    # Count mode: emit 0 … N-1.
+                    count = value if ok and isinstance(value, int) else None
+                    if count is None or count < 1:
+                        error(
+                            f'"{name}": the repeat count must be a whole number of at least 1',
+                            nodeId=node["id"],
+                        )
+                    elif count > EMIT_MAX_ITEMS:
+                        error(
+                            f'"{name}" repeats {count} times, over the maximum of {EMIT_MAX_ITEMS}',
+                            nodeId=node["id"],
+                        )
+                elif not ok or not isinstance(value, list):
+                    error(
+                        f'"{name}": connect the array input, or set a repeat count or static JSON array',
+                        nodeId=node["id"],
+                    )
                 elif len(value) > EMIT_MAX_ITEMS:
                     error(
                         f'"{name}" emits {len(value)} items, over the maximum of {EMIT_MAX_ITEMS}',
@@ -923,7 +954,9 @@ async def run_flow(
                 bindings[name] = {"name": name, "source": "literal", "value": text}
                 resolved_inputs[name] = text
             for name, msg in values.items():
-                if name.startswith("cmp:") or msg.get("kind") != "item":
+                # Verify expectations and the `each` repeat driver steer
+                # execution; neither is a request parameter.
+                if name.startswith("cmp:") or is_control_port_name(name) or msg.get("kind") != "item":
                     continue
                 text = stringify_value(msg["value"])
                 bindings[name] = {"name": name, "source": "literal", "value": text}
@@ -1047,8 +1080,15 @@ async def run_flow(
                         if src and src.get("kind") == "item":
                             raw = src["value"]
                         else:
-                            ok, raw, _ = parse_static_input(cfg.get("staticItems") or {"type": "json", "value": "[]"})
-                            raw = raw if ok else None
+                            items = cfg.get("staticItems") or {"type": "json", "value": "[]"}
+                            ok, parsed, _ = parse_static_input(items)
+                            if not ok:
+                                raw = None
+                            elif items.get("type") == "number":
+                                # A numeric static value is a repeat count.
+                                raw = list(range(max(0, int(parsed))))
+                            else:
+                                raw = parsed
                         if isinstance(raw, str):
                             try:
                                 raw = json.loads(raw)

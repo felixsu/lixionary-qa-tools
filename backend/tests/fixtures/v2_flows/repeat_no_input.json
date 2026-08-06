@@ -1,0 +1,45 @@
+{
+  "name": "repeat_no_input",
+  "description": "A saved request that declares no {{tokens}} of its own, repeated three times by wiring an Array Emit in count mode into its `each` input. Execution count comes from the connected stream; the driving value is never sent to the request, so the executor payload carries no extra parameter.",
+  "collections": [
+    {
+      "id": "col",
+      "requests": [
+        { "id": "PING", "method": "GET", "url": "http://test/ping", "headers": [], "queryParams": [], "bodyType": "none", "body": "", "authType": "none", "authConfig": {}, "inputs": [], "outputs": ["seq"] }
+      ]
+    }
+  ],
+  "flow": {
+    "id": "flow", "name": "repeat_no_input", "schemaVersion": 2,
+    "nodes": [
+      { "id": "repeat", "name": "repeat", "type": "arrayEmit", "position": { "x": 0, "y": 0 }, "config": { "staticItems": { "type": "number", "value": "3" } } },
+      { "id": "ping", "name": "ping", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "PING", "staticInputs": {} } },
+      { "id": "acc", "name": "acc", "type": "accumulator", "position": { "x": 0, "y": 0 }, "config": {} }
+    ],
+    "edges": [
+      { "id": "e1", "source": "repeat", "target": "ping", "sourceHandle": "out:index", "targetHandle": "in:ctl:each" },
+      { "id": "e2", "source": "ping", "target": "acc", "sourceHandle": "out:seq", "targetHandle": "in:item" }
+    ]
+  },
+  "executorScript": {
+    "PING": [
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "seq": "a" }, "missingOutputs": [] },
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "seq": "b" }, "missingOutputs": [] },
+      { "status": 200, "statusText": "OK", "headers": {}, "body": null, "outputs": { "seq": "c" }, "missingOutputs": [] }
+    ]
+  },
+  "expected": {
+    "status": "success",
+    "recordsByNode": {
+      "ping": [
+        { "status": "success", "iteration": 0 },
+        { "status": "success", "iteration": 1 },
+        { "status": "success", "iteration": 2 }
+      ],
+      "acc": [{ "status": "success" }]
+    },
+    "bindings": { "PING": [{}, {}, {}] },
+    "nodeOutputs": { "acc": { "items": ["a", "b", "c"], "count": 3, "dropped": 0 } },
+    "nodeItemCounts": { "ping": { "ok": 3, "failed": 0, "skipped": 0 } }
+  }
+}

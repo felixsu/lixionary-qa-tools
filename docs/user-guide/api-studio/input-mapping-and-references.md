@@ -15,6 +15,7 @@ Every connection carries an ordered stream of items terminated by a *done* signa
 | To… | Wire… |
 | :---- | :---- |
 | Repeat a request per array element | `Array Emit.item → Request.<input>` |
+| Repeat a request that takes no inputs | `Array Emit.index → Request.each` (set a repeat count) |
 | Collect the results | `Request.<output> → Accumulator.item` |
 | Send one value to two places | a second connection from the same output |
 | Build an object from several values | `Mux` |
