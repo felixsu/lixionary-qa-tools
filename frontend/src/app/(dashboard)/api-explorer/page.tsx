@@ -25,6 +25,7 @@ import MarkdownContent from "../../components/guide/MarkdownContent";
 import { confirmDialog } from "../../utils/confirmDialog";
 import { scanInputNames } from "../../utils/requestTokens";
 import { methodStyle } from "../../utils/methodStyle";
+import { isOrphanedAuthFunctionRef, resolveAuthFunctionRef } from "../../utils/authFunctions";
 import {
   serializeCollectionForExport,
   collectionExportFilename,
@@ -1713,13 +1714,32 @@ export default function ApiExplorerPage() {
                       <div className="flex flex-col gap-3">
                         <div className="flex flex-col gap-1.5">
                           <label className="text-xs font-medium text-stone">Auth hook</label>
-                          <Dropdown
-                            value={reqAuthConfig.authFunctionId || ""}
-                            onChange={(v) => setReqAuthConfig({ ...reqAuthConfig, authFunctionId: v })}
-                            placeholder="Select auth hook…"
-                            widthClass="w-full"
-                            options={authFunctions.map((f) => ({ value: f.id, label: f.name }))}
-                          />
+                          {(() => {
+                            // A stored reference may be either id form, so match
+                            // both and show the option's own id — otherwise a
+                            // cloud-id reference finds no option and the
+                            // dropdown looks unset when it isn't.
+                            const linked = resolveAuthFunctionRef(authFunctions, reqAuthConfig.authFunctionId);
+                            const orphaned = isOrphanedAuthFunctionRef(authFunctions, reqAuthConfig.authFunctionId);
+                            return (
+                              <>
+                                <Dropdown
+                                  value={linked?.id || ""}
+                                  onChange={(v) => setReqAuthConfig({ ...reqAuthConfig, authFunctionId: v })}
+                                  placeholder="Select auth hook…"
+                                  widthClass="w-full"
+                                  options={authFunctions.map((f) => ({ value: f.id, label: f.name }))}
+                                />
+                                {orphaned && (
+                                  <p className="flex items-start gap-1.5 text-[11px] text-amber-700">
+                                    <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-px" />
+                                    This request points at an auth hook that no longer exists, so it can&apos;t
+                                    authenticate — pick one above to fix it.
+                                  </p>
+                                )}
+                              </>
+                            );
+                          })()}
                         </div>
                         <div className="flex flex-col gap-1.5">
                           <label className="text-xs font-medium text-stone">Token field</label>

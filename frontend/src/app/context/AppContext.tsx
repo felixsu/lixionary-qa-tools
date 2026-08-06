@@ -11,6 +11,7 @@ import { useBackendStatus } from "./BackendStatusContext";
 import { useToast } from "./ToastContext";
 import { isTauri } from "../utils/tauri";
 import { copyDiagnostics, recordNetworkEntry, redactBodyForUrl } from "../utils/diagnostics";
+import { durableAuthConfig } from "../utils/authFunctions";
 
 const VPS_API_URL = process.env.NEXT_PUBLIC_VPS_API_URL ||
   (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : 'https://qa-tools-api.lixionary.com');
@@ -333,8 +334,10 @@ interface AppContextType {
   selectedProfileId: string;
   setSelectedProfileId: (id: string) => void;
 
-  // Device-local prefs (sidecar SQLite; survive app updates, never sync to cloud)
-  getPref: (key: string) => Promise<string | null>;
+  // Device-local prefs (sidecar SQLite; survive app updates, never sync to cloud).
+  // getPref resolves `null` when the key is absent and `undefined` when the read
+  // itself failed — callers that overwrite on absence must tell those apart.
+  getPref: (key: string) => Promise<string | null | undefined>;
   setPref: (key: string, value: string) => Promise<void>;
   deletePref: (key: string) => Promise<void>;
 
@@ -565,6 +568,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // change (when reqAuthType/reqAuthConfig haven't synced to the new request yet).
   const authPersistIdRef = useRef<string>("");
 
+  // The request whose stored overrides have finished loading. The auto-persist
+  // effects refuse to write until their request appears here, so an in-flight
+  // (or failed) read can never be overwritten by the collection-seeded value.
+  const authHydratedIdRef = useRef<string>("");
+  const outputsHydratedIdRef = useRef<string>("");
+  const descriptionHydratedIdRef = useRef<string>("");
+
   // Same suppression, for the declared-outputs auto-persist effect below.
   const outputsPersistIdRef = useRef<string>("");
 
@@ -581,12 +591,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // stay off the shared/synced collection document (e.g. a HOOK auth binding,
   // which is user-local) but must still survive an app update/reinstall,
   // unlike browser localStorage.
-  const getPref = async (key: string): Promise<string | null> => {
+  const getPref = async (key: string): Promise<string | null | undefined> => {
     try {
       const res = await apiCall(`/api/local-store/pref/${encodeURIComponent(key)}`);
       return res.value ?? null;
     } catch {
-      return null;
+      // Swallowing the error but returning null would be indistinguishable from
+      // "no pref stored", and callers use that to decide it is safe to
+      // overwrite. `undefined` means "could not read" — never overwrite on it.
+      return undefined;
     }
   };
   const setPref = async (key: string, value: string): Promise<void> => {
@@ -608,7 +621,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [llmSettings, setLlmSettings] = useState<LlmSettingsSummary | null>(null);
   const refreshLlmSettings = async (): Promise<void> => {
     const raw = await getPref("llm_settings");
-    if (raw === null) {
+    if (!raw) {
+      // Absent, or the read failed — either way there is nothing to gate on.
       setLlmSettings({ activeProvider: null, hasKey: false });
       return;
     }
@@ -661,12 +675,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setReqAuthConfig(req.authConfig || { token: "", key: "", value: "", authFunctionId: "" });
         const reqId = selectedRequestId;
         getPref(`auth_override:${reqId}`).then((override) => {
-          if (!override || prevSelectedRequestIdRef.current !== reqId) return;
-          try {
-            const parsed = JSON.parse(override);
-            if (parsed.authType) setReqAuthType(parsed.authType);
-            if (parsed.authConfig) setReqAuthConfig(parsed.authConfig);
-          } catch { /* ignore malformed override */ }
+          if (override === undefined || prevSelectedRequestIdRef.current !== reqId) return; // read failed
+          if (override) {
+            try {
+              const parsed = JSON.parse(override);
+              if (parsed.authType) setReqAuthType(parsed.authType);
+              if (parsed.authConfig) setReqAuthConfig(parsed.authConfig);
+            } catch { /* ignore malformed override */ }
+          }
+          // Only now is it safe to persist this request's auth state.
+          authHydratedIdRef.current = reqId;
         });
 
         setReqParserScript(req.responseParserScript || "");
@@ -680,12 +698,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setReqOutputs(req.outputs || []);
         setReqOutputDescriptions(req.outputDescriptions || {});
         getPref(`outputs_override:${reqId}`).then((override) => {
-          if (!override || prevSelectedRequestIdRef.current !== reqId) return;
-          try {
-            const parsed = JSON.parse(override);
-            if (Array.isArray(parsed.outputs)) setReqOutputs(parsed.outputs);
-            if (parsed.outputDescriptions) setReqOutputDescriptions(parsed.outputDescriptions);
-          } catch { /* ignore malformed override */ }
+          if (override === undefined || prevSelectedRequestIdRef.current !== reqId) return; // read failed
+          if (override) {
+            try {
+              const parsed = JSON.parse(override);
+              if (Array.isArray(parsed.outputs)) setReqOutputs(parsed.outputs);
+              if (parsed.outputDescriptions) setReqOutputDescriptions(parsed.outputDescriptions);
+            } catch { /* ignore malformed override */ }
+          }
+          outputsHydratedIdRef.current = reqId;
         });
 
         // Description: saved value first, then overlay an unsaved draft.
@@ -693,8 +714,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // empty string is a deliberately cleared draft and must still apply.
         setReqDescription(req.description || "");
         getPref(`description_override:${reqId}`).then((override) => {
-          if (override === null || prevSelectedRequestIdRef.current !== reqId) return;
-          setReqDescription(override);
+          if (override === undefined || prevSelectedRequestIdRef.current !== reqId) return; // read failed
+          if (override !== null) setReqDescription(override);
+          descriptionHydratedIdRef.current = reqId;
         });
 
         setApiResponse(null);
@@ -712,8 +734,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       authPersistIdRef.current = selectedRequestId;
       return;
     }
-    setPref(`auth_override:${selectedRequestId}`, JSON.stringify({ authType: reqAuthType, authConfig: reqAuthConfig }));
-  }, [reqAuthType, reqAuthConfig, selectedRequestId]);
+    // Never write before the stored override has been read back: the state at
+    // this point is still seeded from the collection document, which carries a
+    // null authFunctionId for HOOK, and persisting that would destroy the
+    // binding this request already had.
+    if (authHydratedIdRef.current !== selectedRequestId) return;
+
+    // Persist the auth function's cloud id when it has one. Local ids are
+    // regenerated whenever the device cache is wiped and re-pulled, which
+    // silently orphans every binding; cloud ids survive that.
+    const authConfig = durableAuthConfig(authFunctions, reqAuthConfig);
+    setPref(`auth_override:${selectedRequestId}`, JSON.stringify({ authType: reqAuthType, authConfig }));
+  }, [reqAuthType, reqAuthConfig, selectedRequestId, authFunctions]);
 
   // Auto-persist declared-outputs edits per request so they survive
   // switches/reloads without a manual Save.
@@ -725,6 +757,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       outputsPersistIdRef.current = selectedRequestId;
       return;
     }
+    // Same guard as the auth effect: writing before the stored draft is read
+    // back would overwrite it with the saved-request value.
+    if (outputsHydratedIdRef.current !== selectedRequestId) return;
     setPref(`outputs_override:${selectedRequestId}`, JSON.stringify({ outputs: reqOutputs, outputDescriptions: reqOutputDescriptions }));
   }, [reqOutputs, reqOutputDescriptions, selectedRequestId]);
 
@@ -738,6 +773,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       descriptionPersistIdRef.current = selectedRequestId;
       return;
     }
+    if (descriptionHydratedIdRef.current !== selectedRequestId) return;
     setPref(`description_override:${selectedRequestId}`, reqDescription);
   }, [reqDescription, selectedRequestId]);
 
@@ -1367,13 +1403,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       await persistCollectionTree(col.id, { requests: updatedCol.requests, children: updatedCol.children || [] });
 
-      // Saved state is now authoritative — drop the unsaved auth override.
+      // Saved state is now authoritative — drop the unsaved overrides. Each is
+      // dropped only once its own override has been read back: before that the
+      // state we just saved is the collection's, so deleting would discard a
+      // draft the user never saw loaded.
       // Exception: HOOK auth is kept user-local (not in the shared collection), so don't clear it.
-      if (reqAuthType !== "HOOK") {
+      if (reqAuthType !== "HOOK" && authHydratedIdRef.current === selectedRequestId) {
         deletePref(`auth_override:${selectedRequestId}`);
       }
-      deletePref(`outputs_override:${selectedRequestId}`);
-      deletePref(`description_override:${selectedRequestId}`);
+      if (outputsHydratedIdRef.current === selectedRequestId) {
+        deletePref(`outputs_override:${selectedRequestId}`);
+      }
+      if (descriptionHydratedIdRef.current === selectedRequestId) {
+        deletePref(`description_override:${selectedRequestId}`);
+      }
     } catch (e: any) {
       throw new Error(`Save failed: ${e.message}`);
     }

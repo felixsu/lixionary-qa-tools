@@ -33,7 +33,7 @@ The end-of-stream travels with the data, so nothing extra needs wiring — the a
 Every block renders its ports directly on the card, ComfyUI-style:
 
 * **Input dots** (left) — one per `{{input}}` the linked request declares, or per configured row on a Mux. An **unconnected** input shows an inline value box with a **type** (`string`, `number`, `boolean`, `json`); a **connected** input shows a chip naming its source.
-* **`each`** (on Request blocks) — connect any stream here and the request runs **once per item**, ignoring the value. This is how you repeat a request that declares no inputs of its own.
+* **`each`** (on Request blocks, off by default) — tick **Repeat with an `each` input** in the inspector to add it. Connect any stream and the request runs **once per item**, ignoring the value. This is how you repeat a request that declares no inputs of its own.
 * **Output dots** (right) — one per declared output / configured row.
 * **Trigger diamonds** (header corners) — `after` and `done`. Connect `done → after` to order two blocks **without** passing data. Because `done` only fires when a whole stream has finished, this doubles as a "wait for all of it" barrier.
 
@@ -77,13 +77,14 @@ The failed item keeps its **position** as it travels, so branches that fork from
 
 ### **Request**
 
-* **Request**: pick a saved API Explorer request (type ≥2 characters to search by name, endpoint, or description). To run it more than once, connect a stream to its **`each`** input — it fires once per item and the value is discarded.
+* **Request**: pick a saved API Explorer request (type ≥2 characters to search by name, endpoint, or description).
+* **Repeat with an `each` input** (optional): adds an extra **`each`** input dot. Connect a stream to it and the request fires once per item, discarding the value — the way to repeat a request that declares no inputs of its own. Left off, the block shows only the ports its request actually needs. Flows saved before this toggle existed open with it already on wherever `each` was wired.
 * **Verify the response** (optional): add checks that each read a value with **JSONPath** over `$.status`, `$.body…`, `$.headers…`, or `$.outputs…` and compare it with `equals`, `not equals`, `contains`, `exists`, `greater than`, or `less than`. All checks must pass; otherwise the item is retried up to **Max attempts** every **Retry interval**. An expected value can be **Static** or come from a **Port** — the check grows its own input dot to receive it. Every item of a stream is verified independently.
 
 ### **Array Emit**
 
 * **Items**: when the `array` input is unconnected, pick either a **repeat count** — a plain number N, emitting `0…N-1` — or a **static JSON array**. When it *is* connected, whatever arrives wins, and a stream of several arrays is flattened in order. An emitter may release at most **100 items** per run.
-* To run something a fixed number of times, set a repeat count and wire `index` into the target's `each` input.
+* To run something a fixed number of times, set a repeat count, enable **Repeat with an `each` input** on the target request, and wire `index` into its `each` input.
 
 ### **Accumulator**
 

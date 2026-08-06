@@ -217,6 +217,13 @@ class LocalStore:
         switched = previous is not None and previous != user_id
         if switched:
             cls._conn.execute("DELETE FROM entities")
+            # local_prefs survives the wipe by design (LLM keys, UI state), but
+            # the per-request overrides below reference entities by local id —
+            # and the re-pull assigns every record a brand-new one. Left behind
+            # they are dangling references to another account's data: an auth
+            # hook that silently resolves to nothing at run time. Drop them.
+            for prefix in ("auth_override:", "outputs_override:", "description_override:"):
+                cls.delete_prefs_with_prefix(prefix)
         cls._conn.execute(
             "INSERT INTO meta (key, value) VALUES ('active_user_id', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -439,14 +446,30 @@ class LocalStore:
         cls._conn.execute("DELETE FROM local_prefs WHERE key = ?", (key,))
 
     @classmethod
+    def _like_prefix(cls, prefix: str) -> str:
+        """`prefix` as a LIKE pattern, with the wildcards it may contain escaped."""
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return escaped + "%"
+
+    @classmethod
     def list_prefs(cls, prefix: str) -> Dict[str, str]:
         """Returns all prefs whose key starts with `prefix`, as {key: value}."""
-        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         rows = _dict_rows(cls._conn.execute(
             "SELECT key, value FROM local_prefs WHERE key LIKE ? ESCAPE '\\'",
-            (escaped + "%",),
+            (cls._like_prefix(prefix),),
         ), ["key", "value"])
         return {r["key"]: r["value"] for r in rows}
+
+    @classmethod
+    def delete_prefs_with_prefix(cls, prefix: str) -> int:
+        """Deletes every pref whose key starts with `prefix`. Returns the count."""
+        cls._conn.execute(
+            "DELETE FROM local_prefs WHERE key LIKE ? ESCAPE '\\'",
+            (cls._like_prefix(prefix),),
+        )
+        # apsw cursors expose no rowcount; the connection tracks the last
+        # statement's affected rows.
+        return cls._conn.changes()
 
     # Flow-run history — written by the MCP server (agent runs, inserted as
     # 'running' then finalized) and by POST /api/flow-runs (UI runs, inserted

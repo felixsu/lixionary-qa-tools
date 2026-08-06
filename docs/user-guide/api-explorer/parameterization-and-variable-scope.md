@@ -47,7 +47,7 @@ Configure the request's authorization via the **Auth type** dropdown. Four optio
 * **No auth**: No authentication is applied.
 * **Bearer token**: A single Token field (supports {{env.VARIABLE}} and {{input}}) sent as `Authorization: Bearer <token>`.
 * **Header API key**: A custom header key/value pair for API-key style auth.
-* **Dynamic auth hook**: Select one of your **Auth functions** to compute credentials or auto-refresh OAuth tokens just before dispatch. If the hook returns an object, fill the **Token field** input (e.g. `access_token`) to pick which property to use; leave it blank for hooks returning a plain string. Auth functions are managed on the dedicated **Auth functions** page, which includes ready-made Ninja Van presets (**Operator V2** client-credentials OAuth and **PUDO** login).
+* **Dynamic auth hook**: Select one of your **Auth functions** to compute credentials or auto-refresh OAuth tokens just before dispatch. If the hook returns an object, fill the **Token field** input (e.g. `access_token`) to pick which property to use; leave it blank for hooks returning a plain string. Auth functions are managed on the dedicated **Auth functions** page, which includes ready-made Ninja Van presets (**Operator V2** client-credentials OAuth and **PUDO** login). The chosen hook is remembered on this device only — it is never written into the shared collection — so teammates who import the collection pick their own. If the hook a request points at has been deleted, the auth tab says so and asks you to reselect, rather than looking unset.
 
 ### **4. Input**
 

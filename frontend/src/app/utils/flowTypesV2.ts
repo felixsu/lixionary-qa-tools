@@ -172,6 +172,9 @@ export interface RequestVerifyConfigV2 {
 
 export interface RequestNodeConfigV2 {
   requestId: string;
+  // Adds the `each` repeat driver port. Off by default so the card stays
+  // clean — most requests are driven by their own inputs.
+  useEach?: boolean;
   // Hardcoded values for inputs with no incoming edge. Runtime precedence per
   // input: incoming edge > staticInputs[name] > the saved request's binding.
   staticInputs: Record<string, StaticInputV2>;
@@ -321,21 +324,23 @@ export const nodePorts = (node: FlowNodeV2, collections: Collection[]): PortSpec
               dataType: "any",
               widget: "none",
             }));
-      // Connecting a stream here runs the request once per item without the
-      // value becoming a request input — the only way to repeat a request that
-      // declares no {{tokens}} of its own.
-      const each: PortSpec = {
-        id: dataInHandle(EACH_PORT_NAME),
-        name: EACH_PORT_NAME,
-        label: "each",
-        kind: "data",
-        direction: "in",
-        dataType: "any",
-        widget: "none",
-      };
+      // Opt-in: connecting a stream here runs the request once per item
+      // without the value becoming a request input — the only way to repeat a
+      // request that declares no {{tokens}} of its own.
+      const each: PortSpec[] = !cfg.useEach
+        ? []
+        : [{
+            id: dataInHandle(EACH_PORT_NAME),
+            name: EACH_PORT_NAME,
+            label: "each",
+            kind: "data",
+            direction: "in",
+            dataType: "any",
+            widget: "none",
+          }];
       // No "passed" output: an item whose checks never pass is failed and
       // dropped, so such a port could only ever emit `true`.
-      return [...triggerPorts(), each, ...inputs, ...checkPorts, ...outputs];
+      return [...triggerPorts(), ...each, ...inputs, ...checkPorts, ...outputs];
     }
     case "delay":
       // The passthrough port is what lets a Delay pace a stream (rate limiting);
@@ -415,10 +420,21 @@ export const migrateFlowV2 = (
   nodes: FlowNodeV2[],
   edges: FlowEdgeV2[]
 ): { nodes: FlowNodeV2[]; edges: FlowEdgeV2[]; changed: number } => {
-  const legacy = nodes.filter((n) => !isKnownNodeTypeV2(n.type));
-  if (!legacy.length) return { nodes, edges, changed: 0 };
+  // `each` became opt-in after it shipped always-on; a request already wired to
+  // it must keep its port, or the connection would dangle.
+  let nextNodes = nodes.map((n) => {
+    if (n.type !== "request") return n;
+    const cfg = n.config as RequestNodeConfigV2;
+    if (cfg.useEach) return n;
+    const wired = edges.some(
+      (e) => e.target === n.id && e.targetHandle === dataInHandle(EACH_PORT_NAME)
+    );
+    return wired ? { ...n, config: { ...cfg, useEach: true } } : n;
+  });
 
-  let nextNodes = nodes;
+  const legacy = nextNodes.filter((n) => !isKnownNodeTypeV2(n.type));
+  if (!legacy.length) return { nodes: nextNodes, edges, changed: 0 };
+
   let nextEdges = edges;
 
   for (const node of legacy) {

@@ -1,6 +1,6 @@
 {
-  "name": "repeat_no_input",
-  "description": "A saved request that declares no {{tokens}} of its own, repeated three times by wiring an Array Emit in count mode into its `each` input (opt-in via config.useEach). Execution count comes from the connected stream; the driving value is never sent to the request, so the executor payload carries no extra parameter.",
+  "name": "each_migration",
+  "description": "The same flow as saved by 0.5.2, when `each` was always on and config.useEach did not exist. Both engines must re-enable the port during migration so the stored connection still resolves and the request still repeats.",
   "collections": [
     {
       "id": "col",
@@ -25,7 +25,7 @@
   ],
   "flow": {
     "id": "flow",
-    "name": "repeat_no_input",
+    "name": "each_migration",
     "schemaVersion": 2,
     "nodes": [
       {
@@ -53,8 +53,7 @@
         },
         "config": {
           "requestId": "PING",
-          "staticInputs": {},
-          "useEach": true
+          "staticInputs": {}
         }
       },
       {
