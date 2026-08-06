@@ -313,7 +313,7 @@ describe("continue on error", () => {
   });
 
   it("keeps branches aligned when a hole forks and rejoins", async () => {
-    // emit 3 → duplicator → (left fails on item 1 | right always ok) → mux → accumulator.
+    // emit 3 → both branches (left fails on item 1 | right always ok) → mux → accumulator.
     // If the hole were silently dropped, left's item 2 would pair with right's item 1.
     const h = makeHarness({
       LEFT: { handler: (c) => (c === 1 ? httpError() : ok({ v: `L${c}` })), url: "http://test/{{x}}", outputs: ["v"] },
@@ -322,16 +322,14 @@ describe("continue on error", () => {
     const f = makeFlow(
       [
         emitNode("emit", ["a", "b", "c"]),
-        node("dup", "duplicator", { count: 2 }),
         req("left", "LEFT"),
         req("right", "RIGHT"),
         node("m", "mux", { rows: [{ id: "r1", field: "l" }, { id: "r2", field: "r" }] }),
         node("acc", "accumulator", {}),
       ],
       [
-        edge("emit", "out:item", "dup", "in:value"),
-        edge("dup", "out:o:0", "left", "in:x"),
-        edge("dup", "out:o:1", "right", "in:x"),
+        edge("emit", "out:item", "left", "in:x"),
+        edge("emit", "out:item", "right", "in:x"),
         edge("left", "out:v", "m", "in:i:r1"),
         edge("right", "out:v", "m", "in:i:r2"),
         edge("m", "out:object", "acc", "in:item"),

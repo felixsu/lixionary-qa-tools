@@ -16,7 +16,7 @@ Every connection carries an ordered stream of items terminated by a *done* signa
 | :---- | :---- |
 | Repeat a request per array element | `Array Emit.item → Request.<input>` |
 | Collect the results | `Request.<output> → Accumulator.item` |
-| Send one value to two places | `Duplicator` |
+| Send one value to two places | a second connection from the same output |
 | Build an object from several values | `Mux` |
 | Take an object apart | `Demux` |
 
@@ -26,12 +26,11 @@ The `done` diamond fires once, when a block's whole stream has finished. Wiring 
 
 | Block | Outputs |
 | :---- | :---- |
-| Request | The request's declared outputs; `passed` when verification is on |
+| Request | The request's declared outputs |
 | Array Emit | `item` (one at a time), `index` (its 0-based position) |
 | Accumulator | `array` (everything collected), `count` |
 | Demux | One output per configured JSONPath |
 | Mux | `object` |
-| Duplicator | N identical copies |
 | Delay | `value` (whatever it was given, after the wait) |
 
 ## **JSONPath**

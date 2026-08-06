@@ -12,14 +12,14 @@
 │ - Array Emit         │   Report, Run/Stop                       │ - Configuration      │
 │ - Accumulator        │ - Blocks with input/output dots          │ - Ports overview     │
 │ - Demux / Mux        │ - Connections carry streams of items     │ - Last run results   │
-│ - Duplicator / Delay │                                          │                      │
+│ - Delay              │                                          │                      │
 └──────────────────────┴──────────────────────────────────────────┴──────────────────────┘
 
 ## **Core Capabilities**
 
 1. **Visual Dataflow Composition**: Every input a request declares appears as an input dot; every declared output appears as an output dot. A connection from `getUuid.uuid` to `echo.myId` *is* the data binding — what you see wired is exactly what runs. Cycles are rejected automatically.
 2. **Streams instead of loops**: A connection carries an ordered **stream** of items ending with a *done* signal, so repetition is composition rather than a construct — `Array Emit → Request → Accumulator` runs the request once per element and collects the results. Items are **pipelined**: the next one starts as soon as a block is free.
-3. **Unambiguous wiring**: Each data output feeds exactly one input and each input takes exactly one connection. Fan out with a **Duplicator**, combine with a **Mux**, take objects apart with a **Demux**. Nothing is ever implicitly merged.
+3. **Unambiguous wiring**: An input takes exactly one connection, so a value is never ambiguously merged; an output may feed as many inputs as you like. Combine values with a **Mux**, take objects apart with a **Demux**.
 4. **Verification built into requests**: A Request can assert on its own response with JSONPath checks and retry until they pass — per item.
 5. **Resilient runs**: A failed item drops out while the rest of the stream keeps flowing, and it keeps its position so forked branches stay aligned when they rejoin. Follow per-block status live, inspect the exact request/response of every step, and download a CSV of the whole run.
 6. **Synced Flows**: Flows are stored local-first and synced to the cloud like collections, so they follow you across devices.

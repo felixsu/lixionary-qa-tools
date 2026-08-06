@@ -48,6 +48,7 @@ from tests.test_flow_runner_v2 import (
     test_compare_values_operators,
     test_parse_handle_and_ports,
     test_parse_static_input_types,
+    test_verify_adds_no_passed_output,
     test_validate_flow_v2_rules,
     test_invalid_flow_aborts_before_running,
     test_done_after_barrier_waits_for_whole_stream,
@@ -219,6 +220,9 @@ def run():
 
         test_parse_static_input_types()
         print("✓ test_parse_static_input_types passed")
+
+        test_verify_adds_no_passed_output()
+        print("✓ test_verify_adds_no_passed_output passed")
 
         test_validate_flow_v2_rules()
         print("✓ test_validate_flow_v2_rules passed")

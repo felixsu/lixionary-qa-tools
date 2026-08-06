@@ -13,7 +13,7 @@
 
 import React, { createContext, memo, useContext, useEffect, useMemo } from "react";
 import { Handle, Position, useEdges, useUpdateNodeInternals, type NodeProps } from "@xyflow/react";
-import { AlertCircle, Combine, Copy, Layers, Rows3, Send, ShieldCheck, Split, Timer } from "lucide-react";
+import { AlertCircle, Combine, Layers, Rows3, Send, ShieldCheck, Split, Timer } from "lucide-react";
 import type { NodeRunStatus } from "../../../utils/flowRunner";
 import {
   parseHandle,
@@ -313,11 +313,6 @@ const ArrayEmitNodeV2 = shell(
 const AccumulatorNodeV2 = shell("AccumulatorNodeV2", Layers, () => "accumulator");
 const DemuxNodeV2 = shell("DemuxNodeV2", Split, () => "demux · split");
 const MuxNodeV2 = shell("MuxNodeV2", Combine, () => "mux · combine");
-const DuplicatorNodeV2 = shell(
-  "DuplicatorNodeV2",
-  Copy,
-  (d) => `duplicator · ×${(d.flowNode.config as { count?: number }).count ?? 0}`
-);
 
 export const studioNodeTypesV2 = {
   v2request: RequestNodeV2,
@@ -326,5 +321,4 @@ export const studioNodeTypesV2 = {
   v2accumulator: AccumulatorNodeV2,
   v2demux: DemuxNodeV2,
   v2mux: MuxNodeV2,
-  v2duplicator: DuplicatorNodeV2,
 };

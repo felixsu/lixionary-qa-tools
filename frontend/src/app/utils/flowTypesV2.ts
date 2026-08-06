@@ -7,10 +7,11 @@
 //
 //     ArrayEmit → Request → Accumulator
 //
-// Connections are strictly one-to-one (one edge per data output, one per data
-// input) so every wire has an unambiguous meaning; fan-out is explicit via a
-// Duplicator node. Nodes with several connected inputs pair them positionally
-// (zip), latching any input whose stream turned out to be a single value.
+// A data input takes exactly one connection, so a value is never ambiguously
+// merged; an output may feed as many inputs as you like, since copying a stream
+// to several consumers means only one thing. Nodes with several connected
+// inputs pair them positionally (zip), latching any input whose stream turned
+// out to be a single value.
 //
 // This module is the schema owner and the single source of truth for the
 // handle-id grammar. It is mirrored by backend/services/flow_runner_v2.py —
@@ -25,7 +26,6 @@
 // JSONPath or field never orphans an edge:
 //   demux output      "out:o:<rowId>"
 //   mux input         "in:i:<rowId>"
-//   duplicator output "out:o:<n>"
 //   verify expected   "in:cmp:<checkId>"
 
 import type { Collection } from "../context/AppContext";
@@ -39,8 +39,7 @@ export type FlowNodeTypeV2 =
   | "arrayEmit"
   | "accumulator"
   | "demux"
-  | "mux"
-  | "duplicator";
+  | "mux";
 
 export const FLOW_NODE_TYPES_V2: readonly FlowNodeTypeV2[] = [
   "request",
@@ -49,7 +48,6 @@ export const FLOW_NODE_TYPES_V2: readonly FlowNodeTypeV2[] = [
   "accumulator",
   "demux",
   "mux",
-  "duplicator",
 ];
 
 export const isKnownNodeTypeV2 = (type: string): type is FlowNodeTypeV2 =>
@@ -59,9 +57,6 @@ export const isKnownNodeTypeV2 = (type: string): type is FlowNodeTypeV2 =>
 // runaway HTTP traffic; static arrays are checked at edit time, connected
 // streams at run time.
 export const EMIT_MAX_ITEMS = 100;
-
-export const DUPLICATOR_MIN_OUTPUTS = 2;
-export const DUPLICATOR_MAX_OUTPUTS = 8;
 
 // ---- Handles ----------------------------------------------------------------
 
@@ -73,7 +68,6 @@ export const dataOutHandle = (name: string): string => `out:${name}`;
 
 export const demuxOutName = (rowId: string): string => `o:${rowId}`;
 export const muxInName = (rowId: string): string => `i:${rowId}`;
-export const duplicatorOutName = (index: number): string => `o:${index}`;
 export const verifyCheckPortName = (checkId: string): string => `cmp:${checkId}`;
 
 export type ParsedHandle =
@@ -207,18 +201,13 @@ export interface MuxNodeConfigV2 {
   staticInputs?: Record<string, StaticInputV2>; // keyed by muxInName(rowId)
 }
 
-export interface DuplicatorNodeConfigV2 {
-  count: number; // DUPLICATOR_MIN_OUTPUTS..DUPLICATOR_MAX_OUTPUTS
-}
-
 export type FlowNodeConfigV2 =
   | RequestNodeConfigV2
   | DelayNodeConfigV2
   | ArrayEmitNodeConfigV2
   | AccumulatorNodeConfigV2
   | DemuxNodeConfigV2
-  | MuxNodeConfigV2
-  | DuplicatorNodeConfigV2;
+  | MuxNodeConfigV2;
 
 // ---- Graph ------------------------------------------------------------------
 
@@ -323,10 +312,9 @@ export const nodePorts = (node: FlowNodeV2, collections: Collection[]): PortSpec
               dataType: "any",
               widget: "none",
             }));
-      const passed: PortSpec[] = verify?.enabled
-        ? [{ id: dataOutHandle("passed"), name: "passed", kind: "data", direction: "out", dataType: "boolean" }]
-        : [];
-      return [...triggerPorts(), ...inputs, ...checkPorts, ...outputs, ...passed];
+      // No "passed" output: an item whose checks never pass is failed and
+      // dropped, so such a port could only ever emit `true`.
+      return [...triggerPorts(), ...inputs, ...checkPorts, ...outputs];
     }
     case "delay":
       // The passthrough port is what lets a Delay pace a stream (rate limiting);
@@ -385,22 +373,6 @@ export const nodePorts = (node: FlowNodeV2, collections: Collection[]): PortSpec
         { id: dataOutHandle("object"), name: "object", kind: "data", direction: "out", dataType: "json" },
       ];
     }
-    case "duplicator": {
-      const cfg = node.config as DuplicatorNodeConfigV2;
-      const count = Math.max(0, cfg.count || 0);
-      return [
-        ...triggerPorts(),
-        { id: dataInHandle("value"), name: "value", kind: "data", direction: "in", dataType: "any", widget: "none" },
-        ...Array.from({ length: count }, (_, i): PortSpec => ({
-          id: dataOutHandle(duplicatorOutName(i)),
-          name: duplicatorOutName(i),
-          label: `out ${i + 1}`,
-          kind: "data",
-          direction: "out",
-          dataType: "any",
-        })),
-      ];
-    }
   }
 };
 
@@ -408,6 +380,80 @@ export const portById = (ports: PortSpec[], handleId: string | null | undefined)
   handleId ? ports.find((p) => p.id === handleId) : undefined;
 
 export const portLabel = (port: PortSpec): string => port.label ?? port.name;
+
+// ---- Migration --------------------------------------------------------------
+
+/** Rewrites flows saved before outputs could fan out. A Duplicator was a pure
+ * passthrough, so each of its outgoing connections becomes a direct connection
+ * from whatever fed it — the graph means exactly the same thing with one fewer
+ * block. Called when a flow is loaded and again by both runners, so a stored
+ * flow behaves identically whether or not it has been opened since.
+ *
+ * Also drops any block whose type this version no longer knows. */
+export const migrateFlowV2 = (
+  nodes: FlowNodeV2[],
+  edges: FlowEdgeV2[]
+): { nodes: FlowNodeV2[]; edges: FlowEdgeV2[]; changed: number } => {
+  const legacy = nodes.filter((n) => !isKnownNodeTypeV2(n.type));
+  if (!legacy.length) return { nodes, edges, changed: 0 };
+
+  let nextNodes = nodes;
+  let nextEdges = edges;
+
+  for (const node of legacy) {
+    const incomingData = nextEdges.find(
+      (e) => e.target === node.id && parseHandle(e.targetHandle)?.kind === "data"
+    );
+    const outgoingData = nextEdges.filter(
+      (e) => e.source === node.id && parseHandle(e.sourceHandle)?.kind === "data"
+    );
+    const rewired: FlowEdgeV2[] = [];
+
+    // Only a passthrough (one data input) can be dissolved into its consumers;
+    // anything else just goes away with its connections.
+    if (incomingData && (node.type as string) === "duplicator") {
+      for (const out of outgoingData) {
+        rewired.push({
+          id: crypto.randomUUID(),
+          source: incomingData.source,
+          sourceHandle: incomingData.sourceHandle,
+          target: out.target,
+          targetHandle: out.targetHandle,
+          // Two projections can't be composed into one connection; keep the
+          // upstream one and let validation flag it.
+          ...(incomingData.path || out.path ? { path: incomingData.path ?? out.path } : {}),
+        });
+      }
+      // `after` gated the passthrough, which gated everything it fed.
+      for (const trigger of nextEdges.filter((e) => e.target === node.id && e.targetHandle === TRIGGER_IN)) {
+        for (const out of outgoingData) {
+          rewired.push({
+            id: crypto.randomUUID(),
+            source: trigger.source,
+            sourceHandle: trigger.sourceHandle,
+            target: out.target,
+            targetHandle: TRIGGER_IN,
+          });
+        }
+      }
+      // A passthrough's stream ends exactly when its source's does.
+      for (const trigger of nextEdges.filter((e) => e.source === node.id && e.sourceHandle === TRIGGER_OUT)) {
+        rewired.push({
+          id: crypto.randomUUID(),
+          source: incomingData.source,
+          sourceHandle: TRIGGER_OUT,
+          target: trigger.target,
+          targetHandle: trigger.targetHandle,
+        });
+      }
+    }
+
+    nextNodes = nextNodes.filter((n) => n.id !== node.id);
+    nextEdges = [...nextEdges.filter((e) => e.source !== node.id && e.target !== node.id), ...rewired];
+  }
+
+  return { nodes: nextNodes, edges: nextEdges, changed: legacy.length };
+};
 
 // ---- Validation -------------------------------------------------------------
 
@@ -571,19 +617,6 @@ export const validateFlowV2 = (flow: FlowV2, collections: Collection[]): FlowIss
         }
         break;
       }
-      case "duplicator": {
-        const cfg = node.config as DuplicatorNodeConfigV2;
-        if (
-          !Number.isInteger(cfg.count) ||
-          cfg.count < DUPLICATOR_MIN_OUTPUTS ||
-          cfg.count > DUPLICATOR_MAX_OUTPUTS
-        )
-          error(
-            `"${node.name}": outputs must be between ${DUPLICATOR_MIN_OUTPUTS} and ${DUPLICATOR_MAX_OUTPUTS}`,
-            { nodeId: node.id }
-          );
-        break;
-      }
       case "accumulator":
       case "delay":
         break;
@@ -601,7 +634,6 @@ export const validateFlowV2 = (flow: FlowV2, collections: Collection[]): FlowIss
 
   // -- edges --
   const dataEdgesPerTarget = new Map<string, number>();
-  const dataEdgesPerSource = new Map<string, number>();
   for (const edge of flow.edges) {
     const source = nodeById.get(edge.source);
     const target = nodeById.get(edge.target);
@@ -638,8 +670,9 @@ export const validateFlowV2 = (flow: FlowV2, collections: Collection[]): FlowIss
       );
     if (!srcPort || !tgtPort) continue;
 
-    // Data connections are strictly one-to-one; triggers are events and may
-    // fan in or out freely.
+    // An input takes exactly one connection so a value is never ambiguously
+    // merged. Outputs may fan out to as many inputs as they like — each branch
+    // receives the same item at the same position.
     if (srcParsed.kind === "data") {
       const tgtKey = `${edge.target} ${edge.targetHandle}`;
       dataEdgesPerTarget.set(tgtKey, (dataEdgesPerTarget.get(tgtKey) || 0) + 1);
@@ -647,14 +680,6 @@ export const validateFlowV2 = (flow: FlowV2, collections: Collection[]): FlowIss
         error(`Input "${portLabel(tgtPort)}" of "${target.name}" has more than one connection`, {
           edgeId: edge.id,
         });
-
-      const srcKey = `${edge.source} ${edge.sourceHandle}`;
-      dataEdgesPerSource.set(srcKey, (dataEdgesPerSource.get(srcKey) || 0) + 1);
-      if (dataEdgesPerSource.get(srcKey) === 2)
-        error(
-          `Output "${portLabel(srcPort)}" of "${source.name}" feeds more than one input — add a Duplicator to fan out`,
-          { edgeId: edge.id }
-        );
     }
   }
 
@@ -715,8 +740,6 @@ export const defaultConfigForTypeV2 = (type: FlowNodeTypeV2): FlowNodeConfigV2 =
           { id: crypto.randomUUID(), field: "field2" },
         ],
       };
-    case "duplicator":
-      return { count: 2 };
   }
 };
 

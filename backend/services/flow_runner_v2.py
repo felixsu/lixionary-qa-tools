@@ -37,13 +37,11 @@ from services.flow_runner import (
 )
 
 EMIT_MAX_ITEMS = 100
-DUPLICATOR_MIN_OUTPUTS = 2
-DUPLICATOR_MAX_OUTPUTS = 8
 
 TRIGGER_IN = "after"
 TRIGGER_OUT = "done"
 
-FLOW_NODE_TYPES_V2 = ("request", "delay", "arrayEmit", "accumulator", "demux", "mux", "duplicator")
+FLOW_NODE_TYPES_V2 = ("request", "delay", "arrayEmit", "accumulator", "demux", "mux")
 
 _TOKEN_RE = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 
@@ -123,10 +121,6 @@ def demux_out_name(row_id: str) -> str:
 
 def mux_in_name(row_id: str) -> str:
     return f"i:{row_id}"
-
-
-def duplicator_out_name(index: int) -> str:
-    return f"o:{index}"
 
 
 def verify_check_port_name(check_id: str) -> str:
@@ -258,7 +252,6 @@ def node_ports(node: Dict[str, Any], collections: List[Dict[str, Any]]) -> List[
             outputs = [_port(data_out_handle(o), o, "data", "out") for o in request.get("outputs") or []]
         verify = cfg.get("verify") or {}
         checks = []
-        passed = []
         if verify.get("enabled"):
             checks = [
                 _port(
@@ -271,8 +264,9 @@ def node_ports(node: Dict[str, Any], collections: List[Dict[str, Any]]) -> List[
                 for c in verify.get("checks") or []
                 if c.get("expectedSource") == "port"
             ]
-            passed = [_port(data_out_handle("passed"), "passed", "data", "out", "boolean")]
-        return _trigger_ports() + inputs + checks + outputs + passed
+        # No "passed" output: an item whose checks never pass is failed and
+        # dropped, so such a port could only ever emit True.
+        return _trigger_ports() + inputs + checks + outputs
 
     if node_type == "delay":
         return _trigger_ports() + [
@@ -321,15 +315,6 @@ def node_ports(node: Dict[str, Any], collections: List[Dict[str, Any]]) -> List[
             )
             for r in rows
         ] + [_port(data_out_handle("object"), "object", "data", "out", "json")]
-
-    if node_type == "duplicator":
-        count = max(0, int(cfg.get("count") or 0))
-        return _trigger_ports() + [
-            _port(data_in_handle("value"), "value", "data", "in"),
-        ] + [
-            _port(data_out_handle(duplicator_out_name(i)), duplicator_out_name(i), "data", "out", label=f"out {i + 1}")
-            for i in range(count)
-        ]
 
     raise FlowRunError(f"Unknown node type: {node_type}")
 
@@ -460,13 +445,6 @@ def validate_flow_v2(flow: Dict[str, Any], collections: List[Dict[str, Any]]) ->
                 elif field in fields:
                     error(f'"{name}" uses the field name "{field}" twice', nodeId=node["id"])
                 fields.add(field)
-        elif node_type == "duplicator":
-            count = cfg.get("count")
-            if not isinstance(count, int) or count < DUPLICATOR_MIN_OUTPUTS or count > DUPLICATOR_MAX_OUTPUTS:
-                error(
-                    f'"{name}": outputs must be between {DUPLICATOR_MIN_OUTPUTS} and {DUPLICATOR_MAX_OUTPUTS}',
-                    nodeId=node["id"],
-                )
 
         for input_name, static_input in (cfg.get("staticInputs") or {}).items():
             if not (static_input or {}).get("value"):
@@ -476,7 +454,6 @@ def validate_flow_v2(flow: Dict[str, Any], collections: List[Dict[str, Any]]) ->
                 error(f'"{name}": input "{input_name}" — {err}', nodeId=node["id"])
 
     per_target: Dict[str, int] = {}
-    per_source: Dict[str, int] = {}
     for edge in edges:
         source = node_by_id.get(edge.get("source"))
         target = node_by_id.get(edge.get("target"))
@@ -517,20 +494,15 @@ def validate_flow_v2(flow: Dict[str, Any], collections: List[Dict[str, Any]]) ->
         if not src_port or not tgt_port:
             continue
 
+        # An input takes exactly one connection so a value is never ambiguously
+        # merged. Outputs may fan out to as many inputs as they like — each
+        # branch receives the same item at the same position.
         if src_parsed["kind"] == "data":
             tgt_key = f'{edge.get("target")} {edge.get("targetHandle")}'
             per_target[tgt_key] = per_target.get(tgt_key, 0) + 1
             if per_target[tgt_key] == 2:
                 error(
                     f'Input "{port_label(tgt_port)}" of "{target["name"]}" has more than one connection',
-                    edgeId=edge.get("id"),
-                )
-            src_key = f'{edge.get("source")} {edge.get("sourceHandle")}'
-            per_source[src_key] = per_source.get(src_key, 0) + 1
-            if per_source[src_key] == 2:
-                error(
-                    f'Output "{port_label(src_port)}" of "{source["name"]}" feeds more than one input '
-                    "— add a Duplicator to fan out",
                     edgeId=edge.get("id"),
                 )
 
@@ -543,6 +515,80 @@ def validate_flow_v2(flow: Dict[str, Any], collections: List[Dict[str, Any]]) ->
 
 def flow_errors_v2(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [i for i in issues if i.get("level") == "error"]
+
+
+# ---- Migration ---------------------------------------------------------------
+
+def migrate_flow_v2(
+    nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]]
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], int]:
+    """Twin of migrateFlowV2 in flowTypesV2.ts. Rewrites flows saved before
+    outputs could fan out: a Duplicator was a pure passthrough, so each of its
+    outgoing connections becomes a direct connection from whatever fed it.
+    Blocks of any other unknown type are dropped with their connections."""
+    legacy = [n for n in nodes if n.get("type") not in FLOW_NODE_TYPES_V2]
+    if not legacy:
+        return nodes, edges, 0
+
+    next_nodes, next_edges = nodes, edges
+    for node in legacy:
+        node_id = node["id"]
+        incoming = next(
+            (
+                e for e in next_edges
+                if e.get("target") == node_id
+                and (parse_handle(e.get("targetHandle")) or {}).get("kind") == "data"
+            ),
+            None,
+        )
+        outgoing = [
+            e for e in next_edges
+            if e.get("source") == node_id
+            and (parse_handle(e.get("sourceHandle")) or {}).get("kind") == "data"
+        ]
+        rewired: List[Dict[str, Any]] = []
+
+        if incoming and node.get("type") == "duplicator":
+            for out in outgoing:
+                edge = {
+                    "id": f'{node_id}-mig-{len(rewired)}',
+                    "source": incoming["source"],
+                    "sourceHandle": incoming["sourceHandle"],
+                    "target": out["target"],
+                    "targetHandle": out["targetHandle"],
+                }
+                # Two projections can't be composed into one connection; keep
+                # the upstream one.
+                path = incoming.get("path") or out.get("path")
+                if path:
+                    edge["path"] = path
+                rewired.append(edge)
+            # `after` gated the passthrough, which gated everything it fed.
+            for trigger in [e for e in next_edges if e.get("target") == node_id and e.get("targetHandle") == TRIGGER_IN]:
+                for out in outgoing:
+                    rewired.append({
+                        "id": f'{node_id}-mig-{len(rewired)}',
+                        "source": trigger["source"],
+                        "sourceHandle": trigger["sourceHandle"],
+                        "target": out["target"],
+                        "targetHandle": TRIGGER_IN,
+                    })
+            # A passthrough's stream ends exactly when its source's does.
+            for trigger in [e for e in next_edges if e.get("source") == node_id and e.get("sourceHandle") == TRIGGER_OUT]:
+                rewired.append({
+                    "id": f'{node_id}-mig-{len(rewired)}',
+                    "source": incoming["source"],
+                    "sourceHandle": TRIGGER_OUT,
+                    "target": trigger["target"],
+                    "targetHandle": trigger["targetHandle"],
+                })
+
+        next_nodes = [n for n in next_nodes if n["id"] != node_id]
+        next_edges = [
+            e for e in next_edges if e.get("source") != node_id and e.get("target") != node_id
+        ] + rewired
+
+    return next_nodes, next_edges, len(legacy)
 
 
 # ---- Stream primitives -------------------------------------------------------
@@ -681,12 +727,14 @@ async def run_flow(
         from db.local_store import LocalStore
         get_pref = LocalStore.get_pref
 
+    # Rewrite blocks from older shapes (a Duplicator becomes direct fan-out) so
+    # a stored flow runs the same whether or not it has been re-saved.
+    nodes, edges, _migrated = migrate_flow_v2(flow.get("nodes") or [], flow.get("edges") or [])
+    flow = {**flow, "nodes": nodes, "edges": edges}
+
     errors = flow_errors_v2(validate_flow_v2(flow, collections))
     if errors:
         raise FlowRunError("; ".join(i["message"] for i in errors))
-
-    nodes: List[Dict[str, Any]] = flow.get("nodes") or []
-    edges: List[Dict[str, Any]] = flow.get("edges") or []
 
     state = _RunState()
     started_at = _iso_now()
@@ -752,14 +800,16 @@ async def run_flow(
                 result[parsed["name"]] = channels[e["id"]]
         return result
 
-    def output_edges_of(node_id: str) -> Dict[str, Dict[str, Any]]:
-        result: Dict[str, Dict[str, Any]] = {}
+    def output_edges_of(node_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        """An output may feed several inputs; every branch gets the same item at
+        the same position, which keeps forked streams aligned when they rejoin."""
+        result: Dict[str, List[Dict[str, Any]]] = {}
         for e in data_edges:
             if e.get("source") != node_id:
                 continue
             parsed = parse_handle(e.get("sourceHandle"))
             if parsed and parsed["kind"] == "data":
-                result[parsed["name"]] = e  # one edge per output (validated)
+                result.setdefault(parsed["name"], []).append(e)
         return result
 
     async def run_node(node: Dict[str, Any]) -> None:
@@ -774,21 +824,24 @@ async def run_flow(
         out_counters: Dict[str, int] = {}
 
         def push_msg(port_name: str, build) -> None:
-            edge = out_edges.get(port_name)
-            if edge is None:
+            port_edges = out_edges.get(port_name)
+            if not port_edges:
                 return
+            # One counter per PORT, not per connection: every branch sees the
+            # same position, so a hole on one branch lines up with its twin.
             index = out_counters.get(port_name, 0)
             out_counters[port_name] = index + 1
             msg = build(index)
-            if msg.get("kind") == "item" and edge.get("path"):
-                found, value, _ = eval_json_path(edge["path"], msg["value"])
-                channels[edge["id"]].push(
-                    _item(index, value)
-                    if found
-                    else _hole(index, node, f'Connection path "{edge["path"]}" matched nothing')
-                )
-                return
-            channels[edge["id"]].push(msg)
+            for edge in port_edges:
+                if msg.get("kind") == "item" and edge.get("path"):
+                    found, value, _ = eval_json_path(edge["path"], msg["value"])
+                    channels[edge["id"]].push(
+                        _item(index, value)
+                        if found
+                        else _hole(index, node, f'Connection path "{edge["path"]}" matched nothing')
+                    )
+                    continue
+                channels[edge["id"]].push(msg)
 
         def push_item(port_name: str, value: Any) -> None:
             push_msg(port_name, lambda i: _item(i, value))
@@ -797,12 +850,15 @@ async def run_flow(
             push_msg(port_name, lambda i: {**origin, "index": i} if origin else _hole(i, node, error))
 
         def close_all() -> None:
-            for port_name, edge in out_edges.items():
-                channels[edge["id"]].push({"kind": "eos", "count": out_counters.get(port_name, 0)})
+            for port_name, port_edges in out_edges.items():
+                count = out_counters.get(port_name, 0)
+                for edge in port_edges:
+                    channels[edge["id"]].push({"kind": "eos", "count": count})
 
         def abort_all(reason: str) -> None:
-            for edge in out_edges.values():
-                channels[edge["id"]].push({"kind": "abort", "reason": reason})
+            for port_edges in out_edges.values():
+                for edge in port_edges:
+                    channels[edge["id"]].push({"kind": "abort", "reason": reason})
 
         gate = gates[node["id"]]
         await gate["event"].wait()
@@ -964,7 +1020,7 @@ async def run_flow(
                         if ok:
                             counts["ok"] += 1
                             for port in out_edges:
-                                push_item(port, True if port == "passed" else outputs.get(port))
+                                push_item(port, outputs.get(port))
                         else:
                             counts["failed"] += 1
                             for port in out_edges:
@@ -1066,16 +1122,6 @@ async def run_flow(
                                     obj[r.get("field")] = value
                         counts["ok"] += 1
                         push_item("object", obj)
-
-                elif node_type == "duplicator":
-                    count = cfg.get("count") or 0
-                    value = values.get("value")
-                    for k in range(count):
-                        if incoming_hole:
-                            push_hole(duplicator_out_name(k), "", incoming_hole)
-                        elif value and value.get("kind") == "item":
-                            push_item(duplicator_out_name(k), value["value"])
-                    counts["skipped" if incoming_hole else "ok"] += 1
 
                 index += 1
 

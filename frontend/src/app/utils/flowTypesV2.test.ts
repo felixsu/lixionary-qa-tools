@@ -7,7 +7,6 @@ import {
   dataInHandle,
   dataOutHandle,
   demuxOutName,
-  DUPLICATOR_MAX_OUTPUTS,
   edgeKindV2,
   EMIT_MAX_ITEMS,
   flowErrorsV2,
@@ -150,10 +149,9 @@ describe("nodePorts", () => {
     const ids = nodePorts(requestNode("n1", "req1", { verify }), collections).map((p) => p.id);
     expect(ids).toContain("in:cmp:c1");
     expect(ids).not.toContain("in:cmp:c2");
-    expect(ids).toContain("out:passed");
-
-    const off = nodePorts(requestNode("n2", "req1", { verify: { ...verify, enabled: false } }), collections);
-    expect(off.map((p) => p.id)).not.toContain("out:passed");
+    // Verification never adds an output: a failing item is dropped, so a
+    // "passed" port could only ever emit true.
+    expect(ids).not.toContain("out:passed");
   });
 
   it("gives arrayEmit an array input and item/index outputs", () => {
@@ -185,14 +183,6 @@ describe("nodePorts", () => {
     expect(ports.map((p) => portLabel(p))).toEqual(["name", "color"]);
   });
 
-  it("derives duplicator outputs from its count", () => {
-    const ports = nodePorts(node("dup", "duplicator", { count: 3 }), collections);
-    expect(ports.filter((p) => p.direction === "out" && p.kind === "data").map((p) => p.id)).toEqual([
-      "out:o:0",
-      "out:o:1",
-      "out:o:2",
-    ]);
-  });
 });
 
 describe("validateFlowV2 — wiring", () => {
@@ -211,7 +201,7 @@ describe("validateFlowV2 — wiring", () => {
     expect(errors(flow)).toEqual([]);
   });
 
-  it("rejects a second connection out of one output", () => {
+  it("allows one output to feed several inputs", () => {
     const flow = makeFlow(
       [requestNode("a"), requestNode("b"), requestNode("c")],
       [
@@ -219,7 +209,7 @@ describe("validateFlowV2 — wiring", () => {
         edge("e2", "a", "out:uuid", "c", "in:orderId"),
       ]
     );
-    expect(errors(flow).some((m) => m.includes("add a Duplicator to fan out"))).toBe(true);
+    expect(errors(flow)).toEqual([]);
   });
 
   it("rejects a second connection into one input", () => {
@@ -298,11 +288,6 @@ describe("validateFlowV2 — per-type config", () => {
     expect(errors(dup).some((m) => m.includes('field name "a" twice'))).toBe(true);
   });
 
-  it("bounds the duplicator output count", () => {
-    const flow = makeFlow([node("dup", "duplicator", { count: DUPLICATOR_MAX_OUTPUTS + 1 })], []);
-    expect(errors(flow).some((m) => m.includes("outputs must be between"))).toBe(true);
-  });
-
   it("checks the request verify block", () => {
     const noChecks = makeFlow(
       [requestNode("r", "req1", { verify: { enabled: true, checks: [], maxAttempts: 3, intervalMs: 0 } })],
@@ -377,13 +362,11 @@ describe("validateFlowV2 — stream arity warnings", () => {
     const flow = makeFlow(
       [
         node("e", "arrayEmit", { staticItems: { type: "json", value: "[1,2]" } }),
-        node("dup", "duplicator", { count: 2 }),
         node("m", "mux", { rows: [{ id: "r1", field: "a" }, { id: "r2", field: "b" }] }),
       ],
       [
-        edge("x0", "e", "out:item", "dup", "in:value"),
-        edge("x1", "dup", "out:o:0", "m", "in:i:r1"),
-        edge("x2", "dup", "out:o:1", "m", "in:i:r2"),
+        edge("x1", "e", "out:item", "m", "in:i:r1"),
+        edge("x2", "e", "out:item", "m", "in:i:r2"),
       ]
     );
     expect(warnings(flow).some((m) => m.includes("driven by different emitters"))).toBe(false);

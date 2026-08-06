@@ -7,11 +7,7 @@ import type { Connection, Edge } from "@xyflow/react";
 import { parseHandle, portById } from "../../../utils/flowTypesV2";
 import type { StudioNodeV2 } from "./serialize";
 
-export type RejectionReason =
-  | "invalid"
-  | "output-taken" // fan-out needs a Duplicator
-  | "input-taken"
-  | "cycle";
+export type RejectionReason = "invalid" | "input-taken" | "cycle";
 
 export const connectionRejection = (
   conn: Connection | Edge,
@@ -32,13 +28,11 @@ export const connectionRejection = (
   if (!portById(source.data.ports, conn.sourceHandle)) return "invalid";
   if (!portById(target.data.ports, conn.targetHandle)) return "invalid";
 
-  // Data connections are strictly one-to-one, so every wire has exactly one
-  // meaning. Triggers are events and may fan in or out freely.
+  // An input takes exactly one connection, so a value is never ambiguously
+  // merged; an output may feed as many inputs as it likes.
   if (src.kind === "data") {
     if (edges.some((e) => e.target === conn.target && e.targetHandle === conn.targetHandle))
       return "input-taken";
-    if (edges.some((e) => e.source === conn.source && e.sourceHandle === conn.sourceHandle))
-      return "output-taken";
   } else if (
     edges.some(
       (e) =>
