@@ -270,6 +270,14 @@ def node_ports(node: Dict[str, Any], collections: List[Dict[str, Any]]) -> List[
         if request:
             inputs = [_port(data_in_handle(n), n, "data", "in") for n in scan_input_names(request)]
             outputs = [_port(data_out_handle(o), o, "data", "out") for o in request.get("outputs") or []]
+        elif cfg.get("expected"):
+            # An imported node whose request is missing keeps its full expected
+            # interface (config.expected, written by the flow importer), so its
+            # connections resolve to real named ports. Validation still blocks
+            # the run with "linked request not found".
+            expected = cfg["expected"]
+            inputs = [_port(data_in_handle(n), n, "data", "in") for n in expected.get("inputs") or []]
+            outputs = [_port(data_out_handle(o), o, "data", "out") for o in expected.get("outputs") or []]
         verify = cfg.get("verify") or {}
         checks = []
         if verify.get("enabled"):

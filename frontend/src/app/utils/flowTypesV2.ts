@@ -184,8 +184,23 @@ export interface RequestVerifyConfigV2 {
   intervalMs: number; // wait between attempts
 }
 
+/** The interface of a request as it looked when a flow was exported — name,
+ * method, URL, and port names only, never headers/body/scripts (nothing that
+ * could carry a secret into a shared file). Injected into a node's config by
+ * the flow importer when its requestId resolves to nothing here, so the editor
+ * can say exactly what to recreate; cleared when a request is picked. */
+export interface RequestSnapshotV2 {
+  name: string;
+  method: string;
+  url: string;
+  inputs: string[];
+  outputs: string[];
+}
+
 export interface RequestNodeConfigV2 {
   requestId: string;
+  // Set only on imported nodes whose request is missing — see RequestSnapshotV2.
+  expected?: RequestSnapshotV2;
   // Adds the `each` repeat driver port. Off by default so the card stays
   // clean — most requests are driven by their own inputs.
   useEach?: boolean;
@@ -297,10 +312,33 @@ const triggerPorts = (): PortSpec[] => [
 
 const requestDataPorts = (
   requestId: string,
-  collections: Collection[]
+  collections: Collection[],
+  expected?: RequestSnapshotV2
 ): { inputs: PortSpec[]; outputs: PortSpec[] } => {
   const req = lookupRequest(collections, requestId);
-  if (!req) return { inputs: [], outputs: [] };
+  if (!req) {
+    // An imported node whose request is missing still renders its full
+    // expected interface, so its connections land on real named dots instead
+    // of unlabeled ghost ports. Validation still blocks the run.
+    if (!expected) return { inputs: [], outputs: [] };
+    return {
+      inputs: (expected.inputs || []).map((n) => ({
+        id: dataInHandle(n),
+        name: n,
+        kind: "data",
+        direction: "in",
+        dataType: "any",
+        widget: "typed",
+      })),
+      outputs: (expected.outputs || []).map((o) => ({
+        id: dataOutHandle(o),
+        name: o,
+        kind: "data",
+        direction: "out",
+        dataType: "any",
+      })),
+    };
+  }
   const scanned = scanInputNames({
     url: req.url,
     headers: req.headers || [],
@@ -334,7 +372,7 @@ export const nodePorts = (node: FlowNodeV2, collections: Collection[]): PortSpec
   switch (node.type) {
     case "request": {
       const cfg = node.config as RequestNodeConfigV2;
-      const { inputs, outputs } = requestDataPorts(cfg.requestId, collections);
+      const { inputs, outputs } = requestDataPorts(cfg.requestId, collections, cfg.expected);
       const verify = cfg.verify;
       const checkPorts: PortSpec[] = !verify?.enabled
         ? []
