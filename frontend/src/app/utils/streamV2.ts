@@ -9,7 +9,7 @@
 //   Abort { reason }                  hard upstream failure (replaces Eos)
 //
 // Holes are what make "continue on error" safe: a failed item keeps its
-// position, so when a stream forks (duplicator) and rejoins (mux) the two
+// position, so when a stream forks (duplicator) and rejoins (mixer) the two
 // branches stay aligned instead of silently pairing item 3 with item 2.
 //
 // The Joiner turns N input channels into a sequence of tuples using

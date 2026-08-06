@@ -42,7 +42,16 @@ EMIT_MAX_ITEMS = 100
 TRIGGER_IN = "after"
 TRIGGER_OUT = "done"
 
-FLOW_NODE_TYPES_V2 = ("request", "delay", "arrayEmit", "accumulator", "mapper", "mux", "generator")
+FLOW_NODE_TYPES_V2 = ("request", "delay", "arrayEmit", "accumulator", "splitter", "mixer", "generator")
+
+# Node types that shipped under an earlier name — twin of RENAMED_NODE_TYPES_V2
+# in flowTypesV2.ts. Renaming a type means adding a row here, never just
+# changing the string.
+RENAMED_NODE_TYPES_V2 = {
+    "demux": "splitter",   # 0.5.x -> 0.6.0
+    "mapper": "splitter",  # 0.6.0 -> 0.6.1
+    "mux": "mixer",        # 0.6.0 -> 0.6.1
+}
 
 _TOKEN_RE = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 
@@ -116,11 +125,11 @@ def data_out_handle(name: str) -> str:
     return f"out:{name}"
 
 
-def mapper_out_name(row_id: str) -> str:
+def splitter_out_name(row_id: str) -> str:
     return f"o:{row_id}"
 
 
-def mux_in_name(row_id: str) -> str:
+def mixer_in_name(row_id: str) -> str:
     return f"i:{row_id}"
 
 
@@ -317,14 +326,14 @@ def node_ports(node: Dict[str, Any], collections: List[Dict[str, Any]]) -> List[
             _port(data_out_handle("value"), "value", "data", "out"),
         ]
 
-    if node_type == "mapper":
+    if node_type == "splitter":
         rows = cfg.get("rows") or []
         return _trigger_ports() + [
             _port(data_in_handle("object"), "object", "data", "in", "json"),
         ] + [
             _port(
-                data_out_handle(mapper_out_name(r.get("id") or "")),
-                mapper_out_name(r.get("id") or ""),
+                data_out_handle(splitter_out_name(r.get("id") or "")),
+                splitter_out_name(r.get("id") or ""),
                 "data",
                 "out",
                 label=r.get("path") or "(unset)",
@@ -332,12 +341,12 @@ def node_ports(node: Dict[str, Any], collections: List[Dict[str, Any]]) -> List[
             for r in rows
         ]
 
-    if node_type == "mux":
+    if node_type == "mixer":
         rows = cfg.get("rows") or []
         return _trigger_ports() + [
             _port(
-                data_in_handle(mux_in_name(r.get("id") or "")),
-                mux_in_name(r.get("id") or ""),
+                data_in_handle(mixer_in_name(r.get("id") or "")),
+                mixer_in_name(r.get("id") or ""),
                 "data",
                 "in",
                 label=r.get("field") or "(unset)",
@@ -473,7 +482,7 @@ def validate_flow_v2(flow: Dict[str, Any], collections: List[Dict[str, Any]]) ->
                 error(f'"{name}" has no generator selected', nodeId=node["id"])
             elif not is_known_dynamic_token(token):
                 error(f'"{name}": "{token}" is not a generator this version knows', nodeId=node["id"])
-        elif node_type == "mapper":
+        elif node_type == "splitter":
             rows = cfg.get("rows") or []
             if not rows:
                 error(f'"{name}" has no outputs configured', nodeId=node["id"])
@@ -485,7 +494,7 @@ def validate_flow_v2(flow: Dict[str, Any], collections: List[Dict[str, Any]]) ->
                 elif path in paths:
                     warn(f'"{name}" extracts "{path}" more than once', nodeId=node["id"])
                 paths.add(path)
-        elif node_type == "mux":
+        elif node_type == "mixer":
             rows = cfg.get("rows") or []
             if len(rows) < 2:
                 error(f'"{name}" needs at least two inputs', nodeId=node["id"])
@@ -504,6 +513,16 @@ def validate_flow_v2(flow: Dict[str, Any], collections: List[Dict[str, Any]]) ->
             ok, _, err = parse_static_input(static_input)
             if not ok:
                 error(f'"{name}": input "{input_name}" — {err}', nodeId=node["id"])
+
+    # Each edge owns one channel, keyed by its id: two edges sharing an id share
+    # a channel, and a consumer that never sees its end-of-stream hangs the run
+    # forever. Refuse it up front rather than deadlock.
+    seen_edge_ids: set = set()
+    for edge in edges:
+        edge_id = edge.get("id")
+        if edge_id in seen_edge_ids:
+            error(f'Two connections share the id "{edge_id}"', edgeId=edge_id)
+        seen_edge_ids.add(edge_id)
 
     per_target: Dict[str, int] = {}
     for edge in edges:
@@ -590,12 +609,17 @@ def migrate_flow_v2(
         for n in nodes
     ]
 
-    # "demux" was renamed to "mapper". This MUST stay ahead of the unknown-type
-    # sweep below, which would otherwise dissolve every saved Demux block
-    # instead of renaming it. Config and handle ids ("out:o:<rowId>") are
-    # unchanged, so connections survive — and a pure rename is not a rewritten
-    # block, so it deliberately does not count towards `changed`.
-    nodes = [{**n, "type": "mapper"} if n.get("type") == "demux" else n for n in nodes]
+    # Retired type names, mapped to what they are called now. This MUST stay
+    # ahead of the unknown-type sweep below, which would otherwise dissolve
+    # every block saved under an old name instead of renaming it. Resolved in
+    # one hop, so a flow last saved as "demux" (0.5.x) lands on "splitter"
+    # directly. Handle ids never changed with the names, so connections survive
+    # — and a pure rename is not a rewritten block, so it deliberately does not
+    # count towards `changed`.
+    nodes = [
+        {**n, "type": RENAMED_NODE_TYPES_V2[n["type"]]} if n.get("type") in RENAMED_NODE_TYPES_V2 else n
+        for n in nodes
+    ]
 
     legacy = [n for n in nodes if n.get("type") not in FLOW_NODE_TYPES_V2]
     if not legacy:
@@ -1184,12 +1208,12 @@ async def run_flow(
                             counts["ok"] += 1
                             push_item("value", generated)
 
-                elif node_type == "mapper":
+                elif node_type == "splitter":
                     rows = cfg.get("rows") or []
                     if incoming_hole:
                         counts["skipped"] += 1
                         for r in rows:
-                            push_hole(mapper_out_name(r.get("id") or ""), "", incoming_hole)
+                            push_hole(splitter_out_name(r.get("id") or ""), "", incoming_hole)
                     else:
                         value = values.get("object")
                         source = value["value"] if value and value.get("kind") == "item" else static_value("object")[1]
@@ -1197,17 +1221,17 @@ async def run_flow(
                         for r in rows:
                             found, extracted, _ = eval_json_path(r.get("path") or "", source)
                             if found:
-                                push_item(mapper_out_name(r.get("id") or ""), extracted)
+                                push_item(splitter_out_name(r.get("id") or ""), extracted)
                             else:
                                 any_miss = True
                                 message = f'Path "{r.get("path")}" matched nothing'
-                                push_hole(mapper_out_name(r.get("id") or ""), message)
+                                push_hole(splitter_out_name(r.get("id") or ""), message)
                                 emit(_make_record(
                                     node, None, "failed", _iso_now(), 0, iteration=index, error=message,
                                 ))
                         counts["failed" if any_miss else "ok"] += 1
 
-                elif node_type == "mux":
+                elif node_type == "mixer":
                     rows = cfg.get("rows") or []
                     if incoming_hole:
                         counts["skipped"] += 1
@@ -1215,11 +1239,11 @@ async def run_flow(
                     else:
                         obj: Dict[str, Any] = {}
                         for r in rows:
-                            msg = values.get(mux_in_name(r.get("id") or ""))
+                            msg = values.get(mixer_in_name(r.get("id") or ""))
                             if msg and msg.get("kind") == "item":
                                 obj[r.get("field")] = msg["value"]
                             else:
-                                present, value = static_value(mux_in_name(r.get("id") or ""))
+                                present, value = static_value(mixer_in_name(r.get("id") or ""))
                                 if present:
                                     obj[r.get("field")] = value
                         counts["ok"] += 1

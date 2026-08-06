@@ -56,12 +56,12 @@ import {
   type ArrayEmitNodeConfigV2,
   type DelayNodeConfigV2,
   type GeneratorNodeConfigV2,
-  type MapperNodeConfigV2,
+  type SplitterNodeConfigV2,
   type FlowEdgeV2,
   type FlowNodeTypeV2,
   type FlowNodeV2,
   type FlowV2,
-  type MuxNodeConfigV2,
+  type MixerNodeConfigV2,
   type RequestNodeConfigV2,
   type RequestVerifyConfigV2,
   type StaticInputV2,
@@ -86,8 +86,8 @@ const PALETTE: { type: FlowNodeTypeV2; label: string; icon: typeof Send; hint: s
   { type: "request", label: "Request", icon: Send, hint: "Run a saved API request — wire a stream to `each` to repeat it; optionally verify and retry" },
   { type: "arrayEmit", label: "Array Emit", icon: Rows3, hint: "Turn an array — or a repeat count — into a stream, one item at a time" },
   { type: "accumulator", label: "Accumulator", icon: Layers, hint: "Collect a whole stream back into one array" },
-  { type: "mapper", label: "Mapper", icon: Split, hint: "Split an object into separate outputs by JSONPath" },
-  { type: "mux", label: "Mux", icon: Combine, hint: "Combine several inputs into one object" },
+  { type: "splitter", label: "Splitter", icon: Split, hint: "Split an object into separate outputs by JSONPath" },
+  { type: "mixer", label: "Mixer", icon: Combine, hint: "Combine several inputs into one object" },
   { type: "generator", label: "Generator", icon: Wand2, hint: "Emit a generated value — date, random number, name, email or location" },
   { type: "delay", label: "Delay", icon: Timer, hint: "Wait a fixed number of ms — pace a stream or just pause" },
 ];
@@ -777,7 +777,7 @@ function StudioEditorV2({ selectedFlow, onSelectFlow }: EditorV2Props) {
           <p className="text-[11px] text-mute px-1 mt-2 leading-relaxed">
             A connection carries a <strong>stream</strong> of items, ending with a done signal — so{" "}
             <span className="font-mono">Array Emit → Request → Accumulator</span> is a loop. An output can feed as many
-            inputs as you like; an input takes one connection (use <strong>Mux</strong> to combine). The small diamonds
+            inputs as you like; an input takes one connection (use <strong>Mixer</strong> to combine). The small diamonds
             order blocks without passing data.
           </p>
         </div>
@@ -1155,28 +1155,28 @@ function InspectorV2({
           />
         )}
 
-        {fn.type === "mapper" && (
+        {fn.type === "splitter" && (
           <RowsEditorV2
             title="Outputs (one per JSONPath)"
             addLabel="Add output"
-            rows={(fn.config as MapperNodeConfigV2).rows || []}
+            rows={(fn.config as SplitterNodeConfigV2).rows || []}
             valueOf={(r) => r.path}
             placeholder="$.name"
-            onChange={(rows) => updateConfig({ rows } as MapperNodeConfigV2)}
+            onChange={(rows) => updateConfig({ rows } as SplitterNodeConfigV2)}
             makeRow={() => ({ id: crypto.randomUUID(), path: "" })}
             setValue={(row, value) => ({ ...row, path: value })}
             hint="Each output emits its own extraction from the same object, so one object in becomes several values out."
           />
         )}
 
-        {fn.type === "mux" && (
+        {fn.type === "mixer" && (
           <RowsEditorV2
             title="Inputs (one per field)"
             addLabel="Add input"
-            rows={(fn.config as MuxNodeConfigV2).rows || []}
+            rows={(fn.config as MixerNodeConfigV2).rows || []}
             valueOf={(r) => r.field}
             placeholder="fieldName"
-            onChange={(rows) => updateConfig({ ...(fn.config as MuxNodeConfigV2), rows })}
+            onChange={(rows) => updateConfig({ ...(fn.config as MixerNodeConfigV2), rows })}
             makeRow={() => ({ id: crypto.randomUUID(), field: "" })}
             setValue={(row, value) => ({ ...row, field: value })}
             hint="Builds one object per item, using each input's field name as the key."

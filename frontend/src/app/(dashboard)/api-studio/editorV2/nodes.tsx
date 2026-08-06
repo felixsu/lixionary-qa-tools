@@ -7,7 +7,7 @@
 //                          output ─●        <- one row per data output
 //
 // Every card is the same shell over a derived PortSpec[] (flowTypesV2.nodePorts),
-// so nodes whose ports come from config — mapper rows, mux rows, duplicator
+// so nodes whose ports come from config — splitter rows, mixer rows, duplicator
 // count — need no bespoke rendering, and React Flow's handle cache is
 // refreshed generically whenever that port list changes.
 
@@ -222,7 +222,7 @@ function NodeShellV2({
   const { missingIn, missingOut } = useMissingHandles(id, data.ports);
 
   // React Flow caches handle positions — refresh whenever the port list changes
-  // (a request re-picked, a mapper/mux row added, the duplicator count edited).
+  // (a request re-picked, a splitter/mixer row added, the duplicator count edited).
   const portsSignature = [...data.ports.map((p) => p.id), ...missingIn, ...missingOut].join("|");
   useEffect(() => {
     updateNodeInternals(id);
@@ -332,8 +332,8 @@ const ArrayEmitNodeV2 = shell(
   }
 );
 const AccumulatorNodeV2 = shell("AccumulatorNodeV2", Layers, () => "accumulator");
-const MapperNodeV2 = shell("MapperNodeV2", Split, () => "mapper · split");
-const MuxNodeV2 = shell("MuxNodeV2", Combine, () => "mux · combine");
+const SplitterNodeV2 = shell("SplitterNodeV2", Split, () => "splitter");
+const MixerNodeV2 = shell("MixerNodeV2", Combine, () => "mixer");
 const GeneratorNodeV2 = shell(
   "GeneratorNodeV2",
   Wand2,
@@ -346,7 +346,7 @@ export const studioNodeTypesV2 = {
   v2delay: DelayNodeV2,
   v2arrayEmit: ArrayEmitNodeV2,
   v2accumulator: AccumulatorNodeV2,
-  v2mapper: MapperNodeV2,
+  v2splitter: SplitterNodeV2,
   v2generator: GeneratorNodeV2,
-  v2mux: MuxNodeV2,
+  v2mixer: MixerNodeV2,
 };

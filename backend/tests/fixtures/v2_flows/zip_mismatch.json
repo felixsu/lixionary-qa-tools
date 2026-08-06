@@ -14,7 +14,7 @@
     "nodes": [
       { "id": "e1", "name": "e1", "type": "arrayEmit", "position": { "x": 0, "y": 0 }, "config": { "staticItems": { "type": "json", "value": "[1,2,3]" } } },
       { "id": "e2", "name": "e2", "type": "arrayEmit", "position": { "x": 0, "y": 0 }, "config": { "staticItems": { "type": "json", "value": "[\"x\",\"y\"]" } } },
-      { "id": "m", "name": "m", "type": "mux", "position": { "x": 0, "y": 0 }, "config": { "rows": [{ "id": "r1", "field": "a" }, { "id": "r2", "field": "b" }] } },
+      { "id": "m", "name": "m", "type": "mixer", "position": { "x": 0, "y": 0 }, "config": { "rows": [{ "id": "r1", "field": "a" }, { "id": "r2", "field": "b" }] } },
       { "id": "next", "name": "next", "type": "request", "position": { "x": 0, "y": 0 }, "config": { "requestId": "NEXT", "staticInputs": {} } }
     ],
     "edges": [

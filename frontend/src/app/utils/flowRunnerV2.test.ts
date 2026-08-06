@@ -329,7 +329,7 @@ describe("zip and latch", () => {
       [
         emitNode("e1", [1, 2, 3]),
         emitNode("e2", ["x", "y"]),
-        node("m", "mux", { rows: [{ id: "r1", field: "a" }, { id: "r2", field: "b" }] }),
+        node("m", "mixer", { rows: [{ id: "r1", field: "a" }, { id: "r2", field: "b" }] }),
         req("next", "NEXT"),
       ],
       [
@@ -365,7 +365,7 @@ describe("continue on error", () => {
   });
 
   it("keeps branches aligned when a hole forks and rejoins", async () => {
-    // emit 3 → both branches (left fails on item 1 | right always ok) → mux → accumulator.
+    // emit 3 → both branches (left fails on item 1 | right always ok) → mixer → accumulator.
     // If the hole were silently dropped, left's item 2 would pair with right's item 1.
     const h = makeHarness({
       LEFT: { handler: (c) => (c === 1 ? httpError() : ok({ v: `L${c}` })), url: "http://test/{{x}}", outputs: ["v"] },
@@ -376,7 +376,7 @@ describe("continue on error", () => {
         emitNode("emit", ["a", "b", "c"]),
         req("left", "LEFT"),
         req("right", "RIGHT"),
-        node("m", "mux", { rows: [{ id: "r1", field: "l" }, { id: "r2", field: "r" }] }),
+        node("m", "mixer", { rows: [{ id: "r1", field: "l" }, { id: "r2", field: "r" }] }),
         node("acc", "accumulator", {}),
       ],
       [
@@ -420,7 +420,7 @@ describe("continue on error", () => {
   });
 });
 
-describe("mapper and mux", () => {
+describe("splitter and mixer", () => {
   it("splits an object into one output per configured path", async () => {
     const h = makeHarness({
       SRC: { handler: () => ok({ fruit: { name: "apple", color: "red" } }), outputs: ["fruit"] },
@@ -430,7 +430,7 @@ describe("mapper and mux", () => {
     const f = makeFlow(
       [
         req("src", "SRC"),
-        node("d", "mapper", { rows: [{ id: "r1", path: "$.name" }, { id: "r2", path: "$.color" }] }),
+        node("d", "splitter", { rows: [{ id: "r1", path: "$.name" }, { id: "r2", path: "$.color" }] }),
         req("n", "NAME"),
         req("c", "COLOR"),
       ],
@@ -455,7 +455,7 @@ describe("mapper and mux", () => {
     const f = makeFlow(
       [
         req("src", "SRC"),
-        node("d", "mapper", { rows: [{ id: "r1", path: "$.name" }, { id: "r2", path: "$.color" }] }),
+        node("d", "splitter", { rows: [{ id: "r1", path: "$.name" }, { id: "r2", path: "$.color" }] }),
         req("n", "NAME"),
         req("c", "COLOR"),
       ],
@@ -481,7 +481,7 @@ describe("mapper and mux", () => {
       [
         req("a", "A"),
         req("b", "B"),
-        node("m", "mux", { rows: [{ id: "r1", field: "first" }, { id: "r2", field: "second" }] }),
+        node("m", "mixer", { rows: [{ id: "r1", field: "first" }, { id: "r2", field: "second" }] }),
         req("sink", "SINK"),
       ],
       [

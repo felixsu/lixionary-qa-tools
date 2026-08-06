@@ -9,7 +9,7 @@
 //
 // A failed item does not stop the run: it becomes a hole that keeps its
 // position in the stream, so branches that fork through a Duplicator and rejoin
-// at a Mux stay aligned. Accumulator is the only node that removes holes.
+// at a Mixer stay aligned. Accumulator is the only node that removes holes.
 //
 // Mirrored by backend/services/flow_runner_v2.py — keep the two in sync; the
 // shared fixtures in backend/tests/fixtures/v2_flows are the guard.
@@ -44,14 +44,14 @@ import {
   type ValueMsg,
 } from "./streamV2";
 import {
-  mapperOutName,
+  splitterOutName,
   edgeKindV2,
   EMIT_MAX_ITEMS,
   emptyStaticInput,
   flowErrorsV2,
   isControlPortName,
   migrateFlowV2,
-  muxInName,
+  mixerInName,
   parseHandle,
   parseStaticInput,
   validateFlowV2,
@@ -59,12 +59,12 @@ import {
   type ArrayEmitNodeConfigV2,
   type DelayNodeConfigV2,
   type GeneratorNodeConfigV2,
-  type MapperNodeConfigV2,
+  type SplitterNodeConfigV2,
   type FlowEdgeV2,
   type FlowNodeConfigV2,
   type FlowNodeV2,
   type FlowV2,
-  type MuxNodeConfigV2,
+  type MixerNodeConfigV2,
   type RequestNodeConfigV2,
   type StaticInputV2,
   type VerifyCheckV2,
@@ -588,22 +588,22 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
               break;
             }
 
-            case "mapper": {
-              const rows = (cfg as MapperNodeConfigV2).rows || [];
+            case "splitter": {
+              const rows = (cfg as SplitterNodeConfigV2).rows || [];
               const value = soleValue(values, "object");
               if (incomingHole) {
                 counts.skipped += 1;
-                for (const r of rows) pushHole(mapperOutName(r.id), "", incomingHole);
+                for (const r of rows) pushHole(splitterOutName(r.id), "", incomingHole);
                 break;
               }
               const source = value && value.kind === "item" ? value.value : staticValue("object").value;
               let anyMiss = false;
               for (const r of rows) {
                 const res = evalJsonPath(r.path, source);
-                if (res.found) pushItem(mapperOutName(r.id), res.value);
+                if (res.found) pushItem(splitterOutName(r.id), res.value);
                 else {
                   anyMiss = true;
-                  pushHole(mapperOutName(r.id), `Path "${r.path}" matched nothing`);
+                  pushHole(splitterOutName(r.id), `Path "${r.path}" matched nothing`);
                   emit(
                     makeRecord(node, null, "failed", new Date().toISOString(), 0, {
                       iteration: index,
@@ -617,8 +617,8 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
               break;
             }
 
-            case "mux": {
-              const rows = (cfg as MuxNodeConfigV2).rows || [];
+            case "mixer": {
+              const rows = (cfg as MixerNodeConfigV2).rows || [];
               if (incomingHole) {
                 counts.skipped += 1;
                 pushHole("object", "", incomingHole);
@@ -626,10 +626,10 @@ export function runFlowV2(flow: FlowV2, deps: FlowRunDeps, cb: FlowRunCallbacks)
               }
               const obj: Record<string, unknown> = {};
               for (const r of rows) {
-                const msg = values[muxInName(r.id)];
+                const msg = values[mixerInName(r.id)];
                 if (msg && msg.kind === "item") obj[r.field] = msg.value;
                 else {
-                  const sv = staticValue(muxInName(r.id));
+                  const sv = staticValue(mixerInName(r.id));
                   if (sv.present) obj[r.field] = sv.value;
                 }
               }
